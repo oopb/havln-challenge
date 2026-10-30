@@ -56,7 +56,7 @@ class RuntimePerformanceTests(unittest.TestCase):
                 executor.camera = object()
                 executor.memory = SimpleNamespace(
                     actions=[], current=dict(observation_id="obs_0000"),
-                    scene_memory=None)
+                    scene_memory=None, active_attempt=None)
                 executor.memory.record_action = Mock(
                     side_effect=lambda name, pose, feedback: executor.memory.actions.append(
                         dict(action=name, result=feedback)))
