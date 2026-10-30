@@ -97,10 +97,14 @@ class TaskPlanner:
         index=task.current_subgoal_index
         goal=task.subgoals[index]
         value = r.client.complete('task_planner','task_review',
-            'You are Task Planner. Update only the current semantic outcome and its typed completion '
-            'conditions. Preserve the original ordered instruction and human activity landmarks. '
-            'Never choose coordinates, waypoints or atomic actions. Your text cannot verify progress. '
-            'Runtime owns evidence predicates. Return one intent/subgoal JSON object.',
+            'You are Task Planner. Review the CURRENT semantic milestone only using the verified '
+            'progress and new evidence. intent=continue means keep the existing milestone; '
+            'intent=revise means correct its short semantic description, without inventing a new '
+            'instruction or changing the ordered goals. Preserve human activities as landmark '
+            'attributes. Do not plan coordinates, waypoints or atomic actions. '
+            'Do not generate success_criteria: Runtime deterministically owns completion predicates '
+            'and independent evidence verification. No visual claim by itself proves task progress. '
+            'Return exactly one JSON object with intent and subgoal.',
             dict(planner_context(r),required_success_criteria=sorted(required_conditions(goal,index==len(task.subgoals)-1)),
                 **({'format_feedback':format_feedback} if format_feedback else {})),TASK_REVIEW,
             format_retry=int(bool(format_feedback)),retry_safe=True)
