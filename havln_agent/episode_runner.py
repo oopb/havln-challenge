@@ -43,10 +43,15 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         return read_current_observation(env, camera, runtime.memory.task.instruction)
 
     def record_step(record, before, after):
-        for key, observation in (('input_file', before), ('post_file', after)):
-            filename = ('input' if key == 'input_file' else 'post')+'-%03d.npz' % record['step']
-            np.savez_compressed(directory / filename, rgb=observation.rgb,
-                depth=observation.depth, pitch_deg=observation.pitch_deg)
+        # MemoryRecords already saves each distinct RGB-D frame once under
+        # observations/obs_XXXX.npz. The former input-NNN/post-NNN copies
+        # tripled disk usage without adding diagnostic information.
+        feedback = runtime.memory.actions[record['step']]['result']
+        for key, obs_id in (('input_file', feedback['observation_before']),
+                            ('post_file', feedback['observation_after'])):
+            filename = 'observations/' + obs_id + '.npz'
+            if not (directory / filename).is_file():
+                raise RuntimeError('missing_canonical_observation_for_step')
             record[key] = filename
         append('steps', record)
         append('safety', dict(step=record['step'], tool_call_id=record['tool_call_id'], **record['safety']))
@@ -117,8 +122,6 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         actions = [a['action'] for a in runtime.memory.actions]
         row = dict(episode_id=episode_id, actions=actions)
         check_rows([row], [episode_id])
-        np.savez_compressed(directory / 'terminal.npz', rgb=runtime.observation.rgb,
-            depth=runtime.observation.depth, pitch_deg=runtime.observation.pitch_deg)
         pose = runtime.motion_controller.pose()
         summary = dict(episode_id=episode_id, architecture='agent_v5', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
@@ -159,7 +162,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         raise
     finally:
         atomic_json(directory / 'memory.json', runtime.memory.snapshot())
-        atomic_json(directory / 'tool_ledger.json', runtime.memory.tool_ledger)
+        # All tool receipts already appear in tools.jsonl and memory.json.
         if runtime.memory.current is not None:
             atomic_json(directory / 'final_state.json', runtime.state_view())
         with (directory / 'memory.jsonl').open('w') as handle:
