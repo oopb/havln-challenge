@@ -11,7 +11,7 @@ import time
 
 from .observation import array_hash
 from .grounding import project_grounding
-from .progress import current_visual_evidence
+from .progress import current_visual_evidence, stair_motion_direction
 from .motion import registered_action
 from .tools import ToolExecutor
 from .spatial import validity
@@ -145,8 +145,9 @@ class AgentRuntime(ToolExecutor):
         self.active_subgoal = dict(id=self.active_subgoal_id, description=description,
             landmark=goal['landmark'], success_criteria=criteria)
         action = goal['action']
-        self.motion_policy = ('DESCEND_STAIRS' if re.search(r'descend|下楼', action, re.I) else
-            'ASCEND_STAIRS' if re.search(r'ascend|上楼', action, re.I) else 'LEVEL_ONLY')
+        stair_direction = stair_motion_direction(goal)
+        self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else
+            'ASCEND_STAIRS' if stair_direction == 'UP' else 'LEVEL_ONLY')
         self._cancel_local_navigation('semantic_task_revision')
         self.active_waypoint_id = None
         self.task_review_requested = False
