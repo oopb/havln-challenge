@@ -17,6 +17,8 @@ from .tools import ToolExecutor
 from .spatial import validity
 from .contracts import registry
 from .active_observation import ObservationController
+from .local_exploration import (covered_view, last_block, local_coverage,
+                                predicted_scan, bearing_from_pose, wrap_heading)
 from .navigation_agent import NavigationAgent
 from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
@@ -249,6 +251,32 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
         if len(actions)>self.config['max_steps']-1-len(self.memory.actions):
             return dict(status='BUDGET_LIMIT',reason='whole_batch_exceeds_remaining_action_budget')
+        # Post-collision, do not spend action budget replaying the same
+        # absolute camera orientations with no new RGB-D evidence.
+        if last_block(self.memory,self.motion_controller.pose()):
+            planned=predicted_scan(self.memory,self.motion_controller.pose(),
+                relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
+            if not planned['new_view_expected']:
+                exploration=local_coverage(self.memory,self.motion_controller.pose(),
+                    self.camera.turn_angle,round(360/self.camera.turn_angle))
+                # Turning to a formerly executable heading can still be useful
+                # for a NEW live revalidation, even if that view is old.
+                endpoint=planned['already_visited'][-1] if planned['already_visited'] else {}
+                previous=covered_view(self.memory.observations,self.motion_controller.pose(),
+                    self.memory.task.current_subgoal_index,
+                    endpoint.get('heading_deg',0),endpoint.get('pitch_deg',0),
+                    self.camera.turn_angle)
+                previously_free=any(d.get('angle_degrees')==0 and
+                    d.get('motion_state')=='EXECUTABLE'
+                    for d in (previous or {}).get('directions',[]))
+                if not previously_free:
+                    return dict(status='NO_NEW_INFORMATION',
+                        reason='repeated_camera_sector_after_measured_block',
+                        no_new_information_reason='all_requested_absolute_views_already_recorded',
+                        scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
+                            v['observation_id'] for v in planned['already_visited']]),
+                        exploration=exploration,
+                        suggestion='choose_a_different_unobserved_absolute_heading_or_request_route_review')
         frames = []
         novel, revisited = [], []
         for action in actions:
@@ -264,8 +292,12 @@ class AgentRuntime(ToolExecutor):
                 current['observation_id'])
             if self.done:
                 return dict(status='PARTIAL',reason='environment_done',scan=dict(frames=frames))
-        return dict(status='OK', source=self.source(), scan=dict(frames=frames,
-            new_information_ids=novel, revisited_view_ids=revisited))
+        return dict(status=('OK' if novel else 'NO_NEW_INFORMATION'),
+            reason=None if novel else 'scan_completed_without_new_static_view',
+            source=self.source(), scan=dict(frames=frames,
+            new_information_ids=novel, revisited_view_ids=revisited),
+            exploration=local_coverage(self.memory,self.motion_controller.pose(),
+                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None)
 
     def _inspect_geometry(self):
         self.refresh()
@@ -282,10 +314,14 @@ class AgentRuntime(ToolExecutor):
             geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
                 terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
             alternatives=alternatives,information_options=['get_waypoint_candidates','turn_and_observe'])
+        value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
+            self.camera.turn_angle,round(360/self.camera.turn_angle))
         if alternatives:
             value['suggestion']='request_waypoints_then_choose_a_measured_clear_approach_direction'
+        elif value['exploration']['unexplored_directions']:
+            value['suggestion']='inspect_a_new_absolute_heading_from_exploration; do_not_revisit_blocked_views'
         else:
-            value['suggestion']='look_up_for_body_obstacles_or_turn_to_an_opening_then_recheck_next_step'
+            value['suggestion']='local_coverage_exhausted_request_route_or_semantic_review'
         return value
 
     def _compare_views(self, observation_ids, question):
@@ -397,15 +433,35 @@ class AgentRuntime(ToolExecutor):
             for path in generated:
                 if path['id'] not in offered_ids:
                     self.paths.pop(path['id'], None)
-            view_directions=[
-                dict(bearing_deg=round(d['angle_degrees'],2),
-                     reason=d.get('reason'),rejection_reasons=d.get('rejection_reasons',[]),
-                     required_next='turn_and_observe_then_inspect_geometry',
-                     route_authorized=False)
-                for d in value['inspected_directions']
-                if d.get('motion_state')=='NEEDS_VIEW'
-                and 'outside_observed_fov' in d.get('rejection_reasons',[])]
-            value.update(paths=offered, purpose=purpose, view_directions=view_directions)
+            pose=self.motion_controller.pose()
+            coverage=local_coverage(self.memory,pose,self.camera.turn_angle,
+                round(360/self.camera.turn_angle))
+            view_directions=[]
+            revisited_view_directions=[]
+            for d in value['inspected_directions']:
+                if d.get('motion_state')!='NEEDS_VIEW' or (
+                        'outside_observed_fov' not in d.get('rejection_reasons',[])):
+                    continue
+                absolute=wrap_heading(bearing_from_pose(pose)+d['angle_degrees'])
+                previous=covered_view(self.memory.observations,pose,
+                    self.memory.task.current_subgoal_index,
+                    absolute,pose.get('pitch_deg',0),self.camera.turn_angle)
+                entry=dict(bearing_deg=round(d['angle_degrees'],2),
+                    absolute_heading_deg=absolute,
+                    reason=d.get('reason'),
+                    rejection_reasons=d.get('rejection_reasons',[]),
+                    required_next='turn_and_observe_then_inspect_geometry',
+                    route_authorized=False)
+                if previous:
+                    entry.update(previous_observation_id=previous['observation_id'],
+                        explored_before=True)
+                    revisited_view_directions.append(entry)
+                else:
+                    view_directions.append(entry)
+            value.update(paths=offered,purpose=purpose,
+                view_directions=view_directions,
+                revisited_view_directions=revisited_view_directions[:5],
+                exploration=coverage)
             if not offered:
                 relevant = [d for d in value['inspected_directions']
                             if 'outside_observed_fov' not in d['rejection_reasons']]
@@ -414,15 +470,24 @@ class AgentRuntime(ToolExecutor):
                     value.update(status='NEEDS_VIEW',reason='goal_grounding_unavailable',
                         suggestion='choose_get_waypoint_candidates_with_purpose_explore_for_geometric_exploration',
                         information_options=['get_waypoint_candidates','ground_landmark','analyze_scene'])
-                elif unknown or view_directions:
+                elif view_directions:
                     value.update(self.motion_controller.needs_view('unknown_depth_or_fov'))
-                    if view_directions:
-                        value.update(reason='alternate_directions_need_new_camera_view',
-                            suggestion='turn_toward_one_view_direction_then_inspect_geometry; no navigation path yet',
-                            information_options=['turn_and_observe','inspect_geometry'])
+                    value.update(reason='alternate_directions_need_new_camera_view',
+                        suggestion='turn_toward_one_unexplored_absolute_heading_then_recheck_live_geometry',
+                        information_options=['turn_and_observe','inspect_geometry'])
+                elif coverage['unexplored_directions']:
+                    value.update(status='NEEDS_VIEW',reason='no_new_relative_view_candidates',
+                        suggestion='use_exploration_unexplored_directions_absolute_heading_not_old_relative_bearings',
+                        information_options=['turn_and_observe','inspect_geometry'])
+                elif unknown:
+                    value.update(status='NO_NEW_INFORMATION',
+                        reason='local_view_coverage_exhausted_with_unknown_geometry',
+                        suggestion='request_task_review_or_change_observation_pitch_not_repeat_same_scan',
+                        information_options=['request_task_review','assess_entry'])
                 else:
                     value.update(status='BLOCKED', reason='occupied_local_directions',
-                        suggestion='find_a_new_view_from_a_different_heading; no measured safe forward path')
+                        suggestion='no_new_executable_local_path; explore_distinct_heading_or_request_task_review',
+                        information_options=['request_task_review','inspect_geometry'])
             elif not any(p['first_step'] == 'EXECUTABLE' for p in offered):
                 value.update(self.motion_controller.needs_view(next_step['reason'] or 'observation_required_after_turn'))
             self.memory.note_candidates(offered)
