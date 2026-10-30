@@ -22,10 +22,12 @@ def registry(camera, max_actions, pitch_deg=0.):
     for look, available in [('none', max_actions), ('up', max_actions-1), ('down', max_actions-1)]:
         if available < 0 or (look=='up' and pitch_deg+camera.tilt_angle>60) or (look=='down' and pitch_deg-camera.tilt_angle<-60):
             continue
-        turn.append(object_schema(dict(relative_turn_deg=dict(type='number',
+        turn.append(dict(object_schema(dict(relative_turn_deg=dict(type='number',
             minimum=-available*camera.turn_angle, maximum=available*camera.turn_angle,
             enum=[step*camera.turn_angle for step in range(-available,available+1) if step or look!='none'],
-            description='degrees, positive turns left'), look=dict(const=look))))
+            description='degrees, positive turns left'), look=dict(const=look),
+            purpose=dict(enum=['explore','dynamic_recheck']))),
+            required=['relative_turn_deg','look']))
     specs = {
         'turn_and_observe': ('Execute 1-3 calibrated TURN/LOOK actions, saving every intermediate view; then decide again.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
