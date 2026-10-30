@@ -151,12 +151,12 @@ def navigation_context(runtime):
             break
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(
-            matched_observation_ids=current.get('similar_view_ids',[])[-3:],
+            matched_observation_ids=current.get('revisited_view_ids',[])[-3:],
             evidence_type='historical_static_appearance_only',
             live_persons_and_motion_authorized=False)
         # A historical image is only a static semantic hint. It never supplies
         # a live human box, free space, or current geometric safety.
-        matching=set(current.get('similar_view_ids',[]))
+        matching=set(current.get('revisited_view_ids',[]))
         for item in reversed(memory.scene_history):
             source=item.get('source',{})
             if source.get('observation_id') in matching:
