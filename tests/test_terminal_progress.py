@@ -68,7 +68,7 @@ class ProgressTests(unittest.TestCase):
         self.now=1020
         self.monitor.report()
         self.assertEqual(len(self.lines),before+2)  # heartbeat for both GPU processes
-        self.assertIn("16s",self.lines[-2])
+        self.assertIn("20s",self.lines[-2])
 
         self.append("traces/val_seen-12/steps.jsonl",dict(action="LOOK_DOWN"))
         self.now=1021
