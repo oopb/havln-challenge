@@ -74,7 +74,8 @@ class MemoryService(MemoryRecords):
             item=dict(finding=text,evidence_state='model_hypothesis',source_observation_ids=[identifier])
             if item not in observation['findings']:
                 observation['findings'].append(item)
-            observation['representative_keyframe']=True
+            if not self.current.get('revisited_static_view') or self.current['observation_id'] != identifier:
+                observation['representative_keyframe']=True
             key=(observation['place_id'],text.lower())
             landmark=self.landmarks.setdefault(key,dict(name=text,place_id=observation['place_id'],
                 evidence_state='model_hypothesis',source_observation_ids=[]))
