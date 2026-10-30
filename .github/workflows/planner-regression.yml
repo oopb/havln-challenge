@@ -8,6 +8,7 @@ on:
       - "tests/test_runtime_perf.py"
       - "tests/test_navigation_loop.py"
       - "tests/test_role_prompt_contracts.py"
+      - "tests/test_smoke50012_feedback.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -29,3 +30,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_navigation_loop.py' -v
       - name: Check role prompt contracts
         run: python -m unittest discover -s tests -p 'test_role_prompt_contracts.py' -v
+      - name: Check measured collision and repeated-view regressions
+        run: python -m unittest discover -s tests -p 'test_smoke50012_feedback.py' -v

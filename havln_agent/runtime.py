@@ -243,17 +243,22 @@ class AgentRuntime(ToolExecutor):
         if len(actions)>self.config['max_steps']-1-len(self.memory.actions):
             return dict(status='BUDGET_LIMIT',reason='whole_batch_exceeds_remaining_action_budget')
         frames = []
+        novel, revisited = [], []
         for action in actions:
             result = self._step(action)
             if result['status'] != 'EXECUTED':
                 return dict(result,status='PARTIAL' if frames else result['status'],
                     interrupted_status=result['status'],scan=dict(frames=frames))
-            frames.append(dict(observation_id=self.memory.current['observation_id'],
-                heading_deg=math.degrees(self.motion_controller.heading), pitch_deg=self.pitch_deg))
+            current=self.memory.current
+            frames.append(dict(observation_id=current['observation_id'],
+                heading_deg=math.degrees(self.motion_controller.heading), pitch_deg=self.pitch_deg,
+                new_static_information=bool(current.get('new_visual_information',True))))
+            (novel if current.get('new_visual_information',True) else revisited).append(
+                current['observation_id'])
             if self.done:
                 return dict(status='PARTIAL',reason='environment_done',scan=dict(frames=frames))
         return dict(status='OK', source=self.source(), scan=dict(frames=frames,
-            new_information_ids=[f['observation_id'] for f in frames]))
+            new_information_ids=novel, revisited_view_ids=revisited))
 
     def _inspect_geometry(self):
         self.refresh()

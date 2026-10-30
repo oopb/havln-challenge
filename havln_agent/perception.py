@@ -184,7 +184,17 @@ class Geometry:
         # of the rectangular envelope, especially when looking obliquely.
         contact = along - np.sqrt(np.maximum(0, radius ** 2 - across ** 2))
         if corridor.any():
-            info['nearest_collision_travel'] = float(np.min(contact[corridor]))
+            # Audit the actual closest colliding Depth point. This does not
+            # change collision acceptance, obstacle masking, or human safety.
+            collision_contact=np.where(corridor,contact,np.inf)
+            yy,xx=np.unravel_index(int(np.argmin(collision_contact)),corridor.shape)
+            info['nearest_collision_travel']=float(collision_contact[yy,xx])
+            info['nearest_collision_point']=dict(
+                pixel_xy=[int(xx),int(yy)],along_m=float(along[yy,xx]),
+                lateral_m=float(across[yy,xx]),height_above_local_origin_m=float(self.height[yy,xx]),
+                depth_m=float(self.depth[yy,xx]),
+                in_human_semantic_mask=bool(self.human_mask[yy,xx]),
+                identity='unverified_depth_point')
         humans = corridor & self.human_mask
         info['human_occupancy']['corridor_points'] = int(humans.sum())
         if humans.any():
