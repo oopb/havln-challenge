@@ -6,6 +6,7 @@ on:
       - "havln_agent/**"
       - "tests/test_task_planner_contract.py"
       - "tests/test_runtime_perf.py"
+      - "tests/test_navigation_loop.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -23,3 +24,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_task_planner_contract.py' -v
       - name: Run runtime performance regression
         run: python -m unittest discover -s tests -p 'test_runtime_perf.py' -v
+      - name: Run navigation loop regression
+        run: python -m unittest discover -s tests -p 'test_navigation_loop.py' -v
