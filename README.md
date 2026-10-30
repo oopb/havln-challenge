@@ -86,6 +86,27 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
+### Live terminal progress for API Agent runs
+
+`scripts/run_api_agent.py` now prints progress during quiet Habitat worker execution.
+By default it polls every 3 seconds and prints on action/tool/API-phase changes,
+plus a heartbeat every 15 seconds during slow model requests. Example:
+
+```bash
+python -u scripts/run_api_agent.py --config configs/agent.yaml \\
+  --output-dir /workspace/smoke-100-live --splits val_seen \\
+  --episode-limit 1 --max-steps 100
+```
+
+Each line includes the split/episode, actions used/max, forward/turn/look
+counts, total tool calls, latest tool name/result, completed HTTP attempts,
+current API request phase, and elapsed time. This output is emitted by the
+parent process; full worker logs and trace JSONL are still saved unchanged.
+Use `--progress-interval 1` for faster refresh or `--progress-interval 0`
+to disable console polling. `worker-<GPU>.progress.json` and the per-episode
+`api-inflight.json` are small live state markers, not proof of task success.
+
+
 ## 🚀 Getting Started
 
 This walkthrough runs the released CMA checkpoint, records the actions actually
