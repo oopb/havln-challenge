@@ -32,8 +32,8 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
         raise ValueError('Episode trace directory already contains files; use a fresh output directory')
-    for name in ('api', 'api-task_planner', 'api-navigation_agent', 'api-visual_perception',
-                 'task_planner', 'navigation_agent', 'visual_perception', 'steps', 'tools',
+    for name in ('api', 'task_planner', 'navigation_agent', 'visual_perception',
+                 'steps', 'tools',
                  'safety', 'progress', 'state', 'events'):
         (directory / (name+'.jsonl')).write_text('')
     client.begin_episode(episode_id, config['api_budget'], directory / 'api.jsonl')
