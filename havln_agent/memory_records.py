@@ -71,6 +71,7 @@ class MemoryRecords:
         self.scene_memory, self.active_attempt = None, None
         self.historical_scenes = []
         self.scene_history, self.visual_changes = [], []
+        self.observation_searches = []
         self.human_max_age_seconds = getattr(self, 'human_max_age_seconds', 2)
         self.current, self.revisits = None, []
         self._features = []
@@ -290,6 +291,7 @@ class MemoryRecords:
             scene_memory=self.scene_memory,
             historical_scenes=self.historical_scenes,
             scene_history=self.scene_history,
+            observation_searches=copy.deepcopy(self.observation_searches),
             visual_changes=self.visual_changes,
             observations=self.observations,
             actions=self.actions,
