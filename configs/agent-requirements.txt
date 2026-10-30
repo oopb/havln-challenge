@@ -1,0 +1,2 @@
+# numpy/Pillow/PyYAML already come from the released CMA runtime.
+jsonschema>=4.17,<5

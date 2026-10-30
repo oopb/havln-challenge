@@ -1,0 +1,2 @@
+# Offline RGB-D plots only; not required by the online agent.
+matplotlib>=3.5,<3.9

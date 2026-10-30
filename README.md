@@ -82,6 +82,10 @@ Both phases use the same six-action JSON contract and Score. Phase 1 and Phase
 | 💡 **Best Innovative Solution** | Certificate recognizing outstanding creativity and technical innovation |
 | 🎤 **Oral Presentations** | Selected top-performing teams will be invited to give oral presentations at the **RoboPAD Workshop @ NeurIPS 2026** |
 
+For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_agent.md)
+and the [v5 implementation report](docs/agent_v5_implementation.md).
+The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
+
 ## 🚀 Getting Started
 
 This walkthrough runs the released CMA checkpoint, records the actions actually

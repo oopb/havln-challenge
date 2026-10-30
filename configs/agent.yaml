@@ -1,0 +1,47 @@
+# Model IDs and endpoints must be supplied explicitly; no paid calls at import time.
+task_planner:
+  provider: openai_compatible
+  base_url: ${TASK_PLANNER_BASE_URL}
+  api_key_env: TASK_PLANNER_API_KEY
+  model: ${TASK_PLANNER_MODEL}
+  response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
+  thinking: disabled  # Optional DeepSeek extension; omit for other providers.
+  temperature: 0
+  timeout_seconds: 120
+  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
+  max_tokens: 12000
+  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+navigation_agent:
+  provider: openai_compatible
+  base_url: ${NAVIGATION_AGENT_BASE_URL}
+  api_key_env: NAVIGATION_AGENT_API_KEY
+  model: ${NAVIGATION_AGENT_MODEL}
+  response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
+  thinking: disabled  # Optional DeepSeek extension; omit for other providers.
+  temperature: 0
+  timeout_seconds: 120
+  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
+  max_tokens: 12000
+  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+visual_perception:
+  provider: openai_compatible
+  base_url: ${VISUAL_PERCEPTION_BASE_URL}
+  api_key_env: VISUAL_PERCEPTION_API_KEY
+  model: ${VISUAL_PERCEPTION_MODEL}
+  response_format: json_object
+  thinking: disabled
+  temperature: 0
+  timeout_seconds: 120
+  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
+  max_tokens: 12000
+  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+runtime:
+  max_steps: 500
+  api_budget: 2500  # Total physical HTTP attempts, including retries, per episode.
+  waypoint_distance: 1.25
+  safety_margin: 0.05  # 5 cm beyond the actual 10 cm radius; saved smoke-8 sweep regression.
+  tool_max_actions: 3  # Short batches of 1-3 actions; every forward step rechecks current RGB-D.
+  max_scene_age_seconds: 20  # Current scene semantics, independent of visual_perception.timeout_seconds.
+  max_static_landmark_age_seconds: 300  # Retain static spatial clues; revalidate geometry before movement.
+  max_human_age_seconds: 2  # Old human boxes never authorize current safety.
+  max_depth_age_seconds: 0.25

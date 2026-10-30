@@ -4,3 +4,16 @@ __pycache__/
 /cma-deps/
 /cma-submission/
 /cma-smoke*/
+/agent-runs/
+*.env
+.env
+/docs
+/downloads
+/HA-R2R
+/HA-R2R-tools
+/HAPS2_0
+/scene_datasets
+/recompute_navmesh
+/Multi-Human-Annotations
+/tests
+/download_mp.py
