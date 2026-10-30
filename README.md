@@ -86,6 +86,16 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
+**Odometry recovery:** If one forward RGB-D registration fails, the controller
+keeps a strictly bounded short straight segment with fresh geometry / human /
+terrain checks before each further step. Distributed low-residual static matches
+can now recover an otherwise-rejected metric translation; if still unresolved
+at the segment horizon, the tool reports an UNKNOWN remaining distance and
+establishes a new *local-only* observation anchor. It never invents the lost
+translation or calls the endpoint reached. See
+[odometry recovery contract](docs/odometry_recovery.md).
+
+
 **Active perception:** Navigation Agent can delegate a bounded `observe_for_goal` subtask. The
 controller turns in 15-degree Habitat actions, asks VLM only every 30/45 degrees,
 and returns a localized visual hypothesis or a completed-sweep report. It never
