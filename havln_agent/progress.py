@@ -9,6 +9,20 @@ from .spatial import angle_delta, goal_estimate
 from .motion import registered_action
 
 
+def stair_motion_direction(goal):
+    """Classify only an explicit stair movement, independent of LLM wording.
+
+    The same classification drives planning criteria, motion policy and progress
+    checks. A 'descent' milestone must not silently become a LEVEL_ONLY route.
+    """
+    action = str(goal.get('action', ''))
+    if re.search(r'\b(?:descend\w*|descent|downstairs)\b|\b(?:go|walk|move|head)\s+down\s+(?:the\s+)?stairs\b|下楼|下台阶', action, re.I):
+        return 'DOWN'
+    if re.search(r'\b(?:ascend\w*|ascent|upstairs)\b|\b(?:go|walk|move|head)\s+up\s+(?:the\s+)?stairs\b|上楼|上台阶', action, re.I):
+        return 'UP'
+    return None
+
+
 def turn_requirement(goal):
     """Derive an orientation-only requirement from the existing language action."""
     text = goal.get('action', '').lower()
@@ -30,8 +44,18 @@ def turn_requirement(goal):
 
 
 def requires_landmark_crossing(goal):
-    """Approaching a destination is different from crossing its boundary."""
-    return bool(re.search(r'\b(pass|through|enter)\b|穿过|经过|进入',goal.get('action',''),re.I))
+    """A route *through space until a target* need not pass that target.
+
+    Crossing is a semantic requirement only for a stated boundary transition;
+    generic path phrasing must not invent a landmark_passed predicate.
+    """
+    text = str(goal.get('action', ''))
+    explicit = bool(re.search(r'\b(?:enter|entry|pass|cross)\b|穿过|经过|进入', text, re.I))
+    if explicit:
+        return True
+    if re.search(r'\bthrough\b', text, re.I):
+        return not bool(re.search(r'\b(?:until|to reach|to arrive|arriv(?:e|al) at)\b', text, re.I))
+    return False
 
 
 def turn_evidence(memory):
@@ -102,7 +126,7 @@ def _passed_landmark(memory, matches, motions):
 
 
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
-    down = bool(re.search(r'\bdescend\b|下楼', goal['action'], re.I))
+    down = stair_motion_direction(goal) == 'DOWN'
     direction, sign = ('down', -1) if down else ('up', 1)
     observed = {o['observation_id']: o for o in memory.observations}
     wanted = task_tokens(goal['landmark'] + ' ' + goal['target'])
@@ -257,7 +281,7 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
         actions = [a for a in memory.actions if a['step'] >= task.subgoal_started
                    and a['result'].get('visual_change')]
         text = goal['action'].lower()
-        stairs = bool(re.search(r'\b(descend|ascend)\b|下楼|上楼', text))
+        stairs = stair_motion_direction(goal) is not None
         turn = turn_evidence(memory)
         turning = turn['requirement'] is not None
         if not ids <= known or not evidence.strip():
