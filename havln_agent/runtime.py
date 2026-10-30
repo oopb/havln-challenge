@@ -18,7 +18,7 @@ from .spatial import validity
 from .contracts import registry
 from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
-                                predicted_scan, bearing_from_pose, wrap_heading)
+                                predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
 from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
@@ -236,7 +236,7 @@ class AgentRuntime(ToolExecutor):
         return self.observation_controller.scan(
             objective, target_types, direction, sweep_degrees, checkpoint_degrees, look)
 
-    def _turn_and_observe(self, relative_turn_deg, look):
+    def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
         actions = ['TURN_LEFT' if relative_turn_deg > 0 else 'TURN_RIGHT']*count
         if look != 'none':
@@ -269,14 +269,30 @@ class AgentRuntime(ToolExecutor):
                 previously_free=any(d.get('angle_degrees')==0 and
                     d.get('motion_state')=='EXECUTABLE'
                     for d in (previous or {}).get('directions',[]))
-                if not previously_free:
+                dynamic_allowed=False
+                if purpose=='dynamic_recheck':
+                    # Dynamic obstacles may genuinely move. Permit an explicit
+                    # revisit, but throttle equivalent sectors using wall time
+                    # instead of blindly replaying every LLM request.
+                    target_heading=endpoint.get('heading_deg',0)
+                    target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
+                    now=time.monotonic()
+                    previous_checks=[
+                        e for e in self.memory.events if e.get('event')=='dynamic_sector_rechecked'
+                        and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
+                        and abs(e.get('target_pitch_deg',0)-target_pitch)<1
+                        and same_stance(e.get('pose'),self.motion_controller.pose())]
+                    dynamic_allowed=(not previous_checks
+                        or now-previous_checks[-1].get('time_monotonic',now)<0
+                        or now-previous_checks[-1].get('time_monotonic',now)>=60)
+                if not previously_free and not dynamic_allowed:
                     return dict(status='NO_NEW_INFORMATION',
                         reason='repeated_camera_sector_after_measured_block',
                         no_new_information_reason='all_requested_absolute_views_already_recorded',
                         scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
                             v['observation_id'] for v in planned['already_visited']]),
                         exploration=exploration,
-                        suggestion='choose_a_different_unobserved_absolute_heading_or_request_route_review')
+                        suggestion='choose_unseen_absolute_heading_or_wait_for_dynamic_change_or_route_review')
         frames = []
         novel, revisited = [], []
         for action in actions:
@@ -292,6 +308,12 @@ class AgentRuntime(ToolExecutor):
                 current['observation_id'])
             if self.done:
                 return dict(status='PARTIAL',reason='environment_done',scan=dict(frames=frames))
+        if purpose=='dynamic_recheck':
+            pose=self.motion_controller.pose()
+            self.memory.event('dynamic_sector_rechecked',
+                target_heading_deg=bearing_from_pose(pose),target_pitch_deg=self.pitch_deg,
+                pose=pose,time_monotonic=time.monotonic(),
+                new_static_information=bool(novel))
         return dict(status=('OK' if novel else 'NO_NEW_INFORMATION'),
             reason=None if novel else 'scan_completed_without_new_static_view',
             source=self.source(), scan=dict(frames=frames,
