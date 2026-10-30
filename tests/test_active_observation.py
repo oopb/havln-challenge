@@ -10,6 +10,8 @@ from jsonschema import Draft7Validator
 from havln_agent.active_observation import ObservationController, meaningful_candidate
 from havln_agent.contracts import registry
 from havln_agent.api_client import APIError
+from havln_agent.visual_perception import SEARCH_SCHEMA, VisualPerception
+from havln_agent.vision_protocol import coordinate_schema, normalize_coordinates
 
 
 def visual(found=False, suggestion='continue'):
@@ -177,6 +179,39 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertFalse(meaningful_candidate(dict(visual(found=True),box=None),['stair_entry']))
         self.assertFalse(meaningful_candidate(dict(visual(found=True),confidence='low'),['stair_entry']))
         self.assertFalse(meaningful_candidate(visual(found=True),['corridor']))
+
+    def test_vlm_box_unit_contract_normalizes_and_requires_evidence(self):
+        raw=dict(coordinate_space='image_1000_xyxy',
+            target_visible=True,target_type='stair_entry',confidence='high',
+            box=[200,250,600,800],evidence='Visible stair entry',
+            uncertainty='',suggested_next_view='continue')
+        provider=coordinate_schema(SEARCH_SCHEMA,'image_1000_xyxy')
+        Draft7Validator(provider).validate(raw)
+        normalized=normalize_coordinates(raw,SEARCH_SCHEMA)
+        Draft7Validator(SEARCH_SCHEMA).validate(normalized)
+        self.assertEqual(normalized['box'],[.2,.25,.6,.8])
+        self.assertTrue(meaningful_candidate(normalized,['stair_entry']))
+        self.assertFalse(Draft7Validator(provider).is_valid(
+            dict(raw,box=[.2,.25,.6,.8])))
+
+    def test_vlm_checkpoint_uses_current_image_and_single_target_question(self):
+        from unittest.mock import patch
+        runtime=SimpleNamespace(client=None)
+        visual_agent=VisualPerception(runtime)
+        response=visual(found=True)
+        with patch('havln_agent.visual_perception.image_url', return_value='data:image/png;base64,AA'):
+            with patch.object(visual_agent,'complete',return_value=response) as call:
+                result=visual_agent.search_view(
+                    SimpleNamespace(rgb=None),dict(observation_id='obs_0042'),
+                    'Find the down stair entry',['stair_entry'])
+        self.assertEqual(result,response)
+        args,kwargs=call.call_args
+        self.assertEqual(args[0:2],('visual_perception','active_observation'))
+        self.assertEqual(args[3]['observation_id'],'obs_0042')
+        self.assertEqual(args[3]['target_types'],['stair_entry'])
+        self.assertTrue(kwargs['cache'])
+        self.assertEqual(kwargs['result_schema'],SEARCH_SCHEMA)
+        self.assertIn('Do not infer metric distance',args[2])
 
     def test_tool_contract_and_atomic_permission(self):
         camera=SimpleNamespace(turn_angle=15.,tilt_angle=30.)
