@@ -7,6 +7,7 @@ possible here. Each atomic action is charged to the normal Habitat budget.
 """
 import copy
 import math
+import time
 
 from .api_client import APIError, BudgetExceeded
 
@@ -30,7 +31,7 @@ class ObservationController:
     def __init__(self, runtime):
         self.runtime = runtime
 
-    def _existing_result(self, source, target_types, objective):
+    def _existing_result(self, target_types, objective):
         r = self.runtime
         matches = set(r.memory.current.get('revisited_view_ids', ()))
         if not matches:
@@ -73,10 +74,43 @@ class ObservationController:
                 return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
 
         start = r.motion_controller.pose()
+        start_view=r.memory.current
+        now=time.monotonic()
+        # Exact duplicate observation task from the same pose and frame is
+        # idempotent. No repeated TURN sweep for a previously covered static
+        # sector. This expires quickly and never authorizes live human safety.
+        for previous in reversed(r.memory.observation_searches):
+            if (previous['outcome'] not in (
+                    'SEARCH_REGION_COVERED_NO_MATCH','TARGET_CANDIDATE_FOUND')
+                    or previous.get('subgoal')!=r.memory.task.current_subgoal_index
+                    or previous.get('objective','').strip().casefold()!=objective.strip().casefold()
+                    or previous.get('target_types')!=list(target_types)
+                    or previous.get('direction')!=direction
+                    or previous.get('planned_sweep_deg')!=sweep_degrees
+                    or previous.get('checkpoint_degrees')!=checkpoint_degrees
+                    or previous.get('look')!=look
+                    or previous.get('start_pose')!=start
+                    or previous.get('start_rgb_hash')!=start_view.get('rgb_hash')
+                    or previous.get('start_depth_hash')!=start_view.get('depth_hash')
+                    or now-previous.get('started_monotonic',-1e9)>20):
+                continue
+            return dict(status='OK',outcome='REPEATED_SEARCH_NO_NEW_VIEW',
+                reason='identical_static_scan_recently_completed',
+                covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
+                previous_outcome=previous['outcome'],
+                best_candidate=copy.deepcopy(previous.get('candidate')),
+                previous_end_observation_id=previous.get('end_observation_id'),
+                checkpoints=[],new_information_ids=[],revisited_view_ids=[],
+                usable_for_live_safety=False,
+                next_step='choose_a_new_search_sector_or_local_geometry_not_same_scan')
         record = dict(objective=objective, target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
-            start_observation_id=r.memory.current['observation_id'],
+            start_observation_id=start_view['observation_id'],
             start_heading_deg=math.degrees(start['heading']),
+            start_pose=dict(start),start_rgb_hash=start_view.get('rgb_hash'),
+            start_depth_hash=start_view.get('depth_hash'),
+            started_monotonic=now,look=look,
+            checkpoint_degrees=checkpoint_degrees,
             direction=direction, planned_sweep_deg=sweep_degrees,
             checkpoints=[], actions=[], outcome='IN_PROGRESS')
         r.memory.observation_searches.append(record)
@@ -118,7 +152,7 @@ class ObservationController:
         def checkpoint():
             source = r.source()
             observation = r.memory.current
-            reused = self._existing_result(source, target_types, objective)
+            reused = self._existing_result(target_types, objective)
             if reused:
                 visual, previous_id = reused
                 origin = 'reused_static_visual_hypothesis'
