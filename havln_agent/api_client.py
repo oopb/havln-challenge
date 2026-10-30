@@ -277,10 +277,22 @@ class APIClient:
                 with path.with_name(path.stem + '-' + record['role'] + path.suffix).open('a') as handle:
                     handle.write(line + '\n')
 
+    def _inflight(self, record, status):
+        """Small, secret-free live marker for requests not yet in api.jsonl."""
+        if self.log_path is None:
+            return
+        fields = ('role', 'purpose', 'request_number', 'attempt_number', 'model',
+                  'endpoint_id', 'request_phase', 'effective_timeout_seconds',
+                  'error', 'error_detail')
+        atomic_json(Path(self.log_path).with_name('api-inflight.json'),
+            dict(status=status, updated_at_epoch=time.time(),
+                 **{key:record[key] for key in fields if key in record}))
+
     def _request(self, request, timeout, record):
         with request_deadline(timeout):
             start = time.monotonic()
             record['request_phase'] = 'connect_and_headers'
+            self._inflight(record, 'in_progress')
             try:
                 response = urllib.request.urlopen(request, timeout=timeout)
             except urllib.error.HTTPError as error:
@@ -300,10 +312,12 @@ class APIClient:
             record['headers_seconds'] = time.monotonic() - start
             with response:
                 record['request_phase'] = 'response_body'
+                self._inflight(record, 'in_progress')
                 start = time.monotonic()
                 payload = response.read()
                 record['body_seconds'] = time.monotonic() - start
             record['request_phase'] = 'decode_response'
+            self._inflight(record, 'in_progress')
             result = json.loads(payload, parse_constant=reject_json_constant)
             record['request_phase'] = 'response_received'
             return result
@@ -431,6 +445,8 @@ class APIClient:
                           deadline_scope='physical_attempt')
             retryable = False
             endpoint_unavailable = False
+            record['request_phase'] = 'preparing_request'
+            self._inflight(record, 'in_progress')
             try:
                 payload = canonical(body).encode()
                 record['request_body_sha256'] = hashlib.sha256(payload).hexdigest()
@@ -558,6 +574,7 @@ class APIClient:
                 record['retry_scheduled'] = bool('error' in record and retryable and attempt<retries
                     and self.availability()=='available')
                 self._log(record)
+                self._inflight(record, 'completed')
             if 'error' not in record:
                 if cache:
                     atomic_json(cache_path, result)
