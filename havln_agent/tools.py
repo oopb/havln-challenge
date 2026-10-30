@@ -364,7 +364,7 @@ class ToolExecutor:
                 groundings.append(dict(original, current_estimate=estimate))
         angles = None
         if groundings:
-            stride = self.camera.turn_angle / 2
+            stride = self.camera.turn_angle
             base = list(range(-int(self.camera.hfov / 2 / stride), int(self.camera.hfov / 2 / stride) + 1))
             angles = [i * stride for i in base] + [g['current_estimate']['bearing_deg'] for g in groundings]
             angles = sorted(set(round(a, 4) for a in angles))
