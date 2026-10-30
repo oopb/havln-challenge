@@ -11,6 +11,21 @@ ENTRY_SCHEMA=object_schema(dict(stairs=dict(enum=['visible','possible','unknown'
     suggested_observation=TEXT,uncertainty=TEXT))
 
 
+
+# VLM decides whether a goal-specific VISUAL candidate was found, never how
+# the robot moves. A visible box is mandatory for an actionable candidate.
+SEARCH_SCHEMA = object_schema(dict(
+    target_visible=dict(type='boolean'),
+    target_type=dict(enum=['stairs_down','stair_entry','walkable_approach',
+        'corridor','door','goal_landmark','none']),
+    confidence=dict(enum=['low','medium','high']),
+    box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
+        items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
+    evidence=TEXT,
+    uncertainty=TEXT,
+    suggested_next_view=dict(enum=['continue','look_up','look_down'])))
+
+
 def semantic_cache_context(value):
     if isinstance(value,list):return [semantic_cache_context(v) for v in value]
     if not isinstance(value,dict):return value
@@ -53,6 +68,33 @@ class VisualPerception:
             context['stopping_condition']=task.final_target
         return perceive(self,observation,context,
             dict(observation_id=source['observation_id'],scope=source.get('image_scope','current')))
+
+    def search_view(self, observation, source, objective, target_types):
+        """One RGB checkpoint for an active scan; never grants motion safety."""
+        from .vision_protocol import coordinate_schema, coordinate_prompt
+        from .vision_protocol import normalize_coordinates
+        request=dict(mode='active_observation',objective=objective,
+            target_types=list(target_types),
+            observation_id=source['observation_id'],
+            vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        return self.complete('visual_perception','active_observation',
+            'Inspect ONLY this current RGB frame for the observation objective and listed '
+            'target_types. Return one JSON object. Report one strongest visible candidate '
+            'with target_visible=true, matching target_type, medium/high confidence, '
+            'specific concise evidence, and its visible-part image box. '
+            'If none is visibly localized use target_visible=false and target_type=none; '
+            'do not hallucinate obscured stair entries, corridors or safe paths. '
+            'A rail alone is not a stair entry; down stairs requires visible downward '
+            'structure, or report uncertainty. If evidence is ambiguous, '
+            'suggested_next_view can ask for ONE look_up/look_down refinement; '
+            'otherwise return continue. Do not infer metric distance, current human '
+            'occupancy, physical reachability, movement safety or task completion. '
+            'The controller independently owns real turns and live Depth safety. '
+            + coordinate_prompt(request),
+            request,coordinate_schema(SEARCH_SCHEMA, 'image_1000_xyxy'),
+            image_url=image_url(observation),cache=True,
+            normalize=lambda value: normalize_coordinates(value, SEARCH_SCHEMA),
+            result_schema=SEARCH_SCHEMA)
 
     def grounding(self,observation,source,target):
         return ground(self,observation,Geometry(observation,self.runtime.camera,self.runtime.config['safety_margin']),
