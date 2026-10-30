@@ -30,7 +30,7 @@ class ObservationController:
     def __init__(self, runtime):
         self.runtime = runtime
 
-    def _existing_result(self, source, target_types):
+    def _existing_result(self, source, target_types, objective):
         r = self.runtime
         matches = set(r.memory.current.get('revisited_view_ids', ()))
         if not matches:
@@ -38,7 +38,8 @@ class ObservationController:
         for record in reversed(r.memory.observation_searches):
             if record['subgoal'] != r.memory.task.current_subgoal_index:
                 continue
-            if tuple(record['target_types']) != tuple(target_types):
+            if (tuple(record['target_types']) != tuple(target_types)
+                    or record['objective'].strip().casefold() != objective.strip().casefold()):
                 continue
             for check in reversed(record['checkpoints']):
                 if (check.get('evidence_origin') == 'vlm_current_frame'
@@ -117,7 +118,7 @@ class ObservationController:
         def checkpoint():
             source = r.source()
             observation = r.memory.current
-            reused = self._existing_result(source, target_types)
+            reused = self._existing_result(source, target_types, objective)
             if reused:
                 visual, previous_id = reused
                 origin = 'reused_static_visual_hypothesis'
