@@ -164,7 +164,7 @@ class ToolExecutor:
         except (RuntimeError,OSError) as error:
             result=dict(status='TOOL_ERROR',reason=str(error)[:300],error_type=type(error).__name__)
         actions=[a['action'] for a in self.memory.actions[before:]]
-        if actions and result['status'] not in ('OK','PARTIAL','TARGET_REACHED','FINISHED','EXECUTED'):
+        if actions and result['status'] not in ('OK','PARTIAL','TARGET_REACHED','FINISHED','EXECUTED','NO_NEW_INFORMATION'):
             result.update(interrupted_status=result['status'],status='PARTIAL')
         args=call.get('args',{})
         requested=args.get('max_atomic_steps',0)
