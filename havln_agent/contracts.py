@@ -6,8 +6,9 @@ PREDICATES = ('landmark_visible', 'entry_confirmed', 'actual_descent_observed',
     'landmark_passed', 'target_nearby', 'final_arrival_visible')
 CONDITIONS = dict(type='array', minItems=1, maxItems=len(PREDICATES), uniqueItems=True,
                   items=dict(enum=list(PREDICATES)))
-TASK_REVIEW = object_schema(dict(intent=dict(enum=['continue', 'revise']), subgoal=TEXT,
-                                  success_criteria=CONDITIONS))
+TASK_REVIEW = object_schema(dict(intent=dict(enum=['continue', 'revise']), subgoal=TEXT))
+# Backward compatible with legacy model output, but no longer required or trusted.
+TASK_REVIEW['properties']['success_criteria'] = CONDITIONS
 HYPOTHESIS = object_schema(dict(finding=TEXT, source_observation_ids=dict(type='array',
     minItems=1, maxItems=4, uniqueItems=True, items=TEXT)))
 
