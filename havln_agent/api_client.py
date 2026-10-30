@@ -272,10 +272,8 @@ class APIClient:
                 line = line.replace(key, '[REDACTED]')
             with Path(self.log_path).open('a') as handle:
                 handle.write(line + '\n')
-            if record.get('role') in ROLES:
-                path = Path(self.log_path)
-                with path.with_name(path.stem + '-' + record['role'] + path.suffix).open('a') as handle:
-                    handle.write(line + '\n')
+            # api.jsonl already includes role, purpose and complete request
+            # evidence; redundant per-role files consumed most text-log space.
 
     def _inflight(self, record, status):
         """Small, secret-free live marker for requests not yet in api.jsonl."""
