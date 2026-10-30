@@ -36,7 +36,8 @@ def collision_summary(result):
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
-        'remaining_distance','vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
+        'remaining_distance','endpoint_estimate_valid','reach_basis',
+        'vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
     if result.get('status') in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION') or result.get('safety'):
         collision=collision_summary(result)
         if collision:value['measured_collision']=collision
@@ -118,7 +119,15 @@ def navigation_context(runtime):
     result=dict(goal=runtime.active_subgoal,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
             pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
-            height_y_m_est=pose['y'],confidence='estimated'),
+            height_y_m_est=pose['y'],
+            confidence=('estimated_relative' if pose.get('global_chain_continuous',True)
+                        else 'local_relative_only' if pose.get('local_anchor_observation_id')
+                        else 'unknown_after_unregistered_motion'),
+            position_uncertainty_m=pose['position_uncertainty'],
+            motion_epoch=pose.get('motion_epoch',0),
+            coordinate_scope=pose.get('coordinate_scope','episode_relative'),
+            global_chain_continuous=pose.get('global_chain_continuous',True),
+            local_anchor_observation_id=pose.get('local_anchor_observation_id')),
         current_view=view,legal_look=[look for look,delta in [('up',runtime.camera.tilt_angle),('down',-runtime.camera.tilt_angle)]
             if abs(runtime.pitch_deg+delta)<=60],
         local_geometry=[fields(d,('angle_degrees','motion_state','reason','clearance')) for d in
