@@ -88,6 +88,36 @@ def navigation_context(runtime):
     orientation=turn_evidence(memory)
     if orientation['requirement']:
         result['orientation']=fields(orientation,('requirement','remaining_deg','allowed_directions','completed'))
-    if runtime.active_waypoint_id:result['pending_waypoint_id']=runtime.active_waypoint_id
+    # Make actionable candidates survive the next LLM call. A prior tool's
+    # waypoints otherwise disappear from last_tool after a single scan/query,
+    # driving repeated sensing rather than the chosen local movement.
+    current=memory.current
+    recent=[]
+    for path in reversed(list(runtime.paths.values())):
+        source=path['source']
+        if (source['subgoal']!=memory.task.current_subgoal_index or
+            source['pose']!=pose or source['rgb_hash']!=current['rgb_hash'] or
+            path.get('execution_status') in ('CANCELLED','BLOCKED','REQUIRES_ATTENTION','TARGET_REACHED')):
+            continue
+        if path.get('first_step')!='EXECUTABLE':
+            continue
+        recent.append(fields(path,('id','type','bearing_deg','range_m',
+            'first_atomic_action','requires_post_turn_recheck','execution_status')))
+        if len(recent)==3:break
+    if recent:
+        result['candidate_waypoints']=recent
+        result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
+    if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
+        target=runtime.motion_controller.target
+        result['local_navigation']=dict(waypoint_id=runtime.active_waypoint_id,
+            status='IN_PROGRESS',next_action=runtime.motion_controller.next_action(),
+            remaining_distance_m=round(math.hypot(target[0]-pose['x'],target[1]-pose['z']),3),
+            suggestion='prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked')
+    recent_views=memory.observations[-32:]
+    repeats=sum(o['rgb_hash']==current['rgb_hash'] and o['pose']==current['pose']
+        for o in recent_views)
+    if repeats>1:
+        result['repeated_current_view_count']=repeats
+        result['repetition_note']='same RGB and pose; repeated static scene questions may not add information'
     if historical_hint:result['historical_hint']=historical_hint
     return result
