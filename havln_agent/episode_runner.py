@@ -15,6 +15,18 @@ from .task_planner import TaskPlanner
 from scripts.export_cma_submission import atomic_json, check_rows
 
 
+def canonical_step_frame_refs(directory, feedback):
+    """Use the same RGB-D frames as memory and historical image lookup."""
+    refs = {}
+    for key, obs_id in (('input_file', feedback['observation_before']),
+                        ('post_file', feedback['observation_after'])):
+        filename = 'observations/' + obs_id + '.npz'
+        if not (Path(directory) / filename).is_file():
+            raise RuntimeError('missing_canonical_observation_for_step')
+        refs[key] = filename
+    return refs
+
+
 def run_episode(env, episode_id, camera, client, config, directory, instruction=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -47,12 +59,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         # observations/obs_XXXX.npz. The former input-NNN/post-NNN copies
         # tripled disk usage without adding diagnostic information.
         feedback = runtime.memory.actions[record['step']]['result']
-        for key, obs_id in (('input_file', feedback['observation_before']),
-                            ('post_file', feedback['observation_after'])):
-            filename = 'observations/' + obs_id + '.npz'
-            if not (directory / filename).is_file():
-                raise RuntimeError('missing_canonical_observation_for_step')
-            record[key] = filename
+        record.update(canonical_step_frame_refs(directory, feedback))
         append('steps', record)
         append('safety', dict(step=record['step'], tool_call_id=record['tool_call_id'], **record['safety']))
 
