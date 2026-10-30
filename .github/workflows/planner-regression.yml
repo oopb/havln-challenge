@@ -14,6 +14,8 @@ on:
       - "tests/test_active_observation.py"
       - "tests/test_odometry_gap_navigation.py"
       - "tests/test_motion_consensus.py"
+      - "tests/test_compact_diagnostics.py"
+      - "scripts/pack_agent_diagnostics.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -47,3 +49,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_odometry_gap_navigation.py' -v
       - name: Check distributed static RGB-D motion consensus
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
+      - name: Check compact diagnostic packaging
+        run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
