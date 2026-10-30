@@ -35,7 +35,11 @@ class MemoryService(MemoryRecords):
         def separation(place):
             return math.sqrt((pose['x']-place['position'][0])**2+(pose['z']-place['position'][1])**2
                 +(pose.get('y',0)-place['height_y_m_est'])**2)
-        if place is None or separation(place) >= .5:
+        # A failed RGB-D translation starts a new local reference epoch.
+        # Do not silently retain a place node from the previous odometry chain
+        # just because stale x/z estimates happen to be numerically nearby.
+        if (place is None or place.get('motion_epoch') != pose.get('motion_epoch',0)
+                or separation(place) >= .5):
             near=[p for p in self.places.values() if p['motion_epoch']==pose.get('motion_epoch',0)
                 and separation(p) < .5]
             self.current_place_id=near[0]['id'] if near else 'P%d' % len(self.places)
