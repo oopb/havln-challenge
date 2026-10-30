@@ -164,6 +164,8 @@ def ground(client, observation, geometry, target, instruction, source, timeout=N
         'and landing_visible for a visibly supported upper or lower landing. '
         'Use entry_visible, entry_evidence, direction_evidence, tread_boxes (at most six visible treads), '
         'upper_landing_box and lower_landing_box. Leave direction unknown without unambiguous cues. '
+        'Report visible stair entry/treads even if other steps or the lower landing are occluded. '
+        'The provided boxes describe visual hypotheses, NOT reachability or permission to move. '
         'A landing visible ahead is not proof the robot has reached it. Never claim task completion.' + coordinate_prompt(instruction),
         dict(target=target, instruction=instruction, image_context=dict(
             scope=source.get('image_scope', 'current'), observation_id=source.get('observation_id'),
