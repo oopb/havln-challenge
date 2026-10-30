@@ -108,6 +108,12 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(r.motion_controller.motion_epoch,1)
         self.assertEqual(r.motion_controller.z,.25) # only measured second motion
         self.assertFalse(result['target_reached'])
+        self.assertIsNone(result['remaining_distance'])
+        self.assertFalse(result['endpoint_estimate_valid'])
+        self.assertEqual(result['recovery']['local_anchor_observation_id'],'obs_0002')
+        self.assertTrue(result['recovery']['missing_translation_still_unknown'])
+        self.assertEqual(r.motion_controller.pose()['coordinate_scope'],
+                         'reanchored_local_relative')
 
     def test_unknown_motion_one_step_continues_same_waypoint_next_call(self):
         r,path,actions,geometry=self.agent()
@@ -116,6 +122,8 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(first['recovery']['mode'],'CONTINUE_BOUNDED_RELATIVE_MOTION')
         self.assertIsNotNone(r.motion_controller.target)
         self.assertTrue(r.memory.active_attempt['unknown_motion_seen'])
+        self.assertIsNone(first['remaining_distance'])
+        self.assertFalse(first['endpoint_estimate_valid'])
         second=r._execute_waypoint('current',1)
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(second['status'],'REQUIRES_ATTENTION')
@@ -164,6 +172,29 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(memory.places['P1']['motion_epoch'],1)
         self.assertEqual(memory.routes,{})
         self.assertEqual(record['place_id'],'P1')
+
+    def test_old_global_target_is_stale_but_new_local_target_valid(self):
+        r,old,actions,geometry=self.agent()
+        source=old['source']['pose']
+        r.motion_controller.accept_feedback('MOVE_FORWARD',dict(status='UNKNOWN'))
+        self.assertFalse(r.motion_controller.pose()['global_chain_continuous'])
+        self.assertFalse(r.motion_controller.pose()['local_anchor_observation_id'])
+        self.assertTrue(r.motion_controller.anchor_relative_frame('obs_new'))
+        r.observation.captured_at=time.monotonic()
+        # An old global target must stay invalid even after a fresh local
+        # anchor is established; the unknown motion is not reconstructed.
+        stale=r.motion_controller.validate(r,old)
+        self.assertEqual(stale['status'],'NEEDS_VIEW')
+        self.assertEqual(stale['reason'],'pose_uncertainty_requires_reconfirmation')
+        new_pose=r.motion_controller.pose()
+        self.assertNotEqual(source['motion_epoch'],new_pose['motion_epoch'])
+        new_path=dict(id='new',angle=0.,distance=.25,
+            source=dict(subgoal=0,pose=new_pose))
+        current=r.motion_controller.validate(r,new_path)
+        self.assertEqual(current['status'],'OK')
+        self.assertEqual(current['validation']['next_atomic_action'],'MOVE_FORWARD')
+        self.assertEqual(current['validation']['relative_motion_only'],False)
+        self.assertFalse(current['validation']['requires_post_turn_recheck'])
 
     def test_one_step_horizon_cannot_retry_unknown_motion(self):
         r,path,actions,geometry=self.agent()
