@@ -196,6 +196,22 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(current['validation']['relative_motion_only'],False)
         self.assertFalse(current['validation']['requires_post_turn_recheck'])
 
+    def test_navigation_llm_receives_unknown_distance_and_local_anchor(self):
+        from havln_agent.contexts import tool_summary
+        result=dict(tool='navigate_local',status='PARTIAL',
+            interrupted_status='REQUIRES_ATTENTION',
+            reason='relative_forward_horizon_exhausted_without_verified_pose',
+            endpoint_estimate_valid=False,remaining_distance=None,
+            recovery=dict(mode='REANCHOR_CURRENT_RGBD',
+                local_anchor_observation_id='obs_0099',
+                coordinate_scope='new_local_relative_only',
+                missing_translation_still_unknown=True))
+        summary=tool_summary(result)
+        self.assertIsNone(summary['remaining_distance'])
+        self.assertFalse(summary['endpoint_estimate_valid'])
+        self.assertEqual(summary['recovery']['local_anchor_observation_id'],'obs_0099')
+        self.assertEqual(summary['interrupted_status'],'REQUIRES_ATTENTION')
+
     def test_one_step_horizon_cannot_retry_unknown_motion(self):
         r,path,actions,geometry=self.agent()
         path['distance']=.25
