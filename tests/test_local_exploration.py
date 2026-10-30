@@ -84,6 +84,11 @@ class ExplorationTests(unittest.TestCase):
             call=dict(tool='navigate_local'),
             result=dict(status='NEEDS_VIEW',executed_motion=[])))
         self.assertIsNotNone(last_block(self.mem,pose(120)))
+        self.mem.tool_ledger.append(dict(call_id='tool_turn_only',
+            call=dict(tool='navigate_local'),
+            result=dict(status='PARTIAL',reason='tool_action_limit',
+                        executed_motion=['TURN_LEFT','TURN_LEFT'])))
+        self.assertIsNotNone(last_block(self.mem,pose(120)))
         self.mem.tool_ledger.append(dict(call_id='tool_moved',
             call=dict(tool='navigate_local'),
             result=dict(status='TARGET_REACHED',executed_motion=['MOVE_FORWARD'])))
