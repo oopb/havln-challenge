@@ -283,7 +283,7 @@ class APIClient:
             return
         fields = ('role', 'purpose', 'request_number', 'attempt_number', 'model',
                   'endpoint_id', 'request_phase', 'effective_timeout_seconds',
-                  'error', 'error_detail')
+                  'error')
         atomic_json(Path(self.log_path).with_name('api-inflight.json'),
             dict(status=status, updated_at_epoch=time.time(),
                  **{key:record[key] for key in fields if key in record}))
