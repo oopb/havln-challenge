@@ -16,7 +16,8 @@ def tool_summary(result):
         'remaining_distance','vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
     if 'paths' in result:
         value['paths']=[fields(p,('id','type','bearing_deg','range_m','first_step','goal_status',
-            'source_observation_id','objective','reason')) for p in result['paths']]
+            'source_observation_id','objective','reason','first_atomic_action',
+            'requires_post_turn_recheck')) for p in result['paths']]
     if 'semantic' in result:
         value['grounding']=dict(fields(result,('grounding_id','target','localization','entry_status',
             'stair_direction','traversable_access')),uncertainty=result['semantic']['uncertainty'])
