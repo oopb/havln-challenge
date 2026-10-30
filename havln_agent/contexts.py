@@ -57,6 +57,15 @@ def tool_summary(result):
             ('status','reason','direction','initial_height_m','end_height_m','max_step_height_m','scope'))
     if 'directions' in result:
         value['directions']=result['directions']
+    if 'outcome' in result and result.get('tool')=='observe_for_goal':
+        value['observation_task']=dict(
+            outcome=result['outcome'],
+            covered_turn_deg=result.get('covered_turn_deg'),
+            planned_sweep_deg=result.get('planned_sweep_deg'),
+            best_candidate=result.get('best_candidate'),
+            checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
+                'evidence_origin')) for p in result.get('checkpoints',[])],
+            note='visual_candidates_are_hypotheses; live_geometry_required_for_motion')
     if 'alternatives' in result:value['alternatives']=result['alternatives']
     if 'view_directions' in result:value['view_directions']=result['view_directions'][:6]
     if 'scan' in result:
@@ -177,5 +186,13 @@ def navigation_context(runtime):
                     landmarks=[fields(l,('name','direction')) for l in scene_hint.get('landmarks',[])[:4]],
                     evidence_state='historical_hypothesis_not_live_safety')
                 break
+    if memory.observation_searches:
+        recent_search=memory.observation_searches[-1]
+        result['latest_observation_task']=dict(
+            objective=recent_search['objective'],outcome=recent_search['outcome'],
+            direction=recent_search['direction'],
+            covered_turn_deg=recent_search.get('covered_turn_deg',0),
+            candidate=recent_search.get('candidate'),
+            searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
     return result
