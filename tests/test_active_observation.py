@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from jsonschema import Draft7Validator
 
-from havln_agent.active_observation import ObservationController, meaningful_candidate
+from havln_agent.active_observation import ObservationController, meaningful_candidate, comparable_scan_pose
 from havln_agent.contracts import registry
 from havln_agent.api_client import APIError
 from havln_agent.visual_perception import SEARCH_SCHEMA, VisualPerception
@@ -212,6 +212,25 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertTrue(kwargs['cache'])
         self.assertEqual(kwargs['result_schema'],SEARCH_SCHEMA)
         self.assertIn('Do not infer metric distance',args[2])
+
+    def test_exact_recent_scan_is_idempotent_without_extra_turns(self):
+        r=FakeRuntime([visual()])
+        first=ObservationController(r).scan(
+            'Find a corridor',['corridor'],'left',30)
+        self.assertEqual(first['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
+        self.assertEqual(len(r.step_calls),2)
+        r.heading=2*math.pi  # heading wrap is same pose
+        second=ObservationController(r).scan(
+            'Find a corridor',['corridor'],'left',30)
+        self.assertEqual(second['outcome'],'REPEATED_SEARCH_NO_NEW_VIEW')
+        self.assertEqual(second['covered_turn_deg'],0)
+        self.assertFalse(second['usable_for_live_safety'])
+        self.assertEqual(len(r.step_calls),2)
+        self.assertEqual(len(r.visual_perception.calls),1)
+        self.assertEqual(len(r.memory.observation_searches),1)
+        # A meaningful translation invalidates the former view coverage.
+        self.assertFalse(comparable_scan_pose(
+            dict(r.pose(),x=.25),r.pose()))
 
     def test_tool_contract_and_atomic_permission(self):
         camera=SimpleNamespace(turn_angle=15.,tilt_angle=30.)
