@@ -120,7 +120,7 @@ class ExplorationTests(unittest.TestCase):
             motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
             active_subgoal=dict(action='descend',target='stairs'),
             active_waypoint_id=None,pitch_deg=-60,
-            camera=SimpleNamespace(turn_angle=15),
+            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
             config=dict(max_steps=150,max_scene_age_seconds=300),
             paths={})
         with patch('havln_agent.contexts.turn_evidence',
