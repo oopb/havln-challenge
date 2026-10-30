@@ -54,7 +54,7 @@ class JSONLCursor:
 class WorkerProgress:
     def __init__(self):
         self.episode = None
-        self.steps, self.tools = JSONLCursor(), JSONLCursor()
+        self.steps, self.tools, self.api = JSONLCursor(), JSONLCursor(), JSONLCursor()
         self.actions = Counter()
         self.last_signature, self.last_print = None, 0
 
@@ -88,6 +88,7 @@ class ProgressMonitor:
                         if isinstance(row, dict) and isinstance(row.get("action"), str):
                             state.actions[row["action"]] += 1
                     state.tools.consume(directory / "tools.jsonl")
+                    state.api.consume(directory / "api.jsonl")
                     result = (state.tools.last or {}).get("result", {})
                     call = (state.tools.last or {}).get("call", {})
                     api = read_json(directory / "api-inflight.json") or {}
@@ -104,9 +105,9 @@ class ProgressMonitor:
                              f"LOOK={state.actions['LOOK_UP'] + state.actions['LOOK_DOWN']} "
                              f"tools={state.tools.count} "
                              f"last={call.get('tool','-')}/{result.get('status','-')} "
-                             f"API={api_label} "
+                             f"API_calls={state.api.count} API={api_label} "
                              f"elapsed={duration(now-marker.get('started_at_epoch',now))}")
-                    signature = (episode, phase, state.steps.count, state.tools.count,
+                    signature = (episode, phase, state.steps.count, state.tools.count, state.api.count,
                                  api_status, api.get("role"), api.get("purpose"), api.get("request_phase"))
             if signature != state.last_signature or now-state.last_print >= heartbeat_seconds:
                 self.emit(f"[HA-VLN {time.strftime('%H:%M:%S',time.localtime(now))} GPU {gpu}] {label}", flush=True)
