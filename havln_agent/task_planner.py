@@ -4,7 +4,7 @@ import re
 from .api_client import APIError, TEXT, object_schema
 from .contracts import CONDITIONS, TASK_REVIEW
 from .contexts import planner_context
-from .progress import turn_requirement, requires_landmark_crossing
+from .progress import turn_requirement, requires_landmark_crossing, stair_motion_direction
 
 PLAN_SCHEMA=object_schema(dict(subgoals=dict(type='array',minItems=1,maxItems=30,items=
     object_schema(dict(action=TEXT,landmark=TEXT,target=TEXT,success_criteria=CONDITIONS,
@@ -14,14 +14,16 @@ PLAN_SCHEMA=object_schema(dict(subgoals=dict(type='array',minItems=1,maxItems=30
 
 
 def required_conditions(goal, final=False):
+    """Runtime-owned evidence contract, never a free-form planner decision."""
     action=goal['action'].lower()
-    if turn_requirement(goal):
-        required={'orientation_completed'}
-    elif re.search(r'descend|下楼',action):
+    direction=stair_motion_direction(goal)
+    if direction=='DOWN':
         required={'entry_confirmed','actual_descent_observed','target_nearby'}
-    elif re.search(r'ascend|上楼',action):
+    elif direction=='UP':
         required={'entry_confirmed','actual_ascent_observed','target_nearby'}
-    elif re.match(r'stop|wait|停',action):
+    elif turn_requirement(goal):
+        required={'orientation_completed'}
+    elif re.match(r'\s*(?:stop\b|wait\b|remain\s+(?:stop|wait)|停|等候)',action):
         required={'target_nearby'}
     else:
         required={'landmark_visible','registered_translation','target_nearby'}
@@ -29,6 +31,15 @@ def required_conditions(goal, final=False):
             required.add('landmark_passed')
     if final:required.add('final_arrival_visible')
     return required
+
+
+def normalize_conditions(goal, final=False):
+    """Ignore model-supplied proof requirements; derive them from task intent.
+
+    Model values are hypotheses about desired outcomes, not evidence policy.
+    In particular, do not let invented extra predicates prevent navigation.
+    """
+    return sorted(required_conditions(goal, final))
 
 
 def validate_conditions(goal, criteria, final=False):
@@ -56,11 +67,8 @@ class TaskPlanner:
                 if ids!=sorted(set(ids)) or ids[-1]>len(sentences):
                     raise APIError('invalid_instruction_source_ids',category='structured_field')
                 covered.update(ids)
-                try:
-                    validate_conditions(goal,goal['success_criteria'],index==len(plan['subgoals'])-1)
-                except APIError as error:
-                    error.validation_field=['subgoals',index,'success_criteria']
-                    raise
+                # Success predicates are normalized locally after structural
+                # validation; missing model-generated predicates are not errors.
             if covered!=set(range(1,len(sentences)+1)):
                 raise APIError('instruction_source_coverage_incomplete',category='structured_field')
         plan=client.complete('task_planner','task_initial_plan',
@@ -70,7 +78,7 @@ class TaskPlanner:
             'abstract recognize/note task merely to cover prose. Cite every numbered source sentence '
             'across the plan. Return only semantic outcomes and typed success_criteria, never atomic '
             'action commands, coordinates or waypoints. A plan is intent and never proves completion. '
-            'Use entry_confirmed+actual_descent_observed/actual_ascent_observed+target_nearby for stairs; '
+            'Runtime will derive required evidence predicates; proposed success_criteria are advisory only. '
             'orientation_completed for a pure turn/orientation change; landmark_visible+registered_translation+'
             'target_nearby for ordinary movement. Add landmark_passed only for pass/through/enter; '
             'proceed TO a destination does not mean passing it. '
@@ -78,17 +86,17 @@ class TaskPlanner:
             dict(instruction=instruction,source_sentences=[dict(id=i+1,text=s) for i,s in enumerate(sentences)],
                 **({'format_feedback':format_feedback} if format_feedback else {})),
             PLAN_SCHEMA,validate=validate,cache=True,format_retry=int(bool(format_feedback)),retry_safe=True)
-        return dict(plan,subgoals=[dict(g,source_text=' '.join(sentences[i-1] for i in g['source_sentence_ids']))
-            for g in plan['subgoals']])
+        return dict(plan,subgoals=[dict(g,
+            success_criteria=normalize_conditions(g,index==len(plan['subgoals'])-1),
+            source_text=' '.join(sentences[i-1] for i in g['source_sentence_ids']))
+            for index,g in enumerate(plan['subgoals'])])
 
     def review(self,format_feedback=None):
         r=self.runtime
         task=r.memory.task
         index=task.current_subgoal_index
         goal=task.subgoals[index]
-        def validate(value):
-            validate_conditions(goal,value['success_criteria'],index==len(task.subgoals)-1)
-        return r.client.complete('task_planner','task_review',
+        value = r.client.complete('task_planner','task_review',
             'You are Task Planner. Update only the current semantic outcome and its typed completion '
             'conditions. Preserve the original ordered instruction and human activity landmarks. '
             'Never choose coordinates, waypoints or atomic actions. Your text cannot verify progress. '
@@ -96,4 +104,5 @@ class TaskPlanner:
             'Return one intent/subgoal/success_criteria JSON object.',
             dict(planner_context(r),required_success_criteria=sorted(required_conditions(goal,index==len(task.subgoals)-1)),
                 **({'format_feedback':format_feedback} if format_feedback else {})),TASK_REVIEW,
-            validate=validate,format_retry=int(bool(format_feedback)),retry_safe=True)
+            format_retry=int(bool(format_feedback)),retry_safe=True)
+        return dict(value, success_criteria=normalize_conditions(goal,index==len(task.subgoals)-1))
