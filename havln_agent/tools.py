@@ -170,6 +170,10 @@ class ToolExecutor:
         requested=args.get('max_atomic_steps',0)
         if call.get('tool')=='turn_and_observe':
             requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
+        elif call.get('tool')=='observe_for_goal':
+            # Upper bound: sweep TURN actions, optional initial LOOK and at
+            # most one VLM-guided pitch refinement, all counted atomically.
+            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+1+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
