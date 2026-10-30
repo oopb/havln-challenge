@@ -14,13 +14,23 @@ class LocalMotionController:
         self.position_uncertainty = .05
         self.motion_error_total, self.motion_epoch, self.local_reference = 0., 0, 0
         self.pitch_deg = 0.0
+        # A failed RGB-D registration cannot be repaired by assuming an action
+        # moved the robot 0.25m. It invalidates the old global-ish chain, but a
+        # fresh public RGB-D image can anchor NEW local relative waypoints.
+        self.local_anchor_observation_id = None
+        self.global_chain_continuous = True
 
     def pose(self):
         return dict(x=self.x, y=self.y, z=self.z, heading=self.heading, pitch_deg=self.pitch_deg,
             source='rgbd_translation_and_commanded_yaw', confidence='estimated',
             position_uncertainty=self.position_uncertainty, local_reference=self.local_reference,
             motion_error_total=self.motion_error_total, motion_epoch=self.motion_epoch,
-            displacement_verified=False, uncertainty_source='registration_residual_not_ground_truth')
+            displacement_verified=False, uncertainty_source='registration_residual_not_ground_truth',
+            global_chain_continuous=self.global_chain_continuous,
+            local_anchor_observation_id=self.local_anchor_observation_id,
+            coordinate_scope=('episode_relative' if self.global_chain_continuous else
+                              'reanchored_local_relative' if self.local_anchor_observation_id else
+                              'unanchored_after_unknown_translation'))
 
     def accept_feedback(self, action, measurement):
         if action == 'TURN_LEFT':
@@ -31,6 +41,8 @@ class LocalMotionController:
             if not measurement or measurement['status'] != 'ESTIMATED':
                 self.position_uncertainty += self.camera.forward_step
                 self.motion_epoch += 1
+                self.global_chain_continuous = False
+                self.local_anchor_observation_id = None
                 return
             motion=measurement['translation_m']
             x,z=motion['x_right'],motion['z_forward']
@@ -42,6 +54,19 @@ class LocalMotionController:
             self.motion_error_total += error
             self.local_reference += 1
         self.heading=(self.heading+math.pi)%(2*math.pi)-math.pi
+
+    def anchor_relative_frame(self, observation_id):
+        """Start a NEW relative waypoint chain from actual post-action RGB-D.
+
+        No missing translation is inferred. Old global coordinates remain
+        numerically present for historical bookkeeping, but are invalid across
+        motion_epoch. Within this new chain only *deltas* to subsequent live
+        frames are meaningful.
+        """
+        if self.global_chain_continuous or not observation_id:
+            return False
+        self.local_anchor_observation_id = observation_id
+        return True
 
     def next_action(self):
         if self.target is None:
