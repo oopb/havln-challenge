@@ -115,9 +115,21 @@ class MemoryRecords:
         change = frame_change(features, self._features[-1]) if self._features else None
         similar_views = [o['observation_id'] for o, old in zip(self.observations, self._features)
                          if frame_change(features, old)['similar']]
-        last_keyframe = next((i for i in range(len(self.observations) - 1, -1, -1)
-                              if self.observations[i].get('representative_keyframe')), None)
-        representative = last_keyframe is None or not frame_change(features, self._features[last_keyframe])['similar']
+        # Compare against ANY previously seen same-pose view, not only the
+        # immediately preceding keyframe. Up/down oscillation is not discovery.
+        view_matches=[]
+        for old, old_features in zip(self.observations, self._features):
+            old_pose=old['pose']
+            if (old.get('subgoal') != self.task.current_subgoal_index
+                    or old_pose.get('motion_epoch') != pose.get('motion_epoch')
+                    or math.hypot(old_pose['x']-pose['x'],old_pose['z']-pose['z']) > .08
+                    or abs(angle_error(old_pose['heading'],pose['heading'])) >
+                        math.radians(self.camera.turn_angle/2)
+                    or abs(old_pose.get('pitch_deg',0)-pose.get('pitch_deg',0)) > 1):
+                continue
+            if frame_change(features,old_features)['similar']:
+                view_matches.append(old)
+        representative = not any(o.get('representative_keyframe') for o in view_matches)
         matches = []
         for old, features in zip(self.observations[:-4], self._features[:-4]):
             if abs(angle_error(pose['heading'], old['pose']['heading'])) > math.radians(
@@ -161,7 +173,9 @@ class MemoryRecords:
             revisit_matches=matches[-4:],
             visual_change=change,
             similar_view_ids=similar_views[-4:],
-            new_visual_information=not similar_views,
+            revisited_view_ids=[o['observation_id'] for o in view_matches[-4:]],
+            revisited_static_view=bool(view_matches),
+            new_visual_information=not view_matches,
             representative_keyframe=representative,
         )
         self.observations.append(record)
