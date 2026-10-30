@@ -77,6 +77,29 @@ class RuntimePerformanceTests(unittest.TestCase):
                 self.assertEqual(executor.record_step.call_args.args[0]["safety"]["scope"],
                                  "no_forward_displacement")
 
+
+    def test_move_forward_still_requires_live_geometry_approval(self):
+        import time
+        now = time.monotonic()
+        frame = SimpleNamespace(captured_at=now)
+        executor = ToolExecutor.__new__(ToolExecutor)
+        executor.done = False
+        executor.config = dict(max_steps=500, max_depth_age_seconds=5.0)
+        executor.memory = SimpleNamespace(actions=[], event=Mock())
+        executor.observation = frame
+        executor.refresh = Mock()
+        executor._prepare_forward = Mock(return_value=None)
+        blocked = dict(state="BLOCKED", reason="occupied_next_step",
+                       depth=dict(clearance=0.0), support=dict(status="UNKNOWN"))
+        geometry = SimpleNamespace(assess_step=Mock(return_value=blocked))
+        executor.geometry = Mock(return_value=geometry)
+        executor.step_callback = Mock(side_effect=AssertionError("unsafe forward was executed"))
+        result = executor._step("MOVE_FORWARD")
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["reason"], "occupied_next_step")
+        self.assertTrue(geometry.assess_step.called)
+        executor.step_callback.assert_not_called()
+
     def test_inflight_api_marker_reports_phase_without_credentials(self):
         client = APIClient.__new__(APIClient)
         with tempfile.TemporaryDirectory() as temp:
