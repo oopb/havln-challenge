@@ -86,6 +86,13 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
+**Active perception:** Navigation Agent can delegate a bounded `observe_for_goal` subtask. The
+controller turns in 15-degree Habitat actions, asks VLM only every 30/45 degrees,
+and returns a localized visual hypothesis or a completed-sweep report. It never
+moves forward and does not turn historical person/terrain evidence into a safety
+permit. See [active observation protocol](docs/active_observation.md).
+
+
 ### Live terminal progress for API Agent runs
 
 `scripts/run_api_agent.py` now prints progress during quiet Habitat worker execution.
