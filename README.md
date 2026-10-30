@@ -86,6 +86,26 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
+**Compact diagnostics:** Episode tracing now stores one canonical `observations/obs_XXXX.npz`
+per RGB-D frame and references it from `steps.jsonl`, instead of tripling
+the data with `input-NNN.npz` and `post-NNN.npz`. Model requests are logged
+in one `api.jsonl` (with `role` included); duplicate per-role API logs
+and the second full tool ledger are not written. To share a run without
+uploading all sensor frames:
+
+```bash
+python scripts/pack_agent_diagnostics.py \\
+  --output-dir /workspace/smoke-500-17 \\
+  --archive /workspace/smoke-500-17-diagnostic.zip
+```
+
+The archive contains all model decisions, tool receipts, actions, memory and
+key RGB-D evidence around motion and obstacles. It deliberately omits API
+cache, duplicate files and most repetitive scan frames. For frame-by-frame
+image analysis, add `--frames all`; for logs only use `--frames none`.
+The original run directory remains intact on the server.
+
+
 **Odometry recovery:** If one forward RGB-D registration fails, the controller
 keeps a strictly bounded short straight segment with fresh geometry / human /
 terrain checks before each further step. Distributed low-residual static matches
