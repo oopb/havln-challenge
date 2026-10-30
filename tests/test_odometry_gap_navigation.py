@@ -145,6 +145,26 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(r.motion_controller.motion_epoch,0)
 
+    def test_memory_place_epoch_changes_without_fabricated_route(self):
+        from havln_agent.memory_service import MemoryService
+        runtime=SimpleNamespace(camera=SimpleNamespace(),pitch_deg=0)
+        memory=MemoryService(runtime)
+        memory.reset('ep','Descend the stairs')
+        memory.places={'P0':dict(id='P0',position=[0.,0.],height_y_m_est=0.,
+            confidence='estimated',position_uncertainty_m=.05,motion_epoch=0,
+            observation_ids=['obs_0000'],headings_deg=[0.])}
+        memory.current_place_id='P0'
+        record=dict(observation_id='obs_0001',pose=dict(
+            x=0.,y=0.,z=0.,heading=0.,pitch_deg=0.,
+            motion_epoch=1,position_uncertainty=.3),
+            rgb_hash='a',depth_hash='b',captured_at=1.,
+            representative_keyframe=True)
+        memory.note_observation(record)
+        self.assertEqual(memory.current_place_id,'P1')
+        self.assertEqual(memory.places['P1']['motion_epoch'],1)
+        self.assertEqual(memory.routes,{})
+        self.assertEqual(record['place_id'],'P1')
+
     def test_one_step_horizon_cannot_retry_unknown_motion(self):
         r,path,actions,geometry=self.agent()
         path['distance']=.25
