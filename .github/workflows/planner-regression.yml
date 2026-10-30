@@ -10,6 +10,7 @@ on:
       - "tests/test_role_prompt_contracts.py"
       - "tests/test_smoke50012_feedback.py"
       - "tests/test_terminal_progress.py"
+      - "tests/test_smoke50013_waypoints.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -35,3 +36,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_smoke50012_feedback.py' -v
       - name: Check live terminal monitor
         run: python -m unittest discover -s tests -p 'test_terminal_progress.py' -v
+      - name: Check smoke-500-13 view-only waypoint guard
+        run: python -m unittest discover -s tests -p 'test_smoke50013_waypoints.py' -v

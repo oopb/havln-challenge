@@ -390,7 +390,15 @@ class AgentRuntime(ToolExecutor):
             for path in generated:
                 if path['id'] not in offered_ids:
                     self.paths.pop(path['id'], None)
-            value.update(paths=offered, purpose=purpose)
+            view_directions=[
+                dict(bearing_deg=round(d['angle_degrees'],2),
+                     reason=d.get('reason'),rejection_reasons=d.get('rejection_reasons',[]),
+                     required_next='turn_and_observe_then_inspect_geometry',
+                     route_authorized=False)
+                for d in value['inspected_directions']
+                if d.get('motion_state')=='NEEDS_VIEW'
+                and 'outside_observed_fov' in d.get('rejection_reasons',[])]
+            value.update(paths=offered, purpose=purpose, view_directions=view_directions)
             if not offered:
                 relevant = [d for d in value['inspected_directions']
                             if 'outside_observed_fov' not in d['rejection_reasons']]
@@ -399,10 +407,15 @@ class AgentRuntime(ToolExecutor):
                     value.update(status='NEEDS_VIEW',reason='goal_grounding_unavailable',
                         suggestion='choose_get_waypoint_candidates_with_purpose_explore_for_geometric_exploration',
                         information_options=['get_waypoint_candidates','ground_landmark','analyze_scene'])
-                elif unknown:
+                elif unknown or view_directions:
                     value.update(self.motion_controller.needs_view('unknown_depth_or_fov'))
+                    if view_directions:
+                        value.update(reason='alternate_directions_need_new_camera_view',
+                            suggestion='turn_toward_one_view_direction_then_inspect_geometry; no navigation path yet',
+                            information_options=['turn_and_observe','inspect_geometry'])
                 else:
-                    value.update(status='BLOCKED', reason='occupied_local_directions')
+                    value.update(status='BLOCKED', reason='occupied_local_directions',
+                        suggestion='find_a_new_view_from_a_different_heading; no measured safe forward path')
             elif not any(p['first_step'] == 'EXECUTABLE' for p in offered):
                 value.update(self.motion_controller.needs_view(next_step['reason'] or 'observation_required_after_turn'))
             self.memory.note_candidates(offered)
@@ -417,6 +430,9 @@ class AgentRuntime(ToolExecutor):
         path = self.paths.get(waypoint_id)
         if path is None:
             return dict(status='INVALID_TARGET', reason='unknown_waypoint_id')
+        if path.get('first_step') != 'EXECUTABLE' and self.motion_controller.target is None:
+            return dict(status='NEEDS_VIEW', reason='waypoint_has_no_executable_first_step',
+                suggestion='turn_to_observe_and_regenerate_waypoints_before_navigate_local')
         if path['source']['subgoal'] != self.memory.task.current_subgoal_index:
             return dict(status='STALE_TARGET', reason='language_goal_changed')
         associations = [g for g in self.memory.groundings if any(

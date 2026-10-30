@@ -495,6 +495,9 @@ class ToolExecutor:
                 return dict(status='INVALID_TARGET', reason='unknown_tool_generated_path_id')
             if path.get('execution_status') == 'REQUIRES_ATTENTION':
                 return dict(status='REQUIRES_ATTENTION', reason='previous_motion_requires_new_local_path_or_cancellation')
+            if path.get('first_step') != 'EXECUTABLE':
+                return dict(status='NEEDS_VIEW', reason='waypoint_requires_view_not_navigation',
+                    suggestion='use_turn_and_observe_then_inspect_geometry_before_requesting_new_waypoints')
             checked = self._revalidate_path(path)
             if checked['status'] != 'OK':
                 return checked

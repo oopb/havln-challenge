@@ -58,6 +58,7 @@ def tool_summary(result):
     if 'directions' in result:
         value['directions']=result['directions']
     if 'alternatives' in result:value['alternatives']=result['alternatives']
+    if 'view_directions' in result:value['view_directions']=result['view_directions'][:6]
     if 'scan' in result:
         value['observations']=result['scan']['frames']
     if result.get('motion_alert'):
