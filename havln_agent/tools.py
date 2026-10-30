@@ -88,11 +88,22 @@ class ToolExecutor:
         return geometry
 
     def accept_observation(self, observation):
+        previous_frame, previous = self.observation, self.memory.current
         self.observation = observation
-        diagnostics = []
-        generate_waypoints(self.geometry(), self.config['waypoint_distance'], diagnostics)
-        previous = self.memory.current
-        record = self.memory.observe(observation, self.motion_controller.pose(), diagnostics)
+        pose = self.motion_controller.pose()
+        # Sensor refresh is allowed to read the same RGB-D many times without
+        # moving. Do not rerun 13 expensive floor/geometry sweeps when the
+        # frame and pose are byte-identical to the already evaluated view.
+        unchanged = (previous is not None and previous_frame is not None
+            and previous['pose'] == pose
+            and array_hash(previous_frame.rgb) == array_hash(observation.rgb)
+            and array_hash(previous_frame.depth) == array_hash(observation.depth))
+        if unchanged:
+            diagnostics = previous.get('directions', [])
+        else:
+            diagnostics = []
+            generate_waypoints(self.geometry(), self.config['waypoint_distance'], diagnostics)
+        record = self.memory.observe(observation, pose, diagnostics)
         if self.record_observation and record is not previous:
             self.record_observation(record, observation)
         if self.load_observation is None and record is not previous:
@@ -202,16 +213,18 @@ class ToolExecutor:
             pending = self._prepare_forward()
             if pending:
                 return pending
-        geometry = self.geometry()
-        diagnostics = []
-        candidates = generate_waypoints(geometry, self.config['waypoint_distance'], diagnostics)
-        front = geometry.assess_step()['depth']
+        # A turn/look/STOP has no forward body sweep. Computing 13 waypoint
+        # terrain reviews here used to burn CPU even for STOP. Candidates are
+        # created by get_waypoint_candidates, not by the atomic executor.
+        geometry = self.geometry() if action == 'MOVE_FORWARD' else None
+        diagnostics, candidates = [], []
+        safety_check = geometry.assess_step() if geometry is not None else None
+        front = safety_check['depth'] if safety_check is not None else None
         allowed, reason = check_action(action, geometry)
         if allowed is None:
-            check=geometry.assess_step()
             self.memory.event('safety_rejected',requested_action=action,reason=reason,geometry=front)
-            return dict(status=check['state'],reason=reason,safety=dict(front,
-                execution_allowed=False,execution_reason=reason,terrain_evidence=check['support']))
+            return dict(status=safety_check['state'],reason=reason,safety=dict(front,
+                execution_allowed=False,execution_reason=reason,terrain_evidence=safety_check['support']))
         before, before_record = self.observation, dict(self.memory.current)
         pose = self.motion_controller.pose()
         checked_at = time.monotonic()
@@ -264,7 +277,7 @@ class ToolExecutor:
             proposed_action=action,
             pose=pose,
             pose_after=self.motion_controller.pose(),
-            geometry=geometry.metadata(),
+            geometry=geometry.metadata() if geometry is not None else None,
             candidates=candidates,
             waypoint_diagnostics=diagnostics,
             observation=frame_info(before, self.camera),
@@ -276,9 +289,10 @@ class ToolExecutor:
                 front=front,
                 captured_at=before.captured_at,
                 checked_at=checked_at,
-                scope='current_depth_next_step_body_and_local_support',
-                human_semantics=geometry.human_status,
-                terrain_evidence=geometry.assess_step()['support'],
+                scope=('current_depth_next_step_body_and_local_support' if geometry is not None
+                       else 'no_forward_displacement'),
+                human_semantics=geometry.human_status if geometry is not None else None,
+                terrain_evidence=safety_check['support'] if safety_check is not None else None,
                 dynamic_motion_prediction='UNAVAILABLE',
             ),
             scene=self.memory.scene_memory['scene'] if self.memory.scene_memory else None,
