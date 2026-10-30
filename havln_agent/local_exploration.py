@@ -129,10 +129,12 @@ def last_block(memory, pose, *, max_recent_actions=150):
         if result.get('status') == 'TARGET_REACHED':
             return None
         if result.get('status') != 'BLOCKED' and result.get('interrupted_status') != 'BLOCKED':
-            if (not result.get('executed_motion') and result.get('status') in (
-                    'NEEDS_VIEW','INVALID_TARGET','STALE_TARGET','NO_NEW_INFORMATION')):
-                # A rejected pre-execution waypoint selection did not resolve
-                # the previous physical collision; keep the last real block.
+            if ('MOVE_FORWARD' not in (result.get('executed_motion') or [])
+                    and result.get('status') in ('PARTIAL','NEEDS_VIEW',
+                        'INVALID_TARGET','STALE_TARGET','NO_NEW_INFORMATION')):
+                # Neither a rejected waypoint nor a turn-only continuation
+                # invalidates the previous physical collision at this stance.
+                # A newer verified MOVE_FORWARD or blocked event supersedes it.
                 continue
             return None
         reference = records.get(result.get('end_observation_id'))
