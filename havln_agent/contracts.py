@@ -29,7 +29,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             purpose=dict(enum=['explore','dynamic_recheck']))),
             required=['relative_turn_deg','look']))
     specs = {
-        'turn_and_observe': ('Execute 1-3 calibrated TURN/LOOK actions, saving every intermediate view; then decide again.', dict(oneOf=turn)),
+        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. After a measured block, duplicate absolute views return NO_NEW_INFORMATION. Optional purpose=dynamic_recheck explicitly requests a rate-limited fresh check of a previously seen direction; historical views never authorize motion.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
