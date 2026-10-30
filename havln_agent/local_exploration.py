@@ -46,7 +46,7 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
     heading = bearing_from_pose(pose)
     pitch = pose.get('pitch_deg', 0)
     visited = {}
-    for record in memory.observations:
+    for record in getattr(memory,'observations',()):
         prior = record.get('pose') or {}
         if record.get('subgoal') != subgoal or not same_stance(prior, pose):
             continue
@@ -104,7 +104,7 @@ def predicted_scan(memory, pose, delta_degrees, look, turn_degrees=15, tilt_degr
     final_heading = target_views[-1][0] if target_views else heading
     if look != 'none':
         target_views.append((final_heading,pitch+(tilt_degrees if look=='up' else -tilt_degrees)))
-    prior = [covered_view(memory.observations,pose,
+    prior = [covered_view(getattr(memory,'observations',()),pose,
         memory.task.current_subgoal_index,h,p,turn_degrees) for h,p in target_views]
     return dict(new_view_expected=any(record is None for record in prior),
         already_visited=[dict(heading_deg=h,pitch_deg=p,
@@ -121,8 +121,8 @@ def last_block(memory, pose, *, max_recent_actions=150):
     Previous code compared PRE-tool pose and checked only status==BLOCKED.
     Both fail when a tool moves 0.25m and then the next step is BLOCKED.
     """
-    records = {o['observation_id']:o for o in memory.observations}
-    for item in reversed(memory.tool_ledger):
+    records = {o['observation_id']:o for o in getattr(memory,'observations',())}
+    for item in reversed(getattr(memory,'tool_ledger',())):
         if (item.get('call') or {}).get('tool') != 'navigate_local':
             continue
         result = item.get('result') or {}
@@ -138,7 +138,8 @@ def last_block(memory, pose, *, max_recent_actions=150):
         reference = records.get(result.get('end_observation_id'))
         if not reference or not same_stance(reference.get('pose'),pose):
             return None
-        if len(memory.actions)-reference.get('step',len(memory.actions)) > max_recent_actions:
+        actions=getattr(memory,'actions',())
+        if len(actions)-reference.get('step',len(actions)) > max_recent_actions:
             return None
         return dict(tool_call_id=item.get('call_id'),
             observation_id=reference['observation_id'],
