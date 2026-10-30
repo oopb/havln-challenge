@@ -13,6 +13,7 @@ import random
 import re
 import subprocess
 import sys
+import time
 import zipfile
 
 import yaml
@@ -20,6 +21,7 @@ import yaml
 from .api_client import APIClient, canonical, PROMPT_VERSION, model_endpoints
 from .episode_runner import run_episode
 from .habitat_adapter import camera_from_config, environment_config, runtime_imports
+from .progress_monitor import ProgressMonitor
 from scripts.export_cma_submission import SOURCE_REVISION, SPLITS, atomic_json, check_rows, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +127,7 @@ def run_worker(task_path):
     np.random.seed(task['seed'])
     data, output = Path(task['data']), Path(task['output'])
     client = APIClient(task['config'], output / 'cache' / str(task['gpu']))
+    progress_file = output / ('worker-' + str(task['gpu']) + '.progress.json')
     for job in task['jobs']:
         shard = output / 'shards' / (job['key'] + '.json')
         rows, pending = [], []
@@ -140,6 +143,10 @@ def run_worker(task_path):
             else:
                 rows.append(row)
         if pending:
+            atomic_json(progress_file, dict(phase='initializing',
+                split=job['split'], episode_id=pending[0],
+                max_steps=task['config']['runtime']['max_steps'],
+                started_at_epoch=time.time()))
             with (nullcontext() if task['verbose'] else quiet_runtime()):
                 config = environment_config(get_config, task['runtime_config'], data,
                                             job['split'], pending, task['gpu'], task['seed'])
@@ -159,14 +166,24 @@ def run_worker(task_path):
                             while directory.with_name(directory.name + '.attempt-' + str(suffix)).exists():
                                 suffix += 1
                             directory.rename(directory.with_name(directory.name + '.attempt-' + str(suffix)))
+                        atomic_json(progress_file, dict(phase='running',
+                            split=job['split'], episode_id=episode_id,
+                            max_steps=task['config']['runtime']['max_steps'],
+                            started_at_epoch=time.time()))
                         row = run_episode(env, episode_id, camera, client,
                                           task['config']['runtime'], directory,
                                           instruction=episode.instruction.instruction_text)
                         atomic_json(directory / 'result.json', dict(fingerprint=task['fingerprint'], row=row))
                         rows.append(row)
+                        atomic_json(progress_file, dict(phase='completed',
+                            split=job['split'], episode_id=episode_id,
+                            max_steps=task['config']['runtime']['max_steps'],
+                            finished_at_epoch=time.time(), actions=len(row['actions'])))
                         print('Completed ' + job['split'] + '/' + episode_id, flush=True)
         check_rows(rows, job['ids'])
         atomic_json(shard, dict(fingerprint=task['fingerprint'], rows=rows))
+    atomic_json(progress_file, dict(phase='finished',split='all',episode_id='all',
+        finished_at_epoch=time.time()))
 
 
 def assemble(output, jobs, expected, fingerprint, diagnostic):
@@ -259,6 +276,15 @@ def export(args, config):
             logs.append(log)
             processes.append(subprocess.Popen([sys.executable, str(ENTRYPOINT), '--worker-task', str(task_path)],
                                               stdout=log, stderr=subprocess.STDOUT))
+        interval = getattr(args, 'progress_interval', 3.0)
+        if interval > 0:
+            monitor = ProgressMonitor(output, args.gpu_ids)
+            print('[HA-VLN] Live terminal progress enabled; full worker output remains in worker-<GPU>.log',
+                  flush=True)
+            monitor.report()
+            while any(process.poll() is None for process in processes):
+                time.sleep(interval)
+                monitor.report()
         codes = [process.wait() for process in processes]
         if any(codes):
             raise RuntimeError('Agent worker failed: ' + str(codes) + '; inspect worker logs')
@@ -312,6 +338,8 @@ def main():
     parser.add_argument('--preflight', action='store_true', help='Read-only checks; no API requests')
     parser.add_argument('--retry-incomplete', action='store_true', help='Authorize rerunning partial API work')
     parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--progress-interval', type=float, default=3.0,
+                        help='Terminal worker progress polling in seconds (default 3; 0 disables)')
     parser.add_argument('--worker-task', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker_task:
@@ -321,6 +349,8 @@ def main():
         sys.exit(0 if preflight(args) else 1)
     if args.output_dir is None:
         parser.error('--output-dir is required')
+    if not math.isfinite(args.progress_interval) or not 0 <= args.progress_interval <= 60:
+        parser.error('--progress-interval must be a finite number between 0 and 60 seconds')
     if args.episode_limit is not None and args.episode_limit < 1:
         parser.error('--episode-limit must be positive')
     if len(set(args.splits)) != len(args.splits):
