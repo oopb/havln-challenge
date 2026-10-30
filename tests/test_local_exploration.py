@@ -176,13 +176,20 @@ class ExplorationTests(unittest.TestCase):
         runtime=self.agent()
         values=iter([dict(observation_id='dynamic1',new_visual_information=False),
                      dict(observation_id='dynamic2',new_visual_information=False)])
-        runtime._step=Mock(side_effect=lambda action:
-            (setattr(runtime.memory,'current',next(values)) or dict(status='EXECUTED')))
-        # Memory event() stores the rate-limiting receipt.
+        runtime.motion_controller.pose=lambda:pose(
+            math.degrees(runtime.motion_controller.heading))
+        def execute_turn(action):
+            runtime.motion_controller.heading+=math.radians(-15 if action=='TURN_RIGHT' else 15)
+            runtime.memory.current=next(values)
+            return dict(status='EXECUTED')
+        runtime._step=Mock(side_effect=execute_turn)
+        # Memory event() stores the rate-limiting receipt at the actual endpoint.
         runtime.memory.event=lambda kind,**kw:runtime.memory.events.append(dict(event=kind,**kw))
         first=runtime._turn_and_observe(-30,'none',purpose='dynamic_recheck')
         self.assertEqual(first['status'],'NO_NEW_INFORMATION') # no new static view
         self.assertEqual(runtime._step.call_count,2)
+        # Return to the same camera heading without clearing the evidence.
+        runtime.motion_controller.heading=math.radians(120)
         runtime._step.reset_mock()
         second=runtime._turn_and_observe(-30,'none',purpose='dynamic_recheck')
         self.assertEqual(second['status'],'NO_NEW_INFORMATION')
