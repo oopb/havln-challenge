@@ -127,7 +127,7 @@ def tool_result_schema():
             'INVALID_TARGET','STALE_TARGET','STALE_OBSERVATION','API_ERROR','API_UNAVAILABLE',
             'TARGET_REACHED','INSUFFICIENT_EVIDENCE','RECORDED','VERIFIED','REJECTED',
             'FINISHED','CANCELLED','LOCALIZED','UNKNOWN','EXECUTED','EXECUTABLE','STOPPED','BUDGET_LIMIT',
-            'INTERRUPTED','TOOL_ERROR','REQUIRES_ATTENTION']),
+            'INTERRUPTED','TOOL_ERROR','REQUIRES_ATTENTION','NO_NEW_INFORMATION']),
         tool=dict(type='string'), tool_call_id=dict(type='string'),
         requested_actions=dict(type='integer',minimum=0), executed_actions=dict(type='integer',minimum=0),
         executed_motion=dict(type='array',items=dict(enum=['STOP','MOVE_FORWARD','TURN_LEFT','TURN_RIGHT','LOOK_UP','LOOK_DOWN'])),
