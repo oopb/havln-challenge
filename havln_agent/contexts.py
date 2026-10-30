@@ -143,12 +143,21 @@ def navigation_context(runtime):
     # The latest tool is often a harmless scan. Keep the most recent physical
     # navigation failure available until a new route is tested.
     for item in reversed(memory.tool_ledger[-40:]):
+        if item['call'].get('tool')!='navigate_local':
+            continue
         prior=item['result']
-        if item['call'].get('tool')=='navigate_local' and prior.get('status')=='BLOCKED':
+        # Only the LAST navigation attempt matters; newer successful movement
+        # or a changed local pose invalidates an older obstacle hypothesis.
+        old_pose=item.get('request_context',{}).get('pose') or {}
+        same_place=(old_pose.get('motion_epoch')==pose.get('motion_epoch')
+            and math.hypot(old_pose.get('x',1e6)-pose['x'],
+                           old_pose.get('z',1e6)-pose['z'])<=.12)
+        if prior.get('status')=='BLOCKED' and same_place:
             result['recent_navigation_block']=dict(tool_call_id=item['call_id'],
                 observation_id=prior.get('end_observation_id'),
+                temporal_status='historical_measured_obstacle_not_current_safety',
                 **fields(tool_summary(prior),('reason','measured_collision')))
-            break
+        break
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(
             matched_observation_ids=current.get('revisited_view_ids',[])[-3:],
