@@ -94,9 +94,15 @@ class LocalMotionController:
         geometry = r.geometry()
         # Keep the calibrated body sweep's visibility horizon; only one atomic
         # displacement is authorized, even if the selected endpoint is further.
-        diagnostic = geometry.diagnose(0 if not turn_only else angle,
-            self.camera.forward_step)
+        # Turning is not forward translation. After the real TURN, a new RGB-D
+        # view must certify the actual straight-ahead 0-degree body sweep.
+        diagnostic = (dict(scope='turn_only_no_forward_permission') if turn_only else
+                      geometry.diagnose(0, self.camera.forward_step))
+        next_action = ('TURN_LEFT' if angle > 0 else 'TURN_RIGHT') if turn_only else 'MOVE_FORWARD'
         validation = dict(source=r.source(), geometry=diagnostic,
+            next_atomic_action=next_action,
+            validated_forward_bearing_deg=(0 if not turn_only else None),
+            requires_post_turn_recheck=turn_only,
             scope='next_atomic_step_only', dynamic_safety='per_forward_step_required')
         path['last_validation'] = validation
         if not turn_only:
@@ -109,8 +115,8 @@ class LocalMotionController:
                     validation=validation, original_target=list(endpoint))
         segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
         segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],
-            endpoint_xz_m=[pose['x']-math.sin(pose['heading']+angle)*segment_distance,
-                           pose['z']+math.cos(pose['heading']+angle)*segment_distance],
+            endpoint_xz_m=[pose['x']-math.sin(pose['heading'])*segment_distance,
+                           pose['z']+math.cos(pose['heading'])*segment_distance],
             distance_m=segment_distance, turn_only=turn_only, source=r.source(), requires_live_safety=True)
         value = dict(status='OK', candidate=dict(path, angle=angle, distance=segment_distance),
             original_target=list(endpoint), executable_segment=segment, validation=validation)

@@ -364,7 +364,7 @@ class ToolExecutor:
                 groundings.append(dict(original, current_estimate=estimate))
         angles = None
         if groundings:
-            stride = self.camera.turn_angle / 2
+            stride = self.camera.turn_angle
             base = list(range(-int(self.camera.hfov / 2 / stride), int(self.camera.hfov / 2 / stride) + 1))
             angles = [i * stride for i in base] + [g['current_estimate']['bearing_deg'] for g in groundings]
             angles = sorted(set(round(a, 4) for a in angles))
@@ -466,7 +466,10 @@ class ToolExecutor:
         remaining = math.hypot(endpoint[0] - self.motion_controller.x, endpoint[1] - self.motion_controller.z)
         reached = status == 'TARGET_REACHED'
         path['execution_status'] = 'IN_PROGRESS' if status == 'PARTIAL' else status
-        if reached or status == 'INTERRUPTED':
+        # The old endpoint is invalid after uncertain translation or a confirmed
+        # collision. Keep PARTIAL/NEEDS_VIEW for same-path continuation, but do
+        # not offer a stale waypoint as an executable route.
+        if reached or status in ('INTERRUPTED','BLOCKED','REQUIRES_ATTENTION','STALE_TARGET'):
             self.memory.finish_attempt(status, reason)
             self.motion_controller.target = None
         elif self.memory.active_attempt:
@@ -531,7 +534,8 @@ class ToolExecutor:
                     return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
                         result['feedback']['motion_alert']['reason'], motion_alert=result['feedback']['motion_alert'])
                 if not result['feedback']['translation_supported']:
-                    return self._navigation_feedback(path, checked, 'BLOCKED', 'motion_unverified')
+                    return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
+                        'motion_unverified_reanchor_current_rgbd')
             if self.done:
                 return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
         reached = self.motion_controller.next_action() is None

@@ -367,6 +367,8 @@ class AgentRuntime(ToolExecutor):
                 for path in paths:
                     path.update(type='GOAL_WAYPOINT',objective=dict(purpose='approach_landmark',target=target,
                         completes_language_goal=False))
+            # Keep the agent's semantic choice. Describe safety and alignment,
+            # but do not silently select a target or override a blocked view.
             paths.sort(key=lambda p:(p.get('first_step')!='EXECUTABLE',abs(p['angle'])))
             offered=paths[:5]
             straight = next((p for p in paths if abs(p['angle']) < 1e-6), None)
@@ -426,8 +428,7 @@ class AgentRuntime(ToolExecutor):
             self.motion_policy = 'LOCAL_TERRAIN'
         try:
             result = self._execute_waypoint(target, max_atomic_steps)
-            if self.motion_controller.target is not None:
-                self.active_waypoint_id = waypoint_id
+            self.active_waypoint_id = (waypoint_id if self.motion_controller.target is not None else None)
             return dict(result,waypoint_type=path['type'],waypoint_arrival_completes_task=False)
         finally:
             self.motion_policy = original

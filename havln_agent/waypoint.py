@@ -1,16 +1,14 @@
 """Observed short corridors; no task policy or failure blacklist."""
 
 import math
-import re
+from .progress import stair_motion_direction
 
 
 def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
     """Describe goal relevance without choosing a route or certifying terrain."""
     reasons = []
     stairs = grounding['semantic']['stair_direction'] != 'not_stairs'
-    action = language_goal.get('action', '')
-    wanted = ('DOWN' if re.search(r'descend|down|下楼', action, re.I) else
-              'UP' if re.search(r'ascend|upstairs|上楼', action, re.I) else None)
+    wanted = stair_motion_direction(language_goal)
     direction = grounding.get('stair_direction', 'UNKNOWN')
     if wanted and direction not in (wanted,'UNKNOWN'):
         reasons.append('stair_direction_unknown' if direction == 'UNKNOWN' else 'stair_direction_opposes_language_goal')
@@ -32,23 +30,27 @@ def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
 
 
 def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None):
-    stride = geometry.camera.turn_angle / 2
+    # Only offer directions reachable by the actual discrete TURN action.
+    # A 7.5-degree candidate with a 15-degree robot TURN was falsely labelled
+    # EXECUTABLE even though its first MOVE_FORWARD could be along 0 degrees.
+    stride = geometry.camera.turn_angle
     extent = geometry.camera.hfov / 2
-    angles = (
-        angles
-        if angles is not None
-        else [i * stride for i in range(-int(extent / stride), int(extent / stride) + 1)]
-    )
+    requested = (angles if angles is not None else
+                 [i * stride for i in range(-int(extent / stride), int(extent / stride) + 1)])
+    angles = sorted(set(round(float(deg) / stride) * stride for deg in requested
+                        if abs(round(float(deg) / stride) * stride) < extent))
     candidates = []
     for degrees in angles:
         angle = math.radians(degrees)
         check = geometry.assess_step(angle)
         diagnostic = dict(check['depth'],motion_state=check['state'],reason=check['reason'],terrain_support=check['support'])
-        distance = (
-            math.floor((min(max_distance, diagnostic['clearance']) + 1e-6) / geometry.camera.forward_step)
-            * geometry.camera.forward_step
-        )
-        diagnostic.update(waypoint_id='wp_%g' % degrees, waypoint_distance=min(max_distance,geometry.camera.forward_step))
+        # Offer up to two short steps; only the FIRST step is certified here.
+        # Every later MOVE_FORWARD must use a newly acquired RGB-D frame.
+        distance = min(max_distance, 2 * geometry.camera.forward_step)
+        diagnostic.update(waypoint_id='wp_%g' % degrees, waypoint_distance=distance,
+                          first_atomic_action=('MOVE_FORWARD' if degrees == 0 else
+                              'TURN_LEFT' if degrees > 0 else 'TURN_RIGHT'),
+                          requires_post_turn_recheck=(degrees != 0))
         if diagnostics is not None:
             diagnostics.append(diagnostic)
         if check['state'] in ('EXECUTABLE','NEEDS_VIEW'):
@@ -56,8 +58,10 @@ def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None):
                 dict(
                     id=diagnostic['waypoint_id'],
                     angle=angle,
-                    distance=min(max_distance,geometry.camera.forward_step),
+                    distance=distance,
                     first_step=check['state'],reason=check['reason'],
+                    first_atomic_action=diagnostic['first_atomic_action'],
+                    requires_post_turn_recheck=(degrees != 0),
                     clearance=diagnostic['clearance'],
                 )
             )
