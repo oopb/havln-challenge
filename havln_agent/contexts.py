@@ -10,10 +10,36 @@ def fields(value,names):
     return {key:value[key] for key in names if key in value}
 
 
+
+def collision_summary(result):
+    """Keep decisive measured data, not a VLM guess about obstacle identity."""
+    safety=result.get('safety') or {}
+    validation=result.get('validation') or {}
+    depth=(safety if 'clearance' in safety else validation.get('geometry') or {})
+    if not depth and isinstance(result.get('geometry'),dict):
+        depth=result['geometry'].get('front') or {}
+    if not depth:return None
+    people=depth.get('human_occupancy') or depth.get('human_evidence') or {}
+    terrain=safety.get('terrain_support') or depth.get('terrain_support') or {}
+    if not isinstance(terrain,dict):terrain=dict(status=str(terrain))
+    values=fields(depth,('path_state','clearance','required_forward_step',
+        'nearest_obstacle_distance','nearest_collision_travel','rejection_reasons',
+        'unknown_sweep_pixels','collision_points','nearest_collision_point'))
+    values['people']=fields(people,('confirmed','uncertain','unlocalized',
+        'corridor_points','nearest_distance'))
+    values['terrain']=fields(terrain,('status','reason','direction'))
+    if values.get('path_state')=='OCCUPIED' and not values['people'].get('corridor_points'):
+        values['identity_note']='measured_depth_obstacle; semantic identity unverified; do not assume human'
+    return values
+
+
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
         'remaining_distance','vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
+    if result.get('status') in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION') or result.get('safety'):
+        collision=collision_summary(result)
+        if collision:value['measured_collision']=collision
     if 'paths' in result:
         value['paths']=[fields(p,('id','type','bearing_deg','range_m','first_step','goal_status',
             'source_observation_id','objective','reason','first_atomic_action',
@@ -81,8 +107,8 @@ def navigation_context(runtime):
             height_y_m_est=pose['y'],confidence='estimated'),
         current_view=view,legal_look=[look for look,delta in [('up',runtime.camera.tilt_angle),('down',-runtime.camera.tilt_angle)]
             if abs(runtime.pitch_deg+delta)<=60],
-        local_geometry=[fields(d,('angle_degrees','motion_state','reason')) for d in
-            sorted(memory.current.get('directions',[]),key=lambda d:(d.get('motion_state')!='EXECUTABLE',abs(d['angle_degrees'])))[:3]],
+        local_geometry=[fields(d,('angle_degrees','motion_state','reason','clearance')) for d in
+            sorted(memory.current.get('directions',[]),key=lambda d:abs(d['angle_degrees']))[:7]],
         memory_hints=hints,dynamic_hints=memory.dynamic_summaries(memory.current_place_id)[-2:],
         last_tool=tool_summary(last) if last else None,
         actions_remaining=runtime.config['max_steps']-len(memory.actions))
@@ -114,11 +140,32 @@ def navigation_context(runtime):
             status='IN_PROGRESS',next_action=runtime.motion_controller.next_action(),
             remaining_distance_m=round(math.hypot(target[0]-pose['x'],target[1]-pose['z']),3),
             suggestion='prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked')
-    recent_views=memory.observations[-32:]
-    repeats=sum(o['rgb_hash']==current['rgb_hash'] and o['pose']==current['pose']
-        for o in recent_views)
-    if repeats>1:
-        result['repeated_current_view_count']=repeats
-        result['repetition_note']='same RGB and pose; repeated static scene questions may not add information'
+    # The latest tool is often a harmless scan. Keep the most recent physical
+    # navigation failure available until a new route is tested.
+    for item in reversed(memory.tool_ledger[-40:]):
+        prior=item['result']
+        if item['call'].get('tool')=='navigate_local' and prior.get('status')=='BLOCKED':
+            result['recent_navigation_block']=dict(tool_call_id=item['call_id'],
+                observation_id=prior.get('end_observation_id'),
+                **fields(tool_summary(prior),('reason','measured_collision')))
+            break
+    if current.get('revisited_static_view'):
+        result['revisited_static_view']=dict(
+            matched_observation_ids=current.get('similar_view_ids',[])[-3:],
+            evidence_type='historical_static_appearance_only',
+            live_persons_and_motion_authorized=False)
+        # A historical image is only a static semantic hint. It never supplies
+        # a live human box, free space, or current geometric safety.
+        matching=set(current.get('similar_view_ids',[]))
+        for item in reversed(memory.scene_history):
+            source=item.get('source',{})
+            if source.get('observation_id') in matching:
+                scene_hint=item['scene']
+                result['historical_static_scene']=dict(
+                    source_observation_id=source.get('observation_id'),
+                    description=scene_hint.get('description','')[:350],
+                    landmarks=[fields(l,('name','direction')) for l in scene_hint.get('landmarks',[])[:4]],
+                    evidence_state='historical_hypothesis_not_live_safety')
+                break
     if historical_hint:result['historical_hint']=historical_hint
     return result
