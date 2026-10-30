@@ -27,7 +27,7 @@ class NavigationAgent:
             'waypoint_id using max_atomic_steps=2 or 3 if the action budget permits. Let the '
             'controller complete turn alignment and refresh depth before the next forward action; '
             'do NOT undo that alignment with unrelated turn_and_observe unless abandoning the route. '
-            'Switch only on a meaningful change in 
+            'Switch only on a meaningful change in '
             'goal, verified obstacle, missing safety evidence, or unreliable pose. '
             '(2) If candidate_waypoints contains a relevant EXECUTABLE candidate from the current '
             'view, normally call navigate_local with that exact id BEFORE another generic visual '
