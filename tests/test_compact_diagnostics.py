@@ -79,6 +79,21 @@ class CompactTraceTests(unittest.TestCase):
         self.assertNotIn(prefix+'tool_ledger.json',names)
         self.assertFalse(any('cache' in name for name in names))
 
+    def test_api_log_stored_once_and_sensitive_key_redacted(self):
+        from havln_agent.api_client import APIClient
+        client=APIClient.__new__(APIClient)
+        client.episode_id='1'
+        client.log_path=self.trace/'api.jsonl'
+        client.trace_context=dict(decision_id='d1')
+        client.keys={('navigation_agent',0):'PRIVATE_API_TOKEN_X'}
+        client._log(dict(role='navigation_agent',
+            messages=[dict(role='system',content='private test '+
+                           'PRIVATE_API_TOKEN_X')]))
+        self.assertIn('navigation_agent',(self.trace/'api.jsonl').read_text())
+        self.assertIn('[REDACTED]',(self.trace/'api.jsonl').read_text())
+        self.assertNotIn('PRIVATE_API_TOKEN_X',(self.trace/'api.jsonl').read_text())
+        self.assertFalse((self.trace/'api-navigation_agent.jsonl').exists())
+
     def test_full_and_no_frames_modes(self):
         full=Path(self.temp.name)/'full.zip'
         none=Path(self.temp.name)/'none.zip'
