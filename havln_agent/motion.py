@@ -104,16 +104,33 @@ def estimate_translation(before, after, camera, excluded_before=None):
     inliers = residual < 0.04
     count, ratio = int(inliers.sum()), float(inliers.mean())
     result.update(inliers=count, inlier_fraction=ratio)
-    if count < 12 or ratio < 0.65:
+    if not count:
         result['reason'] = 'inconsistent_or_dynamic_correspondences'
         return result
     coverage = np.ptp(matched_pixels[inliers], axis=0)
     tiles = {tuple((p * 3).astype(int)) for p in matched_pixels[inliers]}
-    if coverage.min() < 0.4 or len(tiles) < 6 or np.ptp(points_a[good][inliers, 2]) < 0.3:
-        result['reason'] = 'insufficient_spatial_or_depth_coverage'
-        return result
+    depth_span = float(np.ptp(points_a[good][inliers, 2]))
     translation = np.median(differences[inliers], axis=0)
     sigma = max(0.005, float(np.sqrt(np.mean((differences[inliers] - translation) ** 2))))
+    # The conventional 65% match-consensus threshold is useful when features
+    # are sparse, but can reject a geometrically coherent STATIC background
+    # when a moving humanoid contributes a minority of the matches. A relaxed
+    # branch is allowed ONLY with strong independent coverage, depth diversity
+    # and low metric residual. It never relies on the commanded step length.
+    strong_consensus = count >= 12 and ratio >= 0.65
+    distributed_consensus = (count >= 20 and ratio >= 0.52
+        and float(coverage.min()) >= 0.65 and len(tiles) >= 7
+        and depth_span >= 0.6 and sigma <= 0.02)
+    result.update(consensus_mode=('strict' if strong_consensus else
+                                  'distributed_static' if distributed_consensus else 'rejected'),
+        spatial_tiles=len(tiles), spatial_coverage=list(map(float, coverage)),
+        depth_span_m=depth_span, residual_rms_m=sigma)
+    if not (strong_consensus or distributed_consensus):
+        result['reason'] = 'inconsistent_or_dynamic_correspondences'
+        return result
+    if coverage.min() < 0.4 or len(tiles) < 6 or depth_span < 0.3:
+        result['reason'] = 'insufficient_spatial_or_depth_coverage'
+        return result
     x, y, z = map(float, translation)
     pitch = np.radians(before.pitch_deg)
     y, z = y*np.cos(pitch)+z*np.sin(pitch), z*np.cos(pitch)-y*np.sin(pitch)
