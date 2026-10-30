@@ -72,6 +72,10 @@ def tool_summary(result):
         value['observations']=result['scan']['frames']
     if result.get('motion_alert'):
         value['motion_alert']=fields(result['motion_alert'],('reason','observation_before','observation_after'))
+    if result.get('recovery'):
+        value['recovery']=result['recovery']
+    if result.get('interrupted_status'):
+        value['interrupted_status']=result['interrupted_status']
     return value
 
 
@@ -146,10 +150,21 @@ def navigation_context(runtime):
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
     if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
         target=runtime.motion_controller.target
+        attempt=memory.active_attempt or {}
+        unverified=bool(attempt.get('unknown_motion_seen'))
         result['local_navigation']=dict(waypoint_id=runtime.active_waypoint_id,
-            status='IN_PROGRESS',next_action=runtime.motion_controller.next_action(),
-            remaining_distance_m=round(math.hypot(target[0]-pose['x'],target[1]-pose['z']),3),
-            suggestion='prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked')
+            status='IN_PROGRESS',next_action=(
+                'MOVE_FORWARD_PENDING_LIVE_SAFETY' if unverified else
+                runtime.motion_controller.next_action()),
+            remaining_distance_m=(None if unverified else
+                round(math.hypot(target[0]-pose['x'],target[1]-pose['z']),3)),
+            endpoint_estimate_valid=not unverified,
+            relative_motion_only=unverified,
+            forward_actions=attempt.get('forward_actions',0),
+            forward_action_horizon=attempt.get('forward_action_horizon'),
+            suggestion=('continue_same_bounded_waypoint_with_fresh_rgbd_checks'
+                if unverified else
+                'prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked'))
     # The latest tool is often a harmless scan. Keep the most recent physical
     # navigation failure available until a new route is tested.
     for item in reversed(memory.tool_ledger[-40:]):
