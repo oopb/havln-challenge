@@ -10,6 +10,8 @@ import math
 import time
 
 from .api_client import APIError, BudgetExceeded
+from .local_exploration import (covered_view, last_block, local_coverage,
+                                predicted_scan, bearing_from_pose)
 
 
 TARGET_TYPES = ('stairs_down', 'stair_entry', 'walkable_approach', 'corridor',
@@ -88,6 +90,28 @@ class ObservationController:
 
         start = r.motion_controller.pose()
         start_view=r.memory.current
+        if last_block(r.memory,start):
+            look_pitch = (start['pitch_deg'] + (
+                r.camera.tilt_angle if look=='up' else -r.camera.tilt_angle)
+                if look!='none' else start['pitch_deg'])
+            planned_pose=dict(start,pitch_deg=look_pitch)
+            signed_sweep=sweep_degrees if direction=='left' else -sweep_degrees
+            planned=predicted_scan(r.memory,planned_pose,signed_sweep,'none',
+                r.camera.turn_angle,r.camera.tilt_angle)
+            initial_view=(covered_view(r.memory.observations,start,
+                r.memory.task.current_subgoal_index,bearing_from_pose(start),
+                look_pitch,r.camera.turn_angle) if look!='none' else True)
+            if not planned['new_view_expected'] and initial_view:
+                return dict(status='NO_NEW_INFORMATION',
+                    outcome='REPEATED_SEARCH_NO_NEW_VIEW',
+                    reason='all_scan_camera_headings_previously_observed_since_block',
+                    covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
+                    checkpoints=[],best_candidate=None,
+                    new_information_ids=[],revisited_view_ids=[],
+                    usable_for_live_safety=False,
+                    exploration=local_coverage(r.memory,start,r.camera.turn_angle,
+                        round(360/r.camera.turn_angle)),
+                    next_step='change_absolute_heading_or_strategy_not_repeat_scan')
         now=time.monotonic()
         # Exact duplicate observation task from the same pose and frame is
         # idempotent. No repeated TURN sweep for a previously covered static
