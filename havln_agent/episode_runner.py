@@ -15,13 +15,25 @@ from .task_planner import TaskPlanner
 from scripts.export_cma_submission import atomic_json, check_rows
 
 
+def canonical_step_frame_refs(directory, feedback):
+    """Use the same RGB-D frames as memory and historical image lookup."""
+    refs = {}
+    for key, obs_id in (('input_file', feedback['observation_before']),
+                        ('post_file', feedback['observation_after'])):
+        filename = 'observations/' + obs_id + '.npz'
+        if not (Path(directory) / filename).is_file():
+            raise RuntimeError('missing_canonical_observation_for_step')
+        refs[key] = filename
+    return refs
+
+
 def run_episode(env, episode_id, camera, client, config, directory, instruction=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
         raise ValueError('Episode trace directory already contains files; use a fresh output directory')
-    for name in ('api', 'api-task_planner', 'api-navigation_agent', 'api-visual_perception',
-                 'task_planner', 'navigation_agent', 'visual_perception', 'steps', 'tools',
+    for name in ('api', 'task_planner', 'navigation_agent', 'visual_perception',
+                 'steps', 'tools',
                  'safety', 'progress', 'state', 'events'):
         (directory / (name+'.jsonl')).write_text('')
     client.begin_episode(episode_id, config['api_budget'], directory / 'api.jsonl')
@@ -43,11 +55,11 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         return read_current_observation(env, camera, runtime.memory.task.instruction)
 
     def record_step(record, before, after):
-        for key, observation in (('input_file', before), ('post_file', after)):
-            filename = ('input' if key == 'input_file' else 'post')+'-%03d.npz' % record['step']
-            np.savez_compressed(directory / filename, rgb=observation.rgb,
-                depth=observation.depth, pitch_deg=observation.pitch_deg)
-            record[key] = filename
+        # MemoryRecords already saves each distinct RGB-D frame once under
+        # observations/obs_XXXX.npz. The former input-NNN/post-NNN copies
+        # tripled disk usage without adding diagnostic information.
+        feedback = runtime.memory.actions[record['step']]['result']
+        record.update(canonical_step_frame_refs(directory, feedback))
         append('steps', record)
         append('safety', dict(step=record['step'], tool_call_id=record['tool_call_id'], **record['safety']))
 
@@ -117,8 +129,6 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         actions = [a['action'] for a in runtime.memory.actions]
         row = dict(episode_id=episode_id, actions=actions)
         check_rows([row], [episode_id])
-        np.savez_compressed(directory / 'terminal.npz', rgb=runtime.observation.rgb,
-            depth=runtime.observation.depth, pitch_deg=runtime.observation.pitch_deg)
         pose = runtime.motion_controller.pose()
         summary = dict(episode_id=episode_id, architecture='agent_v5', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
@@ -135,6 +145,19 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             translation_source='rgbd_estimate_only_not_physical_ground_truth',
             waypoint_completed=sum(r['call']['tool']=='navigate_local' and r['result']['status']=='TARGET_REACHED'
                 for r in runtime.memory.tool_ledger),
+            waypoint_candidate_queries=sum(r['call']['tool']=='get_waypoint_candidates'
+                for r in runtime.memory.tool_ledger),
+            waypoint_queries_without_executable_path=sum(
+                r['call']['tool']=='get_waypoint_candidates' and not r['result'].get('paths')
+                for r in runtime.memory.tool_ledger),
+            local_navigation_blocked_calls=sum(
+                r['call']['tool']=='navigate_local' and (
+                    r['result'].get('reason')=='occupied_next_step'
+                    or r['result'].get('interrupted_status')=='BLOCKED'
+                    or r['result'].get('status')=='BLOCKED')
+                for r in runtime.memory.tool_ledger),
+            actions_since_last_forward=(len(actions)-1-max(
+                (i for i,a in enumerate(actions) if a=='MOVE_FORWARD'),default=-1)),
             tool_calls=len(runtime.memory.tool_ledger),
             tools_by_name=dict(Counter(r['call']['tool'] for r in runtime.memory.tool_ledger)),
             tool_outcomes=dict(Counter(r['result']['status'] for r in runtime.memory.tool_ledger)),
@@ -159,7 +182,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         raise
     finally:
         atomic_json(directory / 'memory.json', runtime.memory.snapshot())
-        atomic_json(directory / 'tool_ledger.json', runtime.memory.tool_ledger)
+        # All tool receipts already appear in tools.jsonl and memory.json.
         if runtime.memory.current is not None:
             atomic_json(directory / 'final_state.json', runtime.state_view())
         with (directory / 'memory.jsonl').open('w') as handle:
