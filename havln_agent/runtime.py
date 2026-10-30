@@ -446,7 +446,15 @@ class AgentRuntime(ToolExecutor):
             a['grounding_id'] == g['grounding_id'] for a in path.get('goal_association', []))
             and g['source'].get('image_scope', 'current') == 'current'
             and not self.estimate_goal(g)['requires_reconfirmation']]
-        if path['type']=='GOAL_WAYPOINT' and not associations:
+        continuing_uncertain = (self.active_waypoint_id == waypoint_id
+            and self.motion_controller.target is not None
+            and self.memory.active_attempt is not None
+            and self.memory.active_attempt.get('unknown_motion_seen', False))
+        # The old global grounding loses localization after an uncertain
+        # translation, but the already chosen STRAIGHT relative segment can
+        # be finished within its original two-step command horizon. Never use
+        # stale grounding to start a new route or certify goal completion.
+        if path['type']=='GOAL_WAYPOINT' and not associations and not continuing_uncertain:
             return self.motion_controller.needs_view('grounded_local_objective_required')
         if path['type'] not in ('GOAL_WAYPOINT','EXPLORATION_WAYPOINT'):
             return dict(status='INVALID_TARGET',reason='unknown_waypoint_type')
