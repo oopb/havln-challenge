@@ -12,6 +12,7 @@ on:
       - "tests/test_terminal_progress.py"
       - "tests/test_smoke50013_waypoints.py"
       - "tests/test_active_observation.py"
+      - "tests/test_odometry_gap_navigation.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -41,3 +42,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_smoke50013_waypoints.py' -v
       - name: Check active observation subtasks
         run: python -m unittest discover -s tests -p 'test_active_observation.py' -v
+      - name: Check bounded navigation after uncertain RGB-D motion
+        run: python -m unittest discover -s tests -p 'test_odometry_gap_navigation.py' -v

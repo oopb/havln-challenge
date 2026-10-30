@@ -510,6 +510,14 @@ class ToolExecutor:
             # Preserve the original selected endpoint; a checked fragment never replaces it.
             self.motion_controller.target = tuple(checked['original_target'])
             self.memory.active_attempt['original_endpoint_xz_m'] = list(self.motion_controller.target)
+            # A waypoint is at most two atomic forward steps in the current
+            # generator. A failed visual registration must never create an
+            # unlimited blind-movement budget or fake measured distance.
+            self.memory.active_attempt['forward_action_horizon'] = max(1, math.ceil(
+                (path['distance'] - 1e-6) / self.camera.forward_step))
+            self.memory.active_attempt['forward_actions'] = 0
+            self.memory.active_attempt['unknown_motion_seen'] = False
+            self.memory.active_attempt['unknown_observation_ids'] = []
         elif self.motion_controller.target is None:
             return dict(status='INVALID_TARGET', reason='no_pending_target')
         else:
@@ -519,10 +527,26 @@ class ToolExecutor:
                 return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
                     'previous_motion_requires_new_local_path_or_cancellation')
         for _ in range(max_actions):
-            action = self.motion_controller.next_action()
+            attempt = self.memory.active_attempt
+            unverified = bool(attempt and attempt.get('unknown_motion_seen'))
+            if unverified and attempt['forward_actions'] >= attempt['forward_action_horizon']:
+                # We have performed the bounded relative route, but cannot
+                # claim target arrival based on commanded displacement alone.
+                return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
+                    'relative_forward_horizon_exhausted_without_verified_pose',
+                    recovery=dict(mode='REANCHOR_CURRENT_RGBD',
+                        executed_forward_actions=attempt['forward_actions'],
+                        horizon=attempt['forward_action_horizon'],
+                        unknown_observation_ids=attempt['unknown_observation_ids'],
+                        next_step='new_local_waypoints_from_current_rgbd_not_repeat_semantic_scan'))
+            # After a failed visual translation, x/z are deliberately not
+            # advanced. Continue only a straight, short-horizon intent under
+            # NEW depth and collision checks; do not steer toward stale x/z.
+            action = 'MOVE_FORWARD' if unverified else self.motion_controller.next_action()
             if action is None:
                 return self._navigation_feedback(path, checked, 'TARGET_REACHED', 'original_endpoint_reached')
-            validation = self._revalidate_path(path, resume=True)
+            validation = (self.motion_controller.validate(self, path, resume=True,
+                uncertain_straight=True) if unverified else self._revalidate_path(path, resume=True))
             if validation['status'] != 'OK':
                 checked.update(validation)
                 self.executable_segment = None
@@ -536,15 +560,44 @@ class ToolExecutor:
                 return self._navigation_feedback(path, checked, result['status'], result.get('reason'),
                                                  **({'safety': result['safety']} if 'safety' in result else {}))
             if action == 'MOVE_FORWARD':
-                if result['feedback'].get('motion_alert'):
+                attempt = self.memory.active_attempt
+                if attempt:
+                    attempt['forward_actions'] += 1
+                alert = result['feedback'].get('motion_alert') or {}
+                if alert and alert.get('reason') != 'motion_estimate_unknown':
                     self.executable_segment = None
                     return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                        result['feedback']['motion_alert']['reason'], motion_alert=result['feedback']['motion_alert'])
+                        alert['reason'], motion_alert=alert)
                 if not result['feedback']['translation_supported']:
-                    return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                        'motion_unverified_reanchor_current_rgbd')
+                    if attempt:
+                        attempt['unknown_motion_seen'] = True
+                        attempt['unknown_observation_ids'].append(
+                            self.memory.current['observation_id'])
+                    # No hidden ground-truth pose and no assumed 0.25m update.
+                    # The NEXT action, if any, gets a new live RGB-D safety
+                    # validation, and the fixed horizon caps total forwards.
+                    self.executable_segment = None
             if self.done:
                 return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
+        attempt = self.memory.active_attempt
+        if attempt and attempt.get('unknown_motion_seen'):
+            if attempt['forward_actions'] >= attempt['forward_action_horizon']:
+                return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
+                    'relative_forward_horizon_exhausted_without_verified_pose',
+                    recovery=dict(mode='REANCHOR_CURRENT_RGBD',
+                        executed_forward_actions=attempt['forward_actions'],
+                        horizon=attempt['forward_action_horizon'],
+                        unknown_observation_ids=attempt['unknown_observation_ids'],
+                        next_step='new_local_waypoints_from_current_rgbd_not_repeat_semantic_scan'))
+            return self._navigation_feedback(path, checked, 'PARTIAL',
+                'tool_action_limit_after_unverified_translation',
+                recovery=dict(mode='CONTINUE_BOUNDED_RELATIVE_MOTION',
+                    executed_forward_actions=attempt['forward_actions'],
+                    horizon=attempt['forward_action_horizon'],
+                    remaining_safe_forward_attempts=(
+                        attempt['forward_action_horizon']-attempt['forward_actions']),
+                    requires_fresh_rgbd_before_next_step=True,
+                    endpoint_estimate_valid=False))
         reached = self.motion_controller.next_action() is None
         return self._navigation_feedback(path, checked, 'TARGET_REACHED' if reached else 'PARTIAL',
                                          'original_endpoint_reached' if reached else 'tool_action_limit')
