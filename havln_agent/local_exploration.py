@@ -57,6 +57,18 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
     unchecked = [i for i in range(max_headings) if i not in visited]
     unchecked.sort(key=lambda i:(min((i-current_bin)%max_headings,
                                      (current_bin-i)%max_headings),i))
+    # The latest occupancy status at a previously seen bearing is
+    # exploration history, not a permanent block and never a safety permit.
+    historical_blocked=[]
+    historical_free=[]
+    for i,record in visited.items():
+        front=next((d for d in record.get('directions',[])
+                    if abs(d.get('angle_degrees',1e5))<0.01),None)
+        if not front:continue
+        if front.get('motion_state')=='BLOCKED':
+            historical_blocked.append(wrap_heading(i*turn_degrees))
+        elif front.get('motion_state')=='EXECUTABLE':
+            historical_free.append(wrap_heading(i*turn_degrees))
     targets = []
     for i in unchecked[:5]:
         target = wrap_heading(i*turn_degrees)
@@ -70,6 +82,8 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
         checked_absolute_headings_deg=sorted(
             wrap_heading(k*turn_degrees) for k in visited),
         checked_count=len(visited), possible_heading_count=max_headings,
+        historical_blocked_headings_deg=sorted(historical_blocked),
+        historical_executable_headings_deg=sorted(historical_free),
         remaining_unchecked_count=len(unchecked),
         unexplored_directions=targets,
         all_headings_checked=len(unchecked)==0,
@@ -115,8 +129,11 @@ def last_block(memory, pose, *, max_recent_actions=150):
         if result.get('status') == 'TARGET_REACHED':
             return None
         if result.get('status') != 'BLOCKED' and result.get('interrupted_status') != 'BLOCKED':
-            # Later route attempt made: older block is no longer the
-            # immediate navigation feedback, even if that attempt failed.
+            if (not result.get('executed_motion') and result.get('status') in (
+                    'NEEDS_VIEW','INVALID_TARGET','STALE_TARGET','NO_NEW_INFORMATION')):
+                # A rejected pre-execution waypoint selection did not resolve
+                # the previous physical collision; keep the last real block.
+                continue
             return None
         reference = records.get(result.get('end_observation_id'))
         if not reference or not same_stance(reference.get('pose'),pose):
