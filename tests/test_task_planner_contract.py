@@ -37,9 +37,9 @@ class TaskPlannerContractTests(unittest.TestCase):
                 'Continue through the space until the hallway is reached.')
         raw = dict(subgoals=[
             dict(action='Descent to the bottom of the stairs.', landmark='stairs',
-                 target='landing', success_criteria=['target_nearby'], source_sentence_ids=[1]),
+                 target='landing', source_sentence_ids=[1]),
             dict(action='In-place right turn.', landmark='landing', target='right',
-                 success_criteria=['target_nearby'], source_sentence_ids=[2]),
+                 source_sentence_ids=[2]),
             dict(action='Continue through the space until the hallway is reached.',
                  landmark='hallway', target='hallway',
                  success_criteria=['landmark_passed'], source_sentence_ids=[3]),
