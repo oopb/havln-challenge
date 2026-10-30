@@ -407,7 +407,7 @@ class AgentRuntime(ToolExecutor):
                     value.update(status='NEEDS_VIEW',reason='goal_grounding_unavailable',
                         suggestion='choose_get_waypoint_candidates_with_purpose_explore_for_geometric_exploration',
                         information_options=['get_waypoint_candidates','ground_landmark','analyze_scene'])
-                elif unknown:
+                elif unknown or view_directions:
                     value.update(self.motion_controller.needs_view('unknown_depth_or_fov'))
                     if view_directions:
                         value.update(reason='alternate_directions_need_new_camera_view',
