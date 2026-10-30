@@ -31,6 +31,17 @@ def registry(camera, max_actions, pitch_deg=0.):
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
+        'observe_for_goal': ('Bounded active visual subtask: sweep 30-120 degrees in one direction with calibrated TURN actions, query VLM only at 30/45-degree checkpoints, stop early on a localized visual target and return evidence. Never moves forward. Requires cancelling an active local route first.',
+            dict(object_schema(dict(
+                objective=dict(TEXT,minLength=1),
+                target_types=dict(type='array',minItems=1,maxItems=3,uniqueItems=True,
+                    items=dict(enum=['stairs_down','stair_entry','walkable_approach',
+                        'corridor','door','goal_landmark'])),
+                direction=dict(enum=['left','right']),
+                sweep_degrees=dict(enum=[30,60,90,120]),
+                checkpoint_degrees=dict(enum=[30,45]),
+                look=dict(enum=['none','up','down']))),
+                required=['objective','target_types','direction','sweep_degrees'])),
         'compare_views': ('Compare current and/or saved RGB keyframes for one question. Historical views never authorize motion.',
             object_schema(dict(observation_ids=ids, question=text))),
         'ground_landmark': ('Locate a visible target/entry/treads; metric projection uses local Depth.',
@@ -59,7 +70,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','observe_for_goal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 

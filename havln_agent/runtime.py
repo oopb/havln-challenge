@@ -16,6 +16,7 @@ from .motion import registered_action
 from .tools import ToolExecutor
 from .spatial import validity
 from .contracts import registry
+from .active_observation import ObservationController
 from .navigation_agent import NavigationAgent
 from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
@@ -37,6 +38,7 @@ class AgentRuntime(ToolExecutor):
         self.task_planner = TaskPlanner(self)
         self.navigation_agent = NavigationAgent(self)
         self.visual_perception = VisualPerception(self)
+        self.observation_controller = ObservationController(self)
         self._authorized_action = False
         # Pitch changes only after a successful public environment receipt.
         original_step, original_refresh = self.step_callback, self.refresh_callback
@@ -226,6 +228,11 @@ class AgentRuntime(ToolExecutor):
         geometry = self.geometry()
         if geometry.human_status['unlocalized']:
             return self.motion_controller.needs_view('human_localization_unverified')
+
+    def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
+                          checkpoint_degrees=30, look='none'):
+        return self.observation_controller.scan(
+            objective, target_types, direction, sweep_degrees, checkpoint_degrees, look)
 
     def _turn_and_observe(self, relative_turn_deg, look):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
