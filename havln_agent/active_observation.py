@@ -25,6 +25,19 @@ def meaningful_candidate(result, targets):
             and bool((result.get('evidence') or '').strip()))
 
 
+def comparable_scan_pose(a, b):
+    """Tolerate floating-point yaw wrap; reject translated or re-anchored views."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    if a.get('motion_epoch') != b.get('motion_epoch'):
+        return False
+    if math.hypot(a.get('x',1e6)-b.get('x',-1e6),
+                  a.get('z',1e6)-b.get('z',-1e6)) > .03:
+        return False
+    delta=(a.get('heading',0)-b.get('heading',0)+math.pi)%(2*math.pi)-math.pi
+    return abs(delta)<math.radians(1) and abs(a.get('pitch_deg',0)-b.get('pitch_deg',0))<1
+
+
 class ObservationController:
     """Synchronously scan in one direction; each VLM checkpoint is optional."""
 
@@ -89,7 +102,7 @@ class ObservationController:
                     or previous.get('planned_sweep_deg')!=sweep_degrees
                     or previous.get('checkpoint_degrees')!=checkpoint_degrees
                     or previous.get('look')!=look
-                    or previous.get('start_pose')!=start
+                    or not comparable_scan_pose(previous.get('start_pose'),start)
                     or previous.get('start_rgb_hash')!=start_view.get('rgb_hash')
                     or previous.get('start_depth_hash')!=start_view.get('depth_hash')
                     or now-previous.get('started_monotonic',-1e9)>20):
