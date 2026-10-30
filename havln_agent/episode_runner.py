@@ -145,6 +145,19 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             translation_source='rgbd_estimate_only_not_physical_ground_truth',
             waypoint_completed=sum(r['call']['tool']=='navigate_local' and r['result']['status']=='TARGET_REACHED'
                 for r in runtime.memory.tool_ledger),
+            waypoint_candidate_queries=sum(r['call']['tool']=='get_waypoint_candidates'
+                for r in runtime.memory.tool_ledger),
+            waypoint_queries_without_executable_path=sum(
+                r['call']['tool']=='get_waypoint_candidates' and not r['result'].get('paths')
+                for r in runtime.memory.tool_ledger),
+            local_navigation_blocked_calls=sum(
+                r['call']['tool']=='navigate_local' and (
+                    r['result'].get('reason')=='occupied_next_step'
+                    or r['result'].get('interrupted_status')=='BLOCKED'
+                    or r['result'].get('status')=='BLOCKED')
+                for r in runtime.memory.tool_ledger),
+            actions_since_last_forward=(len(actions)-1-max(
+                (i for i,a in enumerate(actions) if a=='MOVE_FORWARD'),default=-1)),
             tool_calls=len(runtime.memory.tool_ledger),
             tools_by_name=dict(Counter(r['call']['tool'] for r in runtime.memory.tool_ledger)),
             tool_outcomes=dict(Counter(r['result']['status'] for r in runtime.memory.tool_ledger)),
