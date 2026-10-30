@@ -56,7 +56,7 @@ class WaypointLoopTests(unittest.TestCase):
     def test_runtime_returns_camera_views_separately_and_no_routes(self):
         r=AgentRuntime.__new__(AgentRuntime)
         r.motion_policy="LEVEL_ONLY"
-        r.camera=SimpleNamespace(forward_step=.25)
+        r.camera=SimpleNamespace(forward_step=.25,turn_angle=15.)
         r.refresh=Mock()
         r._generate_waypoints=Mock(return_value=dict(
             paths=[],inspected_directions=[
@@ -69,8 +69,10 @@ class WaypointLoopTests(unittest.TestCase):
         r.geometry=Mock(return_value=GeometryStub())
         r.motion_controller=SimpleNamespace(
             needs_view=LocalMotionController.needs_view,
-            next_step_state=lambda geom:dict(reason="occupied_next_step"))
-        r.memory=SimpleNamespace(note_candidates=Mock())
+            next_step_state=lambda geom:dict(reason="occupied_next_step"),
+            pose=lambda:dict(x=0.,y=0.,z=0.,heading=0.,pitch_deg=0.,motion_epoch=0))
+        r.memory=SimpleNamespace(note_candidates=Mock(),observations=[],
+            task=SimpleNamespace(current_subgoal_index=0))
         value=r._get_waypoint_candidates(purpose="explore")
         self.assertEqual(value["paths"],[])
         self.assertEqual(value["status"],"NEEDS_VIEW")

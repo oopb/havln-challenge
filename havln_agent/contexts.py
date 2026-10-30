@@ -4,6 +4,7 @@ import time
 
 from .progress import turn_evidence, current_visual_evidence
 from .memory_records import task_tokens
+from .local_exploration import last_block, local_coverage
 
 
 def fields(value,names):
@@ -77,6 +78,10 @@ def tool_summary(result):
         value['recovery']=result['recovery']
     if result.get('interrupted_status'):
         value['interrupted_status']=result['interrupted_status']
+    if result.get('exploration'):
+        value['exploration']=result['exploration']
+    if result.get('no_new_information_reason'):
+        value['no_new_information_reason']=result['no_new_information_reason']
     return value
 
 
@@ -174,24 +179,19 @@ def navigation_context(runtime):
             suggestion=('continue_same_bounded_waypoint_with_fresh_rgbd_checks'
                 if unverified else
                 'prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked'))
-    # The latest tool is often a harmless scan. Keep the most recent physical
-    # navigation failure available until a new route is tested.
-    for item in reversed(memory.tool_ledger[-40:]):
-        if item['call'].get('tool')!='navigate_local':
-            continue
-        prior=item['result']
-        # Only the LAST navigation attempt matters; newer successful movement
-        # or a changed local pose invalidates an older obstacle hypothesis.
-        old_pose=item.get('request_context',{}).get('pose') or {}
-        same_place=(old_pose.get('motion_epoch')==pose.get('motion_epoch')
-            and math.hypot(old_pose.get('x',1e6)-pose['x'],
-                           old_pose.get('z',1e6)-pose['z'])<=.12)
-        if prior.get('status')=='BLOCKED' and same_place:
-            result['recent_navigation_block']=dict(tool_call_id=item['call_id'],
-                observation_id=prior.get('end_observation_id'),
-                temporal_status='historical_measured_obstacle_not_current_safety',
-                **fields(tool_summary(prior),('reason','measured_collision')))
-        break
+    # Persistent physical obstruction: use the END pose, and recognize
+    # PARTIAL + interrupted_status=BLOCKED from a waypoint that moved first.
+    # Historical depth is evidence of failure, never fresh motion permission.
+    block=last_block(memory,pose)
+    if block:
+        for item in reversed(memory.tool_ledger):
+            if item.get('call_id')==block['tool_call_id']:
+                measured=collision_summary(item['result'])
+                if measured:block['measured_collision']=measured
+                break
+        result['recent_navigation_block']=block
+    result['local_exploration']=local_coverage(memory,pose,runtime.camera.turn_angle,
+        round(360/runtime.camera.turn_angle))
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(
             matched_observation_ids=current.get('revisited_view_ids',[])[-3:],

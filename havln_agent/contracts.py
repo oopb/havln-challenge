@@ -22,12 +22,14 @@ def registry(camera, max_actions, pitch_deg=0.):
     for look, available in [('none', max_actions), ('up', max_actions-1), ('down', max_actions-1)]:
         if available < 0 or (look=='up' and pitch_deg+camera.tilt_angle>60) or (look=='down' and pitch_deg-camera.tilt_angle<-60):
             continue
-        turn.append(object_schema(dict(relative_turn_deg=dict(type='number',
+        turn.append(dict(object_schema(dict(relative_turn_deg=dict(type='number',
             minimum=-available*camera.turn_angle, maximum=available*camera.turn_angle,
             enum=[step*camera.turn_angle for step in range(-available,available+1) if step or look!='none'],
-            description='degrees, positive turns left'), look=dict(const=look))))
+            description='degrees, positive turns left'), look=dict(const=look),
+            purpose=dict(enum=['explore','dynamic_recheck']))),
+            required=['relative_turn_deg','look']))
     specs = {
-        'turn_and_observe': ('Execute 1-3 calibrated TURN/LOOK actions, saving every intermediate view; then decide again.', dict(oneOf=turn)),
+        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. After a measured block, duplicate absolute views return NO_NEW_INFORMATION. Optional purpose=dynamic_recheck explicitly requests a rate-limited fresh check of a previously seen direction; historical views never authorize motion.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
@@ -127,7 +129,7 @@ def tool_result_schema():
             'INVALID_TARGET','STALE_TARGET','STALE_OBSERVATION','API_ERROR','API_UNAVAILABLE',
             'TARGET_REACHED','INSUFFICIENT_EVIDENCE','RECORDED','VERIFIED','REJECTED',
             'FINISHED','CANCELLED','LOCALIZED','UNKNOWN','EXECUTED','EXECUTABLE','STOPPED','BUDGET_LIMIT',
-            'INTERRUPTED','TOOL_ERROR','REQUIRES_ATTENTION']),
+            'INTERRUPTED','TOOL_ERROR','REQUIRES_ATTENTION','NO_NEW_INFORMATION']),
         tool=dict(type='string'), tool_call_id=dict(type='string'),
         requested_actions=dict(type='integer',minimum=0), executed_actions=dict(type='integer',minimum=0),
         executed_motion=dict(type='array',items=dict(enum=['STOP','MOVE_FORWARD','TURN_LEFT','TURN_RIGHT','LOOK_UP','LOOK_DOWN'])),

@@ -86,6 +86,19 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
+**Post-obstacle exploration:** A `PARTIAL` waypoint that advanced once and
+then returned `interrupted_status=BLOCKED` now retains its measured
+obstacle evidence at the actual post-action pose. Local camera coverage uses
+absolute heading, pitch, subgoal and odometry epoch to distinguish unvisited
+directions from repeated relative turns. `turn_and_observe` and
+`observe_for_goal` return `NO_NEW_INFORMATION` for redundant camera
+sweeps instead of consuming atomic actions. An intentional
+`turn_and_observe(purpose="dynamic_recheck")` can revisit a potentially
+dynamic obstruction, rate-limited by sector; all motor actions still use fresh
+Depth/body/terrain/human safety. See
+[post-obstacle exploration](docs/post_block_exploration.md).
+
+
 **Compact diagnostics:** Episode tracing now stores one canonical `observations/obs_XXXX.npz`
 per RGB-D frame and references it from `steps.jsonl`, instead of tripling
 the data with `input-NNN.npz` and `post-NNN.npz`. Model requests are logged

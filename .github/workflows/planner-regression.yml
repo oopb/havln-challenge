@@ -15,6 +15,7 @@ on:
       - "tests/test_odometry_gap_navigation.py"
       - "tests/test_motion_consensus.py"
       - "tests/test_compact_diagnostics.py"
+      - "tests/test_local_exploration.py"
       - "scripts/pack_agent_diagnostics.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
@@ -51,3 +52,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
       - name: Check compact diagnostic packaging
         run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
+      - name: Check post-block local exploration and scan deduplication
+        run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
