@@ -72,14 +72,28 @@ class LocalMotionController:
     def next_step_state(geometry):
         return geometry.assess_step()
 
-    def validate(self, runtime, path, resume=False):
+    def validate(self, runtime, path, resume=False, uncertain_straight=False):
         r = runtime
         source, pose = path['source'], self.pose()
         if source['subgoal'] != r.memory.task.current_subgoal_index:
             return dict(status='STALE_TARGET', reason='language_goal_changed')
         if not resume and math.hypot(source['pose']['x']-pose['x'], source['pose']['z']-pose['z']) > self.camera.forward_step/2:
             return dict(status='STALE_TARGET', reason='path_start_position_changed')
-        if relative_pose_error(source['pose'], pose) > .5:
+        relative_error = relative_pose_error(source['pose'], pose)
+        if uncertain_straight:
+            # An UNKNOWN registration breaks global endpoint coordinates, but
+            # not the direction of a short, already accepted straight segment.
+            # Only ToolExecutor's bounded same-waypoint recovery may use this
+            # mode; it never certifies arrival or old landmark geometry.
+            commanded_heading = source['pose']['heading'] + path['angle']
+            if not resume or self.target is None or math.isfinite(relative_error):
+                return dict(status='REQUIRES_ATTENTION',
+                    reason='relative_motion_recovery_not_applicable')
+            if abs(angle_delta(commanded_heading, pose['heading'])) > math.radians(
+                    self.camera.turn_angle) / 2:
+                return dict(status='REQUIRES_ATTENTION',
+                    reason='relative_motion_heading_changed')
+        elif relative_error > .5:
             return self.needs_view('pose_uncertainty_requires_reconfirmation')
         r.refresh()
         if time.monotonic()-r.observation.captured_at > r.config['max_depth_age_seconds']:
@@ -89,7 +103,12 @@ class LocalMotionController:
             source['pose']['x']-math.sin(heading)*path['distance'],
             source['pose']['z']+math.cos(heading)*path['distance'])
         dx, dz = endpoint[0]-pose['x'], endpoint[1]-pose['z']
-        angle, distance = angle_delta(math.atan2(-dx, dz), pose['heading']), math.hypot(dx, dz)
+        if uncertain_straight:
+            # Never interpret old x/z as a reliable distance to the target.
+            # ToolExecutor bounds the number of commanded forward actions.
+            angle, distance = 0., self.camera.forward_step
+        else:
+            angle, distance = angle_delta(math.atan2(-dx, dz), pose['heading']), math.hypot(dx, dz)
         turn_only = abs(angle) > math.radians(self.camera.turn_angle)/2
         geometry = r.geometry()
         # Keep the calibrated body sweep's visibility horizon; only one atomic
@@ -100,6 +119,8 @@ class LocalMotionController:
                       geometry.diagnose(0, self.camera.forward_step))
         next_action = ('TURN_LEFT' if angle > 0 else 'TURN_RIGHT') if turn_only else 'MOVE_FORWARD'
         validation = dict(source=r.source(), geometry=diagnostic,
+            relative_motion_only=uncertain_straight,
+            endpoint_estimate_valid=not uncertain_straight,
             next_atomic_action=next_action,
             validated_forward_bearing_deg=(0 if not turn_only else None),
             requires_post_turn_recheck=turn_only,
