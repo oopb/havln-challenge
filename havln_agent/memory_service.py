@@ -49,7 +49,8 @@ class MemoryService(MemoryRecords):
                     position_uncertainty_m=pose['position_uncertainty'], motion_epoch=pose.get('motion_epoch',0),
                     observation_ids=[], headings_deg=[])
             place=self.places[self.current_place_id]
-            if previous is not None and previous != self.current_place_id:
+            if (previous is not None and previous != self.current_place_id
+                    and self.places[previous]['motion_epoch'] == place['motion_epoch']):
                 moves=[a for a in self.actions[self.place_visit_step:] if a['action']=='MOVE_FORWARD']
                 key=previous+'->'+self.current_place_id
                 self.routes[key]=dict(id=key,from_place=previous,to_place=self.current_place_id,
