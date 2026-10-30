@@ -467,7 +467,13 @@ class ToolExecutor:
 
     def _navigation_feedback(self, path, checked, status, reason=None, **extra):
         endpoint = checked['original_target']
-        remaining = math.hypot(endpoint[0] - self.motion_controller.x, endpoint[1] - self.motion_controller.z)
+        attempt = self.memory.active_attempt
+        uncertain = bool(attempt and attempt.get('unknown_motion_seen'))
+        # The old endpoint's distance is not measurable once an UNKNOWN RGB-D
+        # translation has broken the pose chain. Report None, not false meters.
+        remaining = (None if uncertain else math.hypot(
+            endpoint[0] - self.motion_controller.x,
+            endpoint[1] - self.motion_controller.z))
         reached = status == 'TARGET_REACHED'
         path['execution_status'] = 'IN_PROGRESS' if status == 'PARTIAL' else status
         # The old endpoint is invalid after uncertain translation or a confirmed
@@ -477,17 +483,32 @@ class ToolExecutor:
             self.memory.finish_attempt(status, reason)
             self.motion_controller.target = None
         elif self.memory.active_attempt:
-            attempt = self.memory.active_attempt
             attempt.update(result='IN_PROGRESS' if status == 'PARTIAL' else status, reason=reason)
             if status != 'PARTIAL':
                 attempt['interruptions'].append(dict(status=status, reason=reason,
                                                       observation_id=self.memory.current['observation_id']))
+        if (uncertain and status == 'REQUIRES_ATTENTION'
+                and reason == 'relative_forward_horizon_exhausted_without_verified_pose'):
+            # Current post-action RGB-D is a NEW local anchor only; it does not
+            # recover the old global displacement or certify endpoint arrival.
+            anchor = self.memory.current['observation_id']
+            established = self.motion_controller.anchor_relative_frame(anchor)
+            if 'recovery' in extra:
+                extra['recovery'].update(
+                    local_anchor_observation_id=anchor if established else None,
+                    coordinate_scope='new_local_relative_only',
+                    old_endpoint_valid=False,
+                    requires_new_waypoint=True,
+                    missing_translation_still_unknown=True)
         return dict(status=status, reason=reason, target_reached=reached, displacement_verified=False,
-                    reach_basis='registered_rgbd_translation_estimate',
+                    endpoint_estimate_valid=not uncertain,
+                    reach_basis=('unverified_relative_actions' if uncertain else
+                                 'registered_rgbd_translation_estimate'),
                     original_target=list(endpoint),
                     pending_target=list(self.motion_controller.target) if self.motion_controller.target is not None else None,
                     remaining_distance=remaining,
                     remaining_path=dict(path_id=path['id'], original_endpoint_xz_m=list(endpoint),
+                                        endpoint_estimate_valid=not uncertain,
                                         status=path['execution_status'], completed=reached),
                     executable_segment=self.executable_segment or {},
                     validation=checked.get('validation', {}), **extra)
