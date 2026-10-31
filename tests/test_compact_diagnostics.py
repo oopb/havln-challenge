@@ -117,13 +117,21 @@ class CompactTraceTests(unittest.TestCase):
         (self.trace/'steps.jsonl').write_text(json.dumps(dict(
             step=0,action='MOVE_FORWARD',
             input_file='observations/obs_0003.npz',
-            post_file='observations/obs_0004.npz'))+'\\n')
+            post_file='observations/obs_0004.npz'))+'\n')
         destination=Path(self.temp.name)/'failed-run.zip'
         pack(self.root,destination,frames='critical',interval=100)
         with ZipFile(destination) as z:
             names=set(z.namelist())
         self.assertIn('sample-run/traces/val_seen-1/observations/obs_0003.npz',names)
         self.assertIn('sample-run/traces/val_seen-1/observations/obs_0004.npz',names)
+
+    def test_incomplete_last_jsonl_line_does_not_break_failure_archive(self):
+        original=self.trace/'steps.jsonl'
+        original.write_text(original.read_text()+'{incomplete-record\n')
+        destination=Path(self.temp.name)/'truncated-logs.zip'
+        pack(self.root,destination,frames='critical')
+        with ZipFile(destination) as z:
+            self.assertTrue(any(n.endswith('.npz') for n in z.namelist()))
 
     def test_full_and_no_frames_modes(self):
         full=Path(self.temp.name)/'full.zip'

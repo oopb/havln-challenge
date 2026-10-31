@@ -19,9 +19,19 @@ def read(path, default):
 
 def rows(path):
     try:
-        return [json.loads(s) for s in path.read_text().splitlines() if s.strip()]
+        lines = path.read_text().splitlines()
     except OSError:
         return []
+    records = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            # Partial worker writes can leave truncated JSONL; preserve valid entries.
+            continue
+    return records
 
 
 def select_frames(trace, interval):
