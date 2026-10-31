@@ -62,6 +62,19 @@ class ObservationLoopTests(unittest.TestCase):
         self.assertEqual(summary["measured_collision"]["nearest_collision_point"]["pixel_xy"],[109,140])
         self.assertIn("semantic identity unverified",summary["measured_collision"]["identity_note"])
 
+    def test_terrain_block_reason_and_stair_height_samples_survive_context(self):
+        proof=dict(status='BLOCKED',reason='measured_step_or_drop_exceeds_collision_model',
+            max_step_height_m=.18,initial_height_m=0.,
+            samples=[dict(along_m=.175,height_m=.02,points=40),
+                     dict(along_m=.225,height_m=.28,points=45)])
+        response=dict(status='BLOCKED',reason=proof['reason'],
+            safety=dict(clearance=.25,path_state='FREE',
+                required_forward_step=.25,terrain_evidence=proof))
+        summary=tool_summary(response)['measured_collision']
+        self.assertEqual(summary['terrain']['reason'],proof['reason'])
+        self.assertEqual(summary['terrain']['samples'][-1]['height_m'],.28)
+        self.assertEqual(summary['clearance'],.25)
+
     def test_safety_diagnostic_contains_nearest_measured_depth_pixel(self):
         cam=SimpleNamespace(width=4,height=4,hfov=90,max_depth=5.,
                             forward_step=.25,robot_height=1.5,robot_radius=.1)
