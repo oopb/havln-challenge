@@ -16,6 +16,7 @@ on:
       - "tests/test_motion_consensus.py"
       - "tests/test_compact_diagnostics.py"
       - "tests/test_local_exploration.py"
+      - "tests/test_scheduler_liveness.py"
       - "scripts/pack_agent_diagnostics.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
@@ -54,3 +55,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
       - name: Check post-block local exploration and scan deduplication
         run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
+      - name: Check evidence-state liveness and bounded API decisions
+        run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
