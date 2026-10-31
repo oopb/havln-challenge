@@ -51,7 +51,7 @@ def registry(camera, max_actions, pitch_deg=0.):
                 scope=dict(const='historical'), observation_id=text))])),
         'assess_entry': ('Ask where a stair entry may lie relative to a railing/opening; answer is a hypothesis.',
             object_schema(dict(question=text))),
-        'inspect_geometry': ('Read next-step FREE/UNKNOWN/BLOCKED and missing evidence.', object_schema({})),
+        'inspect_geometry': ('ON-DEMAND full geometry diagnosis after an obstacle, unclear drop or repeated block; normal MOVE uses a fast live depth probe. Inspection provides evidence and does not itself authorize motion.', object_schema({})),
         'get_waypoint_candidates': ('Choose approach_landmark for grounded GOAL_WAYPOINTs, or explore for short geometric EXPLORATION_WAYPOINTs without grounding. Every forward step needs fresh safety checks.',
             dict(object_schema(dict(target=text, purpose=dict(enum=['approach_landmark', 'explore']))), required=[])),
         'navigate_local': ('Execute a returned waypoint ID in up to 3 atomic actions, revalidating fresh RGB-D and people before each forward step.',

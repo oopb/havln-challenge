@@ -29,7 +29,7 @@ def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
                 relevant=not reasons, vertical_motion_verified=False)
 
 
-def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None):
+def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None, probe=False):
     # Only offer directions reachable by the actual discrete TURN action.
     # A 7.5-degree candidate with a 15-degree robot TURN was falsely labelled
     # EXECUTABLE even though its first MOVE_FORWARD could be along 0 degrees.
@@ -42,7 +42,7 @@ def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None):
     candidates = []
     for degrees in angles:
         angle = math.radians(degrees)
-        check = geometry.assess_step(angle)
+        check = geometry.movement_probe(angle) if probe else geometry.assess_step(angle)
         diagnostic = dict(check['depth'],motion_state=check['state'],reason=check['reason'],terrain_support=check['support'])
         # Offer up to two short steps; only the FIRST step is certified here.
         # Every later MOVE_FORWARD must use a newly acquired RGB-D frame.
