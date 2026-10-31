@@ -18,7 +18,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v5-smoke8-local-step'
+PROMPT_VERSION = 'havln-agent-v6-observe-move'
 ROLES = ('task_planner', 'navigation_agent', 'visual_perception')
 
 

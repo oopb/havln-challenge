@@ -257,11 +257,13 @@ class ToolExecutor:
         self.accept_observation(after)
         feedback['observation_after'] = self.memory.current['observation_id']
         if action == 'MOVE_FORWARD':
-            policy = self.motion_policy
+            policy = getattr(self, 'semantic_motion_policy', self.motion_policy)
             direction = motion.get('vertical_motion', 'UNKNOWN')
             expected = {'LEVEL_ONLY': 'LEVEL', 'DESCEND_STAIRS': 'DOWN', 'ASCEND_STAIRS': 'UP','LOCAL_TERRAIN':direction}[policy]
-            feedback['semantic_direction_mismatch']=direction not in ('LEVEL',expected)
+            feedback['semantic_direction_mismatch']=(motion['status']=='ESTIMATED' and
+                direction in ('DOWN','UP') and direction != expected)
             alert_reason=('motion_estimate_unknown' if motion['status']!='ESTIMATED' else
+                'measured_direction_opposes_subgoal' if feedback['semantic_direction_mismatch'] else
                 'measured_vertical_conflicts_with_local_support' if abs(motion['translation_m']['y_up']-
                     (geometry.assess_step()['support'].get('end_height_m',0)-geometry.assess_step()['support'].get('initial_height_m',0)))
                     >self.camera.max_step_height+motion.get('uncertainty_m',0) else None)

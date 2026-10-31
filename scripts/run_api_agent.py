@@ -1,4 +1,4 @@
-"""Run the observation-only API Agent using the released HA-VLN image."""
+"""Run the OBSERVE/MOVE API Agent using the released HA-VLN image."""
 from pathlib import Path
 import sys
 
