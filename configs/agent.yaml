@@ -38,6 +38,10 @@ visual_perception:
 runtime:
   max_steps: 500
   api_budget: 2500  # Total physical HTTP attempts, including retries, per episode.
+  # Separate inference safety guards: no cap on a continuous safe MOVE sequence.
+  # Changed RGB-D, executed actions, or verified subgoals reset evidence liveness.
+  max_unchanged_evidence_decisions: 8  # One explicit route review, then 8 more chances.
+  # Optional: max_model_decisions: 300. Default is 2 * effective max_steps.
   waypoint_distance: 1.25
   safety_margin: 0.05  # 5 cm beyond the actual 10 cm radius; saved smoke-8 sweep regression.
   tool_max_actions: 3  # Short batches of 1-3 actions; every forward step rechecks current RGB-D.

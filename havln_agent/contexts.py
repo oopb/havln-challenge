@@ -21,14 +21,19 @@ def collision_summary(result):
         depth=result['geometry'].get('front') or {}
     if not depth:return None
     people=depth.get('human_occupancy') or depth.get('human_evidence') or {}
-    terrain=safety.get('terrain_support') or depth.get('terrain_support') or {}
+    terrain=safety.get('terrain_evidence') or safety.get('terrain_support') or depth.get('terrain_support') or {}
     if not isinstance(terrain,dict):terrain=dict(status=str(terrain))
     values=fields(depth,('path_state','clearance','required_forward_step',
         'nearest_obstacle_distance','nearest_collision_travel','rejection_reasons',
         'unknown_sweep_pixels','collision_points','nearest_collision_point'))
     values['people']=fields(people,('confirmed','uncertain','unlocalized',
         'corridor_points','nearest_distance'))
-    values['terrain']=fields(terrain,('status','reason','direction'))
+    values['terrain']=fields(terrain,('status','reason','direction',
+        'initial_height_m','end_height_m','max_step_height_m'))
+    if terrain.get('samples'):
+        values['terrain']['samples']=[
+            fields(v,('along_m','height_m','height_spread_m','points','required_half_width_m'))
+            for v in terrain['samples'][-8:]]
     if values.get('path_state')=='OCCUPIED' and not values['people'].get('corridor_points'):
         values['identity_note']='measured_depth_obstacle; semantic identity unverified; do not assume human'
     return values
@@ -219,4 +224,9 @@ def navigation_context(runtime):
             candidate=recent_search.get('candidate'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
+    liveness=getattr(runtime,'navigation_liveness',None) or {}
+    if liveness.get('consecutive_unchanged_decisions',0)>=2:
+        result['decision_liveness']=fields(liveness,(
+            'consecutive_unchanged_decisions',
+            'max_unchanged_evidence_decisions','review_requested','reason'))
     return result
