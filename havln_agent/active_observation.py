@@ -200,7 +200,8 @@ class ObservationController:
                 origin = 'vlm_current_frame'
             # Current RGB-D is a *measurement*; VLM box/identity is a hypothesis.
             # Diagnostic geometry does not grant forward authorization.
-            check = r.geometry().movement_probe()
+            from .safety import forward_probe
+            check = forward_probe(r.geometry())
             point = dict(observation_id=source['observation_id'],
                 heading_deg=round(math.degrees(source['pose']['heading']),2),
                 pitch_deg=r.pitch_deg, new_static_information=bool(

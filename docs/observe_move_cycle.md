@@ -56,3 +56,22 @@ RGB-D frames; cache and worker task configuration files are omitted.
 before any trace directory exists cannot produce a useful archive.
 
 Audit follow-up: waypoint summaries preserve goal-distance and direction alignment; successful and failed entrypoint runs are covered by tests; startup worker logs are archived even without an episode trace. Architecture IDs match in episode summaries and runtime state.
+
+
+## On-demand geometry diagnostics (post-audit)
+
+During ordinary OBSERVE/MOVE operation the robot performs a fast **live
+RGB-D body-depth collision probe** for the next 0.25 m (or turn-aligned
+short waypoint). It no longer requires fitting stair support planes as a
+precondition to each short forward action or each waypoint query. This avoids
+the failure in `tool_0026`: plain depth was FREE and tread support SUPPORTED,
+but the separate terrain-masked body sweep classified the path BLOCKED.
+
+The probe still returns BLOCKED for measured near-body occupancy and NEEDS_VIEW
+for insufficient depth or unknown human localization. These reports end MOVE
+and return to NavigationAgent. The agent decides when to call
+`inspect_geometry`, which preserves the full terrain/step-height analysis as
+ON-DEMAND diagnostics, not an automatic motion veto. RGB-D translation
+estimation and post-step landing evidence remain available for subgoal
+verification. A probe saying FREE is not proof of safe stair traversal or
+task completion; actual Habitat outcome must be checked in smoke tests.
