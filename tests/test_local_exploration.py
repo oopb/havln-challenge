@@ -177,10 +177,12 @@ class ExplorationTests(unittest.TestCase):
         runtime.visual_perception.search_view.assert_not_called()
         runtime._step.assert_not_called()
 
-    def test_explicit_dynamic_recheck_is_throttled(self):
+    def test_explicit_dynamic_recheck_is_model_directed_not_throttled(self):
         runtime=self.agent()
         values=iter([dict(observation_id='dynamic1',new_visual_information=False),
-                     dict(observation_id='dynamic2',new_visual_information=False)])
+                     dict(observation_id='dynamic2',new_visual_information=False),
+                     dict(observation_id='dynamic3',new_visual_information=False),
+                     dict(observation_id='dynamic4',new_visual_information=False)])
         runtime.motion_controller.pose=lambda:pose(
             math.degrees(runtime.motion_controller.heading))
         def execute_turn(action):
@@ -188,7 +190,7 @@ class ExplorationTests(unittest.TestCase):
             runtime.memory.current=next(values)
             return dict(status='EXECUTED')
         runtime._step=Mock(side_effect=execute_turn)
-        # Memory event() stores the rate-limiting receipt at the actual endpoint.
+        # The event logs revisits without imposing a wall-clock lockout.
         runtime.memory.event=lambda kind,**kw:runtime.memory.events.append(dict(event=kind,**kw))
         first=runtime._turn_and_observe(-30,'none',purpose='dynamic_recheck')
         self.assertEqual(first['status'],'NO_NEW_INFORMATION') # no new static view
@@ -198,7 +200,8 @@ class ExplorationTests(unittest.TestCase):
         runtime._step.reset_mock()
         second=runtime._turn_and_observe(-30,'none',purpose='dynamic_recheck')
         self.assertEqual(second['status'],'NO_NEW_INFORMATION')
-        runtime._step.assert_not_called()
+        self.assertEqual(runtime._step.call_count,2)
+        self.assertEqual(runtime.memory.current['observation_id'],'dynamic4')
 
 
 if __name__=='__main__':
