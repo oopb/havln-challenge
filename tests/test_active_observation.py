@@ -244,8 +244,10 @@ class ActiveObservationTests(unittest.TestCase):
         Draft7Validator(spec['parameters']).validate(proper)
         self.assertFalse(Draft7Validator(spec['parameters']).is_valid(dict(
             proper,sweep_degrees=360)))
-        self.assertFalse(Draft7Validator(spec['parameters']).is_valid(dict(
+        self.assertTrue(Draft7Validator(spec['parameters']).is_valid(dict(
             proper,target_types=['person'])))
+        self.assertFalse(Draft7Validator(spec['parameters']).is_valid(dict(
+            proper,target_types=[''])))
 
 
 if __name__=='__main__':

@@ -107,3 +107,28 @@ has no information value. New views after translation remain available.
 ## Model-controlled movement decisions
 
 NavigationAgent chooses among short candidates using task, visual evidence, observed depth and history. PARTIAL landmark grounding, missing entry localization, and target-distance/direction compatibility no longer veto otherwise executable local candidates. Both goal-associated and unassociated short paths are offered, with evidence and uncertainty, and the model decides whether to try a direction. The physical controller still refuses measured collision, incomplete depth, or human occupancy, and the independent verifier still checks task completion. Estimated motion that opposes task direction is logged as evidence, not an automatic forced change of plan.
+
+
+## Model-control runtime v2
+
+**Strategy authority**: NavigationAgent can issue `navigate_relative(turn_deg,
+distance_m, max_atomic_steps)`, using calibrated turn increments and 0.25m
+step multiples (0.25 to 3m). It can alternatively issue
+`navigate_to_pixel(u,v,distance_m,max_atomic_steps)` for a current RGB-D
+pixel bearing. A pixel supplies only a bearing hypothesis, not permission
+to navigate to the pixel's physical surface. The executor creates a
+resumable local waypoint ID and rechecks fresh depth/human occupancy
+before each atomic forward action. A TURN outside the present field of
+view is validated anew after the rotation, never using old clearance.
+
+**Observation authority**: `observe_for_goal` supports task-specific free
+text target names and can run with a pending waypoint; the original
+waypoint remains pending but is not pre-authorized when it resumes.
+`force_recheck=true` or `turn_and_observe(purpose="intentional_recheck")`
+allows deliberate revisiting with a fresh sensor read. Historical semantic
+results remain historical, not real-time motion permission.
+
+**Liveness**: unchanged-evidence thresholds generate a single advisory
+event; they do not unilaterally initiate task review or STOP. Hard
+action/model/API resource budgets still apply. Independent task completion
+verification, valid action checks, and human/depth guards remain intact.
