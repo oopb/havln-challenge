@@ -75,3 +75,15 @@ ON-DEMAND diagnostics, not an automatic motion veto. RGB-D translation
 estimation and post-step landing evidence remain available for subgoal
 verification. A probe saying FREE is not proof of safe stair traversal or
 task completion; actual Habitat outcome must be checked in smoke tests.
+
+## Fast-probe audit follow-up
+
+The final MOVE_FORWARD executor now runs **one** live depth body-sweep (not two).
+For stair subgoals the non-blocking landing-support analysis runs only when a
+registered forward translation is **LEVEL**, because this is the event the
+completion verifier requires as landing evidence; it does not automatically
+run for every DOWN/UP/UNKNOWN motion. Full terrain inspection is still
+available with inspect_geometry and VLM-grounding/landing-evidence tools.
+Unknown-depth or occupied fast probes stop MOVE and return the evidence for
+NavigationAgent to decide whether deeper inspection is useful. Real Geometry
+and ToolExecutor integration regressions cover these paths.

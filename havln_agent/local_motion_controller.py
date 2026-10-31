@@ -81,10 +81,6 @@ class LocalMotionController:
         return 'MOVE_FORWARD'
 
     @staticmethod
-    def support(geometry):
-        return geometry.assess_step()['support']
-
-    @staticmethod
     def needs_view(reason, **extra):
         suggestion = ('analyze_scene_for_current_people' if 'human' in reason else
                       'ground_a_visible_local_target_again' if 'objective' in reason or 'pose_uncertainty' in reason else

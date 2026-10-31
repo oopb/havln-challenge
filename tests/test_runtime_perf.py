@@ -97,7 +97,7 @@ class RuntimePerformanceTests(unittest.TestCase):
         result = executor._step("MOVE_FORWARD")
         self.assertEqual(result["status"], "BLOCKED")
         self.assertEqual(result["reason"], "occupied_next_step")
-        self.assertTrue(geometry.assess_step.called)
+        geometry.assess_step.assert_called_once_with()
         executor.step_callback.assert_not_called()
 
     def test_inflight_api_marker_reports_phase_without_credentials(self):

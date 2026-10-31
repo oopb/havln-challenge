@@ -455,7 +455,7 @@ class AgentRuntime(ToolExecutor):
                         goal_status='EXPLORATION_ONLY',
                         objective=dict(purpose='explore',goal='obtain a better view for the current subgoal',
                             completes_language_goal=False),
-                        execution_requirements=['current_rgbd','live_human_safety','next_step_floor_support'])
+                        execution_requirements=['current_rgbd','live_human_safety','next_step_depth_collision_probe'])
             else:
                 live_ids={g['grounding_id'] for g in self.memory.groundings
                     if g['source'].get('image_scope','current')=='current'
@@ -500,7 +500,7 @@ class AgentRuntime(ToolExecutor):
                     absolute_heading_deg=absolute,
                     reason=d.get('reason'),
                     rejection_reasons=d.get('rejection_reasons',[]),
-                    required_next='turn_and_observe_then_inspect_geometry',
+                    required_next='turn_and_observe_then_retry_live_depth_probe',
                     route_authorized=False)
                 if previous:
                     entry.update(previous_observation_id=previous['observation_id'],
