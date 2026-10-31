@@ -154,10 +154,12 @@ class LocalMotionController:
         if not turn_only:
             check = self.next_step_state(geometry)
             if check['state'] == 'BLOCKED':
-                return dict(status='BLOCKED', reason=check['reason'], safety=diagnostic,
+                return dict(status='BLOCKED', reason=check['reason'],
+                    safety=dict(diagnostic,terrain_evidence=check['support']),
                     validation=validation, original_target=list(endpoint))
             if check['state'] == 'NEEDS_VIEW':
-                return self.needs_view(check['reason'], safety=diagnostic,
+                return self.needs_view(check['reason'],
+                    safety=dict(diagnostic,terrain_evidence=check['support']),
                     validation=validation, original_target=list(endpoint))
         segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
         segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],
