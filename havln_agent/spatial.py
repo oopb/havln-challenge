@@ -43,10 +43,9 @@ def relative_goal(grounding, pose):
     point, source = grounding['position'], grounding['source']['pose']
     region = 'target_point'
     entry = grounding.get('entry', {})
-    if grounding['semantic']['stair_direction'] in ('up', 'down') and entry.get('status') == 'LOCALIZED' \
-            and (point['status'] != 'LOCALIZED' or entry.get('depth_spread_metres', 99) <
-                 point.get('depth_spread_metres', 99)):
-        point, region = entry, 'stair_entry'
+    # Do not replace the model-visible target with a category-specific
+    # entry point. Entry and other image regions are independent evidence
+    # hypotheses the model may select through direct motion tools.
     if point['status'] != 'LOCALIZED':
         return dict(status='UNKNOWN', requires_reconfirmation=True, reasons=['unlocalized_goal'])
     h = source['heading']

@@ -14,8 +14,7 @@ from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose)
 
 
-TARGET_TYPES = ('stairs_down', 'stair_entry', 'walkable_approach', 'corridor',
-                'door', 'goal_landmark')
+# Open-vocabulary target names come from the model's explicit observation goal.
 
 
 def meaningful_candidate(result, targets):
@@ -65,16 +64,14 @@ class ObservationController:
         return None
 
     def scan(self, objective, target_types, direction, sweep_degrees,
-             checkpoint_degrees=30, look='none'):
+             checkpoint_degrees=30, look='none', force_recheck=False):
         r = self.runtime
-        # A large scan while a local path is in progress can undo its heading
-        # alignment. Require a separate, explicit route cancellation first.
-        if r.motion_controller.target is not None:
-            return dict(status='INVALID_ARGUMENTS',
-                reason='active_local_navigation_requires_explicit_cancel_before_scan',
-                suggestion='continue_navigate_local_or_cancel_local_navigation_first')
-        if not target_types or any(t not in TARGET_TYPES for t in target_types):
-            return dict(status='INVALID_ARGUMENTS', reason='unsupported_static_visual_target')
+        # The agent may pause any local route for observation. The relative
+        # goal remains pending and is revalidated after the scan; it is never
+        # treated as pre-authorized movement from the previous heading.
+        if (not target_types or any(not isinstance(t,str) or not t.strip() or
+                len(t)>80 for t in target_types)):
+            return dict(status='INVALID_ARGUMENTS', reason='invalid_visual_target_description')
         turn = r.camera.turn_angle
         total = round(sweep_degrees / turn)
         interval = round(checkpoint_degrees / turn)
@@ -90,7 +87,7 @@ class ObservationController:
 
         start = r.motion_controller.pose()
         start_view=r.memory.current
-        if last_block(r.memory,start):
+        if last_block(r.memory,start) and not force_recheck:
             look_pitch = (start['pitch_deg'] + (
                 r.camera.tilt_angle if look=='up' else -r.camera.tilt_angle)
                 if look!='none' else start['pitch_deg'])
@@ -116,7 +113,7 @@ class ObservationController:
         # Exact duplicate observation task from the same pose and frame is
         # idempotent. No repeated TURN sweep for a previously covered static
         # sector. This expires quickly and never authorizes live human safety.
-        for previous in reversed(r.memory.observation_searches):
+        for previous in ([] if force_recheck else reversed(r.memory.observation_searches)):
             if (previous['outcome'] not in (
                     'SEARCH_REGION_COVERED_NO_MATCH','TARGET_CANDIDATE_FOUND')
                     or previous.get('subgoal')!=r.memory.task.current_subgoal_index
@@ -173,6 +170,7 @@ class ObservationController:
                 revisited_view_ids=[p['observation_id'] for p in record['checkpoints']
                     if not p.get('new_static_information')],
                 next_step='navigation_agent_review_evidence_not_motion_authorization',
+                paused_waypoint_preserved=bool(r.motion_controller.target is not None),
                 usable_for_live_safety=False)
             r.event('observation_task_finished', source='observation_controller',
                 outcome=outcome, covered_turn_deg=record['covered_turn_deg'],

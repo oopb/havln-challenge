@@ -16,8 +16,7 @@ ENTRY_SCHEMA=object_schema(dict(stairs=dict(enum=['visible','possible','unknown'
 # the robot moves. A visible box is mandatory for an actionable candidate.
 SEARCH_SCHEMA = object_schema(dict(
     target_visible=dict(type='boolean'),
-    target_type=dict(enum=['stairs_down','stair_entry','walkable_approach',
-        'corridor','door','goal_landmark','none']),
+    target_type=dict(type='string',minLength=1,maxLength=80),
     confidence=dict(enum=['low','medium','high']),
     box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
@@ -83,9 +82,9 @@ class VisualPerception:
             'with target_visible=true, matching target_type, medium/high confidence, '
             'specific concise evidence, and its visible-part image box. '
             'If none is visibly localized use target_visible=false and target_type=none; '
-            'do not hallucinate obscured stair entries, corridors or safe paths. '
-            'A rail alone is not a stair entry; down stairs requires visible downward '
-            'structure, or report uncertainty. If evidence is ambiguous, '
+            'do not hallucinate an obscured target or infer a safe path. '
+            'Use the requested open-vocabulary target name exactly, or none. '
+            'If evidence is ambiguous, '
             'suggested_next_view can ask for ONE look_up/look_down refinement; '
             'otherwise return continue. Do not infer metric distance, current human '
             'occupancy, physical reachability, movement safety or task completion. '

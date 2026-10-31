@@ -81,6 +81,9 @@ def tool_summary(result):
             interpretation='observation_only_not_motion_permission')
     if 'assessment' in result:value['assessment']=result['assessment']
     if 'memory' in result:value['memory']=result['memory']
+    if 'waypoint_id' in result:value['waypoint_id']=result['waypoint_id']
+    if 'requested_motion' in result:value['requested_motion']=result['requested_motion']
+    if 'pixel_target' in result:value['pixel_target']=result['pixel_target']
     if 'geometry' in result:
         value['geometry']=fields(result['geometry']['front'],('motion_state','depth_state','clearance',
             'rejection_reasons','terrain_support','human_evidence'))
@@ -168,6 +171,9 @@ def navigation_context(runtime):
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
+        action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
+            forward_step_m=getattr(runtime.camera,'forward_step',None),
+            direct_segment_max_m=3.0),
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
@@ -210,6 +216,7 @@ def navigation_context(runtime):
     if recent:
         result['candidate_waypoints']=recent
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
+    result['motion_tools_note']='navigate_relative and navigate_to_pixel do not require a pre-generated waypoint; all forward actions use live collision probes'
     if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
         target=runtime.motion_controller.target
         attempt=memory.active_attempt or {}

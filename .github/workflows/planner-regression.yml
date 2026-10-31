@@ -21,6 +21,9 @@ on:
       - "tests/test_fast_probe_runtime.py"
       - "tests/test_observation_efficiency.py"
       - "tests/test_model_driven_direction.py"
+      - "tests/test_model_control_runtime.py"
+      - "tests/test_progress_alternative_evidence.py"
+      - "tests/test_progress_full_transition.py"
       - "havln_agent/export.py"
       - "tests/test_local_exploration.py"
       - "tests/test_scheduler_liveness.py"
@@ -39,6 +42,8 @@ jobs:
           python-version: "3.10"
       - name: Install lightweight runtime dependencies
         run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
+      - name: Compile runtime modules
+        run: python -m compileall -q havln_agent
       - name: Run planner contract regression
         run: python -m unittest discover -s tests -p 'test_task_planner_contract.py' -v
       - name: Run runtime performance regression
@@ -73,6 +78,12 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_observation_efficiency.py' -v
       - name: Check model-directed motion with partial landmark evidence
         run: python -m unittest discover -s tests -p 'test_model_driven_direction.py' -v
+      - name: Check model-control runtime, pixel directions, and calibration
+        run: python -m unittest discover -s tests -p 'test_model_control_runtime.py' -v
+      - name: Check independent stair transition proof alternatives
+        run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
+      - name: Check full registered-motion transition with partial entry
+        run: python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
       - name: Check post-block local exploration and scan deduplication
         run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
       - name: Check evidence-state liveness and bounded API decisions

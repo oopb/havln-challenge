@@ -94,7 +94,8 @@ def ground_layers(result, geometry, position, entry):
     if stairs and entry['status'] == 'LOCALIZED':
         height = entry.get('y_up', 0) + geometry.camera.camera_height
         if abs(height) > 0.25:
-            entry = dict(entry, point_status='LOCALIZED', status='UNKNOWN',
+            entry = dict(entry, measured_image_point=dict(entry),
+                         point_status='LOCALIZED', status='UNKNOWN',
                          reason='entry_region_not_at_standing_floor_height')
     if stairs:
         entry = dict(entry, floor_support=entry_floor)
@@ -186,15 +187,20 @@ def project_grounding(result,geometry,target,source):
         else dict(status='UNKNOWN', reason='target_not_visible')
     )
     if result['confidence'] == 'low':
-        position = dict(status='UNKNOWN', reason='semantic_localization_uncertain')
+        position = (dict(position,status='PARTIAL',
+                    reason='low_semantic_confidence_not_metric_permission')
+                    if position['status'] == 'LOCALIZED' else position)
     entry = (project_box(geometry, result['entry_box']) if result['target_visible'] and
              result.get('entry_visible', result['entry_box'] is not None) else
              dict(status='UNKNOWN', reason='target_entry_not_visible'))
     landing = (landing_support(geometry, result['landing_box']) if result.get('landing_box') else
                dict(status='UNKNOWN', reason='landing_region_not_observed', terrain_certified=False))
     if result['confidence'] == 'low':
-        entry = dict(status='UNKNOWN', reason='semantic_localization_uncertain')
-        landing = dict(status='UNKNOWN', reason='semantic_localization_uncertain', terrain_certified=False)
+        entry = (dict(entry,status='PARTIAL',
+                reason='low_semantic_confidence_not_metric_permission')
+                if entry['status'] == 'LOCALIZED' else entry)
+        landing = dict(status='UNKNOWN', reason='semantic_localization_uncertain',
+                       terrain_certified=False)
     layers = ground_layers(result, geometry, position, entry)
     entry = layers.pop('entry')
     return dict(

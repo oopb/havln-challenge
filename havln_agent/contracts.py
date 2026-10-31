@@ -26,23 +26,23 @@ def registry(camera, max_actions, pitch_deg=0.):
             minimum=-available*camera.turn_angle, maximum=available*camera.turn_angle,
             enum=[step*camera.turn_angle for step in range(-available,available+1) if step or look!='none'],
             description='degrees, positive turns left'), look=dict(const=look),
-            purpose=dict(enum=['explore','dynamic_recheck']))),
+            purpose=dict(enum=['explore','dynamic_recheck','intentional_recheck']))),
             required=['relative_turn_deg','look']))
     specs = {
-        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. After a measured block, duplicate absolute views return NO_NEW_INFORMATION. Optional purpose=dynamic_recheck explicitly requests a rate-limited fresh check of a previously seen direction; historical views never authorize motion.', dict(oneOf=turn)),
+        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. Duplicates are reported; purpose=intentional_recheck explicitly allows re-observation. Prior views never authorize current motion.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
-        'observe_for_goal': ('Bounded active visual subtask: sweep 30-120 degrees in one direction with calibrated TURN actions, query VLM only at 30/45-degree checkpoints, stop early on a localized visual target and return evidence. Never moves forward. Requires cancelling an active local route first.',
+        'observe_for_goal': ('Bounded active observation with OPEN-VOCABULARY target types, optional force_recheck and paused-waypoint preservation. Never moves forward and does not implicitly cancel a pending route.',
             dict(object_schema(dict(
                 objective=dict(TEXT,minLength=1),
                 target_types=dict(type='array',minItems=1,maxItems=3,uniqueItems=True,
-                    items=dict(enum=['stairs_down','stair_entry','walkable_approach',
-                        'corridor','door','goal_landmark'])),
+                    items=dict(type='string',minLength=1,maxLength=80)),
                 direction=dict(enum=['left','right']),
                 sweep_degrees=dict(enum=[30,60,90,120]),
                 checkpoint_degrees=dict(enum=[30,45]),
-                look=dict(enum=['none','up','down']))),
+                look=dict(enum=['none','up','down']),
+                force_recheck=dict(type='boolean'))),
                 required=['objective','target_types','direction','sweep_degrees'])),
         'compare_views': ('Compare current and/or saved RGB keyframes for one question. Historical views never authorize motion.',
             object_schema(dict(observation_ids=ids, question=text))),
@@ -52,9 +52,18 @@ def registry(camera, max_actions, pitch_deg=0.):
         'assess_entry': ('Ask where a stair entry may lie relative to a railing/opening; answer is a hypothesis.',
             object_schema(dict(question=text))),
         'inspect_geometry': ('ON-DEMAND full geometry diagnosis after an obstacle, unclear drop or repeated block; normal MOVE uses a fast live depth probe. Inspection provides evidence and does not itself authorize motion.', object_schema({})),
-        'get_waypoint_candidates': ('Choose approach_landmark for grounded GOAL_WAYPOINTs, or explore for short geometric EXPLORATION_WAYPOINTs without grounding. Every forward step needs fresh safety checks.',
+        'get_waypoint_candidates': ('Optional short candidate bearings with current-depth evidence; not mandatory before navigate_relative or navigate_to_pixel. Every forward step gets fresh safety checks.',
             dict(object_schema(dict(target=text, purpose=dict(enum=['approach_landmark', 'explore']))), required=[])),
-        'navigate_local': ('Execute a returned waypoint ID in up to 3 atomic actions, revalidating fresh RGB-D and people before each forward step.',
+        'navigate_relative': ('Model-directed movement: select a relative bearing and desired segment length directly, without an approved semantic waypoint. Executor quantizes angles/distances to calibrated Habitat TURN/FORWARD increments and reports the result. Executes a short atomic batch, rechecks live collision before each forward step, and returns a resumable waypoint_id. Use navigate_local with that ID to continue.',
+            object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
+                distance_m=dict(type='number',minimum=0.25,maximum=3.0),
+                max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
+        'navigate_to_pixel': ('Model-directed visual bearing: select normalized target image pixel and intended short travel distance. Uses live RGB-D for a bearing hypothesis; the pixel is NOT certified walkable floor. Live collision checks still apply, returning a resumable waypoint_id.',
+            object_schema(dict(u=dict(type='number',minimum=0,maximum=1),
+                v=dict(type='number',minimum=0,maximum=1),
+                distance_m=dict(type='number',minimum=0.25,maximum=3.0),
+                max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
+        'navigate_local': ('Execute or resume a returned waypoint ID in up to 3 atomic actions, revalidating fresh RGB-D and people before each forward step.',
             object_schema(dict(waypoint_id=text, max_atomic_steps=dict(type='integer', minimum=1, maximum=max_actions)))),
         'cancel_local_navigation': ('Cancel a pending local waypoint without changing the semantic task.', object_schema(dict(reason=text))),
         'recall_observation': ('Retrieve up to four short keyframe summaries by place, heading or landmark.',
@@ -72,7 +81,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','observe_for_goal') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 

@@ -203,9 +203,9 @@ class AgentRuntime(ToolExecutor):
                 return dict(status='STALE_TARGET', reason='decision_pose_changed')
             # New sensor data invalidates geometry authorization, not the semantic
             # intent. Motion tools independently recheck current Depth per step.
-        moving = call['tool'] == 'navigate_local'
+        moving = call['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
         if moving:
-            self.set_navigation_mode('MOVE', 'local_waypoint_selected',
+            self.set_navigation_mode('MOVE', 'model_selected_motion',
                                      waypoint_id=call['args'].get('waypoint_id'))
         self.phase = 'EXECUTE'
         self._authorized_action = True
@@ -261,9 +261,10 @@ class AgentRuntime(ToolExecutor):
             return self.motion_controller.needs_view('human_localization_unverified')
 
     def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
-                          checkpoint_degrees=30, look='none'):
+                          checkpoint_degrees=30, look='none', force_recheck=False):
         return self.observation_controller.scan(
-            objective, target_types, direction, sweep_degrees, checkpoint_degrees, look)
+            objective, target_types, direction, sweep_degrees, checkpoint_degrees,
+            look, force_recheck=force_recheck)
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
@@ -300,9 +301,8 @@ class AgentRuntime(ToolExecutor):
                     for d in (previous or {}).get('directions',[]))
                 dynamic_allowed=False
                 if purpose=='dynamic_recheck':
-                    # Dynamic obstacles may genuinely move. Permit an explicit
-                    # revisit, but throttle equivalent sectors using wall time
-                    # instead of blindly replaying every LLM request.
+                    # Explicit model-directed dynamic rechecks should not be
+                    # blocked by a fixed wall-clock timer.
                     target_heading=endpoint.get('heading_deg',0)
                     target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
                     now=time.monotonic()
@@ -311,10 +311,8 @@ class AgentRuntime(ToolExecutor):
                         and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
                         and abs(e.get('target_pitch_deg',0)-target_pitch)<1
                         and same_stance(e.get('pose'),self.motion_controller.pose())]
-                    dynamic_allowed=(not previous_checks
-                        or now-previous_checks[-1].get('time_monotonic',now)<0
-                        or now-previous_checks[-1].get('time_monotonic',now)>=60)
-                if not previously_free and not dynamic_allowed:
+                    dynamic_allowed=True
+                if not previously_free and not dynamic_allowed and purpose != 'intentional_recheck':
                     return dict(status='NO_NEW_INFORMATION',
                         reason='repeated_camera_sector_after_measured_block',
                         no_new_information_reason='all_requested_absolute_views_already_recorded',
@@ -551,6 +549,80 @@ class AgentRuntime(ToolExecutor):
 
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
+
+    def _navigate_relative(self, turn_deg, distance_m, max_atomic_steps):
+        """Direct model intent, without a preselected semantic candidate.
+
+        The bearing is relative to the current heading, not a global pose or
+        semantic permission. A TURN is always legal as a physical rotation;
+        each subsequent MOVE independently validates fresh RGB-D.
+        """
+        if (not math.isfinite(turn_deg) or not math.isfinite(distance_m)
+                or abs(turn_deg) > 180 or not 0.25 <= distance_m <= 3.0):
+            return dict(status='INVALID_ARGUMENTS', reason='relative_motion_out_of_bounds')
+        stride = self.camera.turn_angle
+        step = self.camera.forward_step
+        # Models express motion intent in continuous units; the executor
+        # quantizes to the supported Habitat actuator increments and reports
+        # what was actually requested of the simulator.
+        actual_turn = round(turn_deg / stride) * stride
+        actual_distance = max(1, round(distance_m / step)) * step
+        actual_distance = min(actual_distance, math.floor(3.0 / step) * step)
+        self.refresh()
+        source = self.source()
+        angle = math.radians(actual_turn)
+        heading = source['pose']['heading'] + angle
+        path_id = 'direct_%04d' % len(self.memory.tool_ledger)
+        path = dict(id=path_id, type='EXPLORATION_WAYPOINT', angle=angle,
+            distance=actual_distance, source=source, goal_association=[],
+            first_step='EXECUTABLE', execution_status='PROPOSED',
+            objective=dict(purpose='model_directed_motion', completes_language_goal=False),
+            direction_source='navigation_agent',
+            requires_post_turn_recheck=bool(actual_turn),
+            geometric_status='NOT_YET_VALIDATED',
+            endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
+                           source['pose']['z'] + math.cos(heading)*actual_distance])
+        # No invented collision permission: _execute_waypoint + _step will run
+        # current live checks at the actual heading immediately before motion.
+        self.paths[path_id] = path
+        result = self._navigate_local(path_id, max_atomic_steps)
+        return dict(result, waypoint_id=path_id,
+                    requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
+                        quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
+                        authorization='live_per_atomic_action_only'))
+
+    def _navigate_to_pixel(self, u, v, distance_m, max_atomic_steps):
+        """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
+        if not (math.isfinite(u) and math.isfinite(v) and
+                0 <= u <= 1 and 0 <= v <= 1):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_normalized_pixel')
+        self.refresh()
+        geometry = self.geometry()
+        x = min(self.camera.width-1, max(0, round(u*(self.camera.width-1))))
+        y = min(self.camera.height-1, max(0, round(v*(self.camera.height-1))))
+        import numpy as np
+        y0,y1=max(0,y-2),min(self.camera.height,y+3)
+        x0,x1=max(0,x-2),min(self.camera.width,x+3)
+        valid = geometry.valid[y0:y1,x0:x1]
+        if int(valid.sum()) < 5:
+            return dict(status='NEEDS_VIEW',reason='pixel_target_depth_unmeasured',
+                        pixel=dict(u=u,v=v),missing_evidence=['valid_local_depth'])
+        xs = geometry.x[y0:y1,x0:x1][valid]
+        zs = geometry.z[y0:y1,x0:x1][valid]
+        x_m,z_m=float(np.median(xs)),float(np.median(zs))
+        if z_m <= 0:
+            return dict(status='NEEDS_VIEW',reason='pixel_target_not_forward_projectable',
+                        pixel=dict(u=u,v=v))
+        measured_bearing = math.degrees(math.atan2(-x_m,z_m))
+        turn_deg = round(measured_bearing/self.camera.turn_angle)*self.camera.turn_angle
+        if abs(turn_deg) > 180:
+            return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
+        result = self._navigate_relative(turn_deg,distance_m,max_atomic_steps)
+        return dict(result, pixel_target=dict(u=u,v=v,
+            measured_depth_m=round(float(np.median(geometry.depth[y0:y1,x0:x1][valid])),3),
+            measured_bearing_deg=round(measured_bearing,2),
+            selected_turn_deg=turn_deg,
+            interpretation='direction_hint_only_pixel_not_walkability_certificate'))
 
     def _navigate_local(self, waypoint_id, max_atomic_steps):
         path = self.paths.get(waypoint_id)
