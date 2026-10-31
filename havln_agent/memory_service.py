@@ -137,6 +137,52 @@ class MemoryService(MemoryRecords):
                     registered_action(self.actions[i],observations) for i in steps):
                 route.update(state='TRAVERSED',evidence_state='motion_verified')
 
+    def navigation_summary(self):
+        """Short motion and failure history; never a certificate of task completion."""
+        goal_index = self.task.current_subgoal_index
+        policy = getattr(self.runtime, 'semantic_motion_policy',
+                         getattr(self.runtime, 'motion_policy', 'LEVEL_ONLY'))
+        motions = []
+        for action in self.actions:
+            if action.get('subgoal') != goal_index or action.get('action') != 'MOVE_FORWARD':
+                continue
+            feedback = action.get('result') or {}
+            motion = feedback.get('rgbd_motion') or {}
+            estimated = motion.get('status') == 'ESTIMATED'
+            displacement = motion.get('translation_m') or {}
+            motions.append(dict(
+                step=action['step'],
+                observation_id=feedback.get('observation_after'),
+                heading_deg=round(math.degrees(action['pose']['heading']), 1),
+                vertical_motion=motion.get('vertical_motion', 'UNKNOWN') if estimated else 'UNKNOWN',
+                vertical_change_m_est=round(displacement.get('y_up', 0), 3) if estimated else None,
+                uncertainty_m=round(motion.get('uncertainty_m', 0), 3) if estimated else None,
+                semantic_direction_mismatch=bool(feedback.get('semantic_direction_mismatch', False))))
+        desired = ('DOWN' if policy == 'DESCEND_STAIRS' else
+                   'UP' if policy == 'ASCEND_STAIRS' else 'LEVEL')
+        successes = [item for item in motions if item['vertical_motion'] == desired]
+        failures = []
+        for record in reversed(self.tool_ledger):
+            call, result = record.get('call') or {}, record.get('result') or {}
+            if call.get('tool') != 'navigate_local':
+                continue
+            if result.get('status') in ('BLOCKED', 'NEEDS_VIEW', 'REQUIRES_ATTENTION', 'INTERRUPTED'):
+                failures.append(dict(
+                    tool_call_id=record.get('call_id'),
+                    status=result.get('status'), reason=result.get('reason'),
+                    waypoint_id=(call.get('args') or {}).get('waypoint_id'),
+                    observation_id=result.get('end_observation_id')))
+            if len(failures) == 3:
+                break
+        return dict(
+            expected_vertical_motion=desired,
+            total_forward_actions=len(motions),
+            recent_forward_motion=motions[-6:],
+            last_progress_motion=successes[-1] if successes else None,
+            last_motion=motions[-1] if motions else None,
+            recent_failed_waypoints=failures,
+            note='RGB-D translation is estimated, not simulator ground truth')
+
     def _routes(self):
         now=time.monotonic()
         values=copy.deepcopy(list(self.routes.values()))

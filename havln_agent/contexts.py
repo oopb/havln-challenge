@@ -126,7 +126,10 @@ def navigation_context(runtime):
     hints=memory.recall_observation(memory.current_place_id,
         landmark=language.get('landmark','')+' '+language.get('target',''),top_k=3)['observations']
     last=memory.tool_ledger[-1]['result'] if memory.tool_ledger else None
+    navigation_memory = (memory.navigation_summary() if hasattr(memory, 'navigation_summary') else {})
     result=dict(goal=runtime.active_subgoal,
+        navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
+        navigation_memory=navigation_memory,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
             pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
             height_y_m_est=pose['y'],

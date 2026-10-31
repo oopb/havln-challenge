@@ -34,6 +34,7 @@ class AgentRuntime(ToolExecutor):
         self.phase, self.finish_reason = 'INITIALIZE', None
         self.plan_revision, self.active_subgoal_id, self.active_subgoal = 0, None, None
         self.active_waypoint_id = None
+        self.navigation_mode = 'OBSERVE'
         self.task_review_requested, self.review_reason = True, 'initial_task'
         self.api_failure = None
         self.navigation_liveness = None
@@ -117,10 +118,20 @@ class AgentRuntime(ToolExecutor):
                 self.event('grounding_reprojected', source='current_depth', grounding_id=value['grounding_id'],
                     semantic_source_observation_id=bound['semantic_source_observation_id'])
 
+    def set_navigation_mode(self, mode, reason, **detail):
+        if mode not in ('OBSERVE', 'MOVE'):
+            raise ValueError('unknown_navigation_mode')
+        previous = self.navigation_mode
+        if previous != mode:
+            self.navigation_mode = mode
+            self.event('navigation_mode_changed', previous_mode=previous,
+                       new_mode=mode, reason=reason, **detail)
+
     def state_view(self):
         self.assert_owner()
         scene = self.memory.scene_memory
-        return dict(architecture='agent_v5', episode_id=self.memory.episode_id,
+        return dict(architecture='observe_move_v1', navigation_mode=self.navigation_mode,
+            episode_id=self.memory.episode_id,
             observation_id=(self.memory.current or {}).get('observation_id'), plan_revision=self.plan_revision,
             active_subgoal=self.active_subgoal, pose=self.motion_controller.pose(), action_budget=self.config['max_steps'],
             actions_remaining=self.config['max_steps']-len(self.memory.actions),
@@ -137,6 +148,10 @@ class AgentRuntime(ToolExecutor):
     def set_semantic_goal(self, value=None):
         task = self.memory.task
         i = task.current_subgoal_index
+        if value is not None and value.get('intent') == 'continue' and self.active_subgoal_id == 'sg_%d' % i:
+            self.task_review_requested = False
+            self.event('task_review_continue', source='task_planner', subgoal_id=self.active_subgoal_id)
+            return
         if i >= len(task.subgoals):
             self.task_review_requested = False
             return
@@ -153,8 +168,10 @@ class AgentRuntime(ToolExecutor):
         stair_direction = stair_motion_direction(goal)
         self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else
             'ASCEND_STAIRS' if stair_direction == 'UP' else 'LEVEL_ONLY')
+        self.semantic_motion_policy = self.motion_policy
         self._cancel_local_navigation('semantic_task_revision')
         self.active_waypoint_id = None
+        self.set_navigation_mode('OBSERVE', 'semantic_subgoal_changed')
         self.task_review_requested = False
         self.phase = 'NAVIGATING'
         self.event('task_plan', source='task_planner', goal=self.active_subgoal)
@@ -184,12 +201,21 @@ class AgentRuntime(ToolExecutor):
                 return dict(status='STALE_TARGET', reason='decision_pose_changed')
             # New sensor data invalidates geometry authorization, not the semantic
             # intent. Motion tools independently recheck current Depth per step.
+        moving = call['tool'] == 'navigate_local'
+        if moving:
+            self.set_navigation_mode('MOVE', 'local_waypoint_selected',
+                                     waypoint_id=call['args'].get('waypoint_id'))
         self.phase = 'EXECUTE'
         self._authorized_action = True
+        result = None
         try:
-            return super().dispatch(call, decision)
+            result = super().dispatch(call, decision)
+            return result
         finally:
             self._authorized_action = False
+            if moving:
+                self.set_navigation_mode('OBSERVE', 'motion_batch_finished',
+                                         status=result.get('status') if result else 'INTERRUPTED')
             if not self.done:
                 self.phase = 'NAVIGATING'
 
