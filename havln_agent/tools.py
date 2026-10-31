@@ -91,9 +91,9 @@ class ToolExecutor:
         previous_frame, previous = self.observation, self.memory.current
         self.observation = observation
         pose = self.motion_controller.pose()
-        # Sensor refresh is allowed to read the same RGB-D many times without
-        # moving. Do not rerun 13 expensive floor/geometry sweeps when the
-        # frame and pose are byte-identical to the already evaluated view.
+        # Refreshes must not eagerly evaluate every TURN direction. The
+        # explicit get_waypoint_candidates tool performs multi-bearing probes.
+        # Keep only the live forward-body summary for observation memory.
         unchanged = (previous is not None and previous_frame is not None
             and previous['pose'] == pose
             and array_hash(previous_frame.rgb) == array_hash(observation.rgb)
@@ -101,8 +101,10 @@ class ToolExecutor:
         if unchanged:
             diagnostics = previous.get('directions', [])
         else:
-            diagnostics = []
-            generate_waypoints(self.geometry(), self.config['waypoint_distance'], diagnostics, probe=True)
+            check = forward_probe(self.geometry())
+            diagnostics = [dict(check['depth'], angle_degrees=0.0,
+                motion_state=check['state'], reason=check['reason'],
+                terrain_support=check['support'])]
         record = self.memory.observe(observation, pose, diagnostics)
         if self.record_observation and record is not previous:
             self.record_observation(record, observation)
