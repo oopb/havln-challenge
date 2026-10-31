@@ -27,11 +27,10 @@ def rows(path):
 def select_frames(trace, interval):
     history = read(trace/'memory.json', {})
     observations = history.get('observations', [])
-    if not observations:
-        return set()
+    images = sorted((trace/'observations').glob('obs_*.npz'))
+    chosen = {images[0].stem,images[-1].stem} if images else set()
     hashes = {(o['rgb_hash'],o['depth_hash']):o['observation_id']
-              for o in observations}
-    chosen = {observations[0]['observation_id'],observations[-1]['observation_id']}
+              for o in observations if 'rgb_hash' in o and 'depth_hash' in o}
     steps = rows(trace/'steps.jsonl')
     indices = set()
     for i, action in enumerate(steps):
@@ -58,13 +57,14 @@ def select_frames(trace, interval):
     return chosen
 
 
-def pack(root, destination, frames='critical', interval=25):
+def pack(root, destination, frames='critical', interval=25, allow_empty=False):
     root, destination = Path(root), Path(destination)
     trace_root=root/'traces'
-    if not trace_root.is_dir():
+    if not trace_root.is_dir() and not allow_empty:
         raise ValueError('missing traces directory')
-    episodes=sorted(x for x in trace_root.iterdir() if x.is_dir())
-    if not episodes:raise ValueError('no episode directories')
+    episodes=sorted(x for x in trace_root.iterdir() if x.is_dir()) if trace_root.is_dir() else []
+    if not episodes and not allow_empty:
+        raise ValueError('no episode directories')
     # Worker task JSON may expose per-model settings and is not needed for diagnosis.
     files={p for p in root.glob('*.json')
            if not (p.name.startswith('worker-') and p.name.endswith('.json')
@@ -82,7 +82,7 @@ def pack(root, destination, frames='critical', interval=25):
             included_frames=sum(x.stem in selected for x in images))
     destination.parent.mkdir(parents=True,exist_ok=True)
     manifest=dict(format='havln-diagnostic-v1',frames=frames,episodes=catalog,
-        note='Only selected RGB-D frames are included; full traces remain on server.')
+        note='Critical mode retains first/last and movement evidence; full traces remain on server.')
     with ZipFile(destination,'w',compression=ZIP_DEFLATED,compresslevel=6) as z:
         for file in sorted(files):
             if file.is_file():

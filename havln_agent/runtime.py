@@ -178,7 +178,7 @@ class AgentRuntime(ToolExecutor):
 
     def execute(self, call, decision=None):
         self.assert_owner()
-        self.context_version = 'v5:%d:%s:%d' % (self.plan_revision,
+        self.context_version = 'observe_move_v1:%d:%s:%d' % (self.plan_revision,
             self.memory.current['observation_id'], len(self.memory.actions))
         self.event('tool_call', source='registry', tool=call.get('tool'), args=call.get('args'))
         value = super().execute(call, decision)
@@ -213,11 +213,11 @@ class AgentRuntime(ToolExecutor):
             return result
         finally:
             self._authorized_action = False
+            if not self.done:
+                self.phase = 'NAVIGATING'
             if moving:
                 self.set_navigation_mode('OBSERVE', 'motion_batch_finished',
                                          status=result.get('status') if result else 'INTERRUPTED')
-            if not self.done:
-                self.phase = 'NAVIGATING'
 
     def finalize_result(self, value, before, observation_before, call):
         moves = [a['result'].get('rgbd_motion') for a in self.memory.actions[before:]

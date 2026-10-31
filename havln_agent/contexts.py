@@ -39,6 +39,27 @@ def collision_summary(result):
     return values
 
 
+def waypoint_summary(path):
+    """Keep semantic target alignment in compact waypoint context."""
+    value = fields(path, ('id', 'type', 'bearing_deg', 'range_m', 'first_step',
+                          'goal_status', 'source_observation_id', 'objective',
+                          'reason', 'first_atomic_action',
+                          'requires_post_turn_recheck', 'execution_status'))
+    associations = path.get('goal_association') or []
+    if associations:
+        best = max(associations, key=lambda item:
+                   item.get('distance_before_m', 0) - item.get('distance_after_m', 0))
+        value['goal_alignment'] = fields(best, (
+            'grounding_id', 'target', 'distance_before_m', 'distance_after_m',
+            'bearing_error_degrees', 'direction_compatibility',
+            'rejection_reasons', 'stair_direction_hypothesis'))
+    failures = path.get('failure_history') or []
+    if failures:
+        value['failed_approaches'] = [fields(item, ('reason', 'basis', 'confidence'))
+                                      for item in failures[-2:]]
+    return value
+
+
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
@@ -48,9 +69,7 @@ def tool_summary(result):
         collision=collision_summary(result)
         if collision:value['measured_collision']=collision
     if 'paths' in result:
-        value['paths']=[fields(p,('id','type','bearing_deg','range_m','first_step','goal_status',
-            'source_observation_id','objective','reason','first_atomic_action',
-            'requires_post_turn_recheck')) for p in result['paths']]
+        value['paths']=[waypoint_summary(p) for p in result['paths']]
     if 'semantic' in result:
         value['grounding']=dict(fields(result,('grounding_id','target','localization','entry_status',
             'stair_direction','traversable_access')),uncertainty=result['semantic']['uncertainty'])
@@ -164,8 +183,7 @@ def navigation_context(runtime):
             continue
         if path.get('first_step')!='EXECUTABLE':
             continue
-        recent.append(fields(path,('id','type','bearing_deg','range_m',
-            'first_atomic_action','requires_post_turn_recheck','execution_status')))
+        recent.append(waypoint_summary(path))
         if len(recent)==3:break
     if recent:
         result['candidate_waypoints']=recent
