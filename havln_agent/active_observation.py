@@ -67,12 +67,9 @@ class ObservationController:
     def scan(self, objective, target_types, direction, sweep_degrees,
              checkpoint_degrees=30, look='none'):
         r = self.runtime
-        # A large scan while a local path is in progress can undo its heading
-        # alignment. Require a separate, explicit route cancellation first.
-        if r.motion_controller.target is not None:
-            return dict(status='INVALID_ARGUMENTS',
-                reason='active_local_navigation_requires_explicit_cancel_before_scan',
-                suggestion='continue_navigate_local_or_cancel_local_navigation_first')
+        # The agent may pause any local route for observation. The relative
+        # goal remains pending and is revalidated after the scan; it is never
+        # treated as pre-authorized movement from the previous heading.
         if not target_types or any(t not in TARGET_TYPES for t in target_types):
             return dict(status='INVALID_ARGUMENTS', reason='unsupported_static_visual_target')
         turn = r.camera.turn_angle

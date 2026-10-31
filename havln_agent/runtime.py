@@ -203,9 +203,9 @@ class AgentRuntime(ToolExecutor):
                 return dict(status='STALE_TARGET', reason='decision_pose_changed')
             # New sensor data invalidates geometry authorization, not the semantic
             # intent. Motion tools independently recheck current Depth per step.
-        moving = call['tool'] == 'navigate_local'
+        moving = call['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
         if moving:
-            self.set_navigation_mode('MOVE', 'local_waypoint_selected',
+            self.set_navigation_mode('MOVE', 'model_selected_motion',
                                      waypoint_id=call['args'].get('waypoint_id'))
         self.phase = 'EXECUTE'
         self._authorized_action = True
@@ -551,6 +551,81 @@ class AgentRuntime(ToolExecutor):
 
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
+
+    def _navigate_relative(self, turn_deg, distance_m, max_atomic_steps):
+        """Direct model intent, without a preselected semantic candidate.
+
+        The bearing is relative to the current heading, not a global pose or
+        semantic permission. A TURN is always legal as a physical rotation;
+        each subsequent MOVE independently validates fresh RGB-D.
+        """
+        if (not math.isfinite(turn_deg) or not math.isfinite(distance_m)
+                or abs(turn_deg) > 180 or not 0.25 <= distance_m <= 3.0):
+            return dict(status='INVALID_ARGUMENTS', reason='relative_motion_out_of_bounds')
+        stride = self.camera.turn_angle
+        if abs(turn_deg / stride - round(turn_deg / stride)) > 1e-6:
+            return dict(status='INVALID_ARGUMENTS',
+                        reason='turn_deg_must_match_calibrated_turn_action',
+                        calibrated_turn_deg=stride)
+        step = self.camera.forward_step
+        if abs(distance_m / step - round(distance_m / step)) > 1e-6:
+            return dict(status='INVALID_ARGUMENTS',
+                        reason='distance_m_must_match_calibrated_forward_step',
+                        calibrated_forward_step_m=step)
+        self.refresh()
+        source = self.source()
+        angle = math.radians(turn_deg)
+        heading = source['pose']['heading'] + angle
+        path_id = 'direct_%04d' % len(self.memory.tool_ledger)
+        path = dict(id=path_id, type='EXPLORATION_WAYPOINT', angle=angle,
+            distance=distance_m, source=source, goal_association=[],
+            first_step='EXECUTABLE', execution_status='PROPOSED',
+            objective=dict(purpose='model_directed_motion', completes_language_goal=False),
+            direction_source='navigation_agent',
+            requires_post_turn_recheck=bool(turn_deg),
+            geometric_status='NOT_YET_VALIDATED',
+            endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*distance_m,
+                           source['pose']['z'] + math.cos(heading)*distance_m])
+        # No invented collision permission: _execute_waypoint + _step will run
+        # current live checks at the actual heading immediately before motion.
+        self.paths[path_id] = path
+        result = self._navigate_local(path_id, max_atomic_steps)
+        return dict(result, waypoint_id=path_id,
+                    requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
+                        authorization='live_per_atomic_action_only'))
+
+    def _navigate_to_pixel(self, u, v, distance_m, max_atomic_steps):
+        """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
+        if not (math.isfinite(u) and math.isfinite(v) and
+                0 <= u <= 1 and 0 <= v <= 1):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_normalized_pixel')
+        self.refresh()
+        geometry = self.geometry()
+        x = min(self.camera.width-1, max(0, round(u*(self.camera.width-1))))
+        y = min(self.camera.height-1, max(0, round(v*(self.camera.height-1))))
+        import numpy as np
+        y0,y1=max(0,y-2),min(self.camera.height,y+3)
+        x0,x1=max(0,x-2),min(self.camera.width,x+3)
+        valid = geometry.valid[y0:y1,x0:x1]
+        if int(valid.sum()) < 5:
+            return dict(status='NEEDS_VIEW',reason='pixel_target_depth_unmeasured',
+                        pixel=dict(u=u,v=v),missing_evidence=['valid_local_depth'])
+        xs = geometry.x[y0:y1,x0:x1][valid]
+        zs = geometry.z[y0:y1,x0:x1][valid]
+        x_m,z_m=float(np.median(xs)),float(np.median(zs))
+        if z_m <= 0:
+            return dict(status='NEEDS_VIEW',reason='pixel_target_not_forward_projectable',
+                        pixel=dict(u=u,v=v))
+        measured_bearing = math.degrees(math.atan2(-x_m,z_m))
+        turn_deg = round(measured_bearing/self.camera.turn_angle)*self.camera.turn_angle
+        if abs(turn_deg) > 180:
+            return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
+        result = self._navigate_relative(turn_deg,distance_m,max_atomic_steps)
+        return dict(result, pixel_target=dict(u=u,v=v,
+            measured_depth_m=round(float(np.median(geometry.depth[y0:y1,x0:x1][valid])),3),
+            measured_bearing_deg=round(measured_bearing,2),
+            selected_turn_deg=turn_deg,
+            interpretation='direction_hint_only_pixel_not_walkability_certificate'))
 
     def _navigate_local(self, waypoint_id, max_atomic_steps):
         path = self.paths.get(waypoint_id)

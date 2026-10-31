@@ -36,8 +36,9 @@ class EvidenceLivenessGuard:
             self.review_requested = False
             return None
         self.actionless_decisions += 1
-        if self.actionless_decisions >= 2*self.limit and self.review_requested:
-            return 'NO_EVIDENCE_PROGRESS'
+        # Repeated unproductive calls are observable diagnostic evidence,
+        # never a semantic failure or a reason to force STOP. Resource budgets
+        # (model calls / actions / API) remain independent hard limits.
         if self.actionless_decisions >= self.limit and not self.review_requested:
             self.review_requested = True
             return 'REVIEW_NO_PROGRESS'
@@ -128,13 +129,6 @@ def run(runtime,append):
                 runtime.event('navigation_liveness_review',source='scheduler',
                     diagnostic=runtime.navigation_liveness,
                     last_tool=result.get('tool'),last_status=result.get('status'))
-            elif outcome=='NO_EVIDENCE_PROGRESS':
-                runtime.event('navigation_liveness_exhausted',source='scheduler',
-                    diagnostic=runtime.navigation_liveness,
-                    last_tool=result.get('tool'),last_status=result.get('status'))
-                # Explicit failed navigation, not a claimed goal completion or
-                # an unsafe fallback MOVE_FORWARD.
-                runtime.terminate('navigation_no_new_evidence')
         except BudgetExceeded:
             runtime.terminate('api_budget_exhausted')
         except APIError as error:
