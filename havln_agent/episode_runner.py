@@ -132,7 +132,8 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         pose = runtime.motion_controller.pose()
         summary = dict(episode_id=episode_id, architecture='agent_v5', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
-            api_failure=runtime.api_failure, seconds=time.monotonic()-started,
+            api_failure=runtime.api_failure, navigation_liveness=runtime.navigation_liveness,
+            seconds=time.monotonic()-started,
             api=client.stats(), pose=pose, decisions=runtime.decisions,
             decisions_by_role=runtime.decision_counts, task_reviews=max(0,runtime.plan_revision-1),
             completed_subgoals=len(runtime.memory.task.completed_subgoals),
