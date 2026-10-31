@@ -74,6 +74,49 @@ class ObserveMoveTests(unittest.TestCase):
         self.assertEqual(summary['last_motion']['vertical_motion'],'UP')
         self.assertTrue(summary['last_motion']['semantic_direction_mismatch'])
 
+
+    def test_goal_alignment_survives_compact_waypoint_context(self):
+        from havln_agent.contexts import waypoint_summary, tool_summary
+        association=dict(grounding_id='g_1',target='stairs_down',
+                         distance_before_m=1.2,distance_after_m=0.7,
+                         bearing_error_degrees=0.0,direction_compatibility='CONFIRMED')
+        path=dict(id='wp_1',type='GOAL_WAYPOINT',first_step='EXECUTABLE',
+                  bearing_deg=0,range_m=0.5,goal_association=[association],
+                  failure_history=[dict(reason='occupied_next_step',
+                                        basis='estimated_local_pose_and_heading',
+                                        confidence='low')])
+        compact=waypoint_summary(path)
+        self.assertEqual(compact['goal_alignment']['target'],'stairs_down')
+        self.assertEqual(compact['goal_alignment']['distance_after_m'],0.7)
+        self.assertEqual(compact['failed_approaches'][0]['reason'],'occupied_next_step')
+        result=tool_summary(dict(tool='get_waypoint_candidates',status='OK',
+                                 paths=[path]))
+        self.assertEqual(result['paths'][0]['goal_alignment']['grounding_id'],'g_1')
+
+    def test_observe_mode_event_reflects_navigation_phase(self):
+        r=AgentRuntime.__new__(AgentRuntime)
+        pose=dict(x=0.0,z=0.0,heading=0.0)
+        r.done=False
+        r.navigation_mode='OBSERVE'
+        r.phase='NAVIGATING'
+        r.registry={'navigate_local':{'permission':'NAVIGATION'}}
+        r.memory=SimpleNamespace(current=dict(observation_id='obs_0001'),
+                                 observations=[dict(observation_id='obs_0001',pose=pose)])
+        r.motion_controller=SimpleNamespace(pose=lambda:pose)
+        r.plan_revision=1
+        r.active_subgoal_id='sg_0'
+        events=[]
+        r.event=lambda name,**kwargs: events.append((name,r.navigation_mode,r.phase))
+        r.refresh=Mock()
+        r._authorized_action=False
+        decision=dict(plan_revision=1,subgoal_id='sg_0',observation_id='obs_0001')
+        with patch('havln_agent.runtime.ToolExecutor.dispatch',
+                   return_value=dict(status='PARTIAL')):
+            r.dispatch(dict(tool='navigate_local',
+                            args=dict(waypoint_id='wp_0',max_atomic_steps=2)),
+                       decision)
+        self.assertEqual(events[-1],('navigation_mode_changed','OBSERVE','NAVIGATING'))
+
     def test_observation_decision_rejects_move_mode(self):
         runtime=SimpleNamespace(navigation_mode='MOVE')
         with self.assertRaisesRegex(RuntimeError,'requires_observe_mode'):

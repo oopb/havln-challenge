@@ -111,6 +111,20 @@ class CompactTraceTests(unittest.TestCase):
         self.assertIn('sample-run/worker-0.log',names)
         self.assertNotIn('sample-run/worker-0.json',names)
 
+
+    def test_critical_pack_keeps_motion_frames_without_memory_snapshot(self):
+        (self.trace/'memory.json').unlink()
+        (self.trace/'steps.jsonl').write_text(json.dumps(dict(
+            step=0,action='MOVE_FORWARD',
+            input_file='observations/obs_0003.npz',
+            post_file='observations/obs_0004.npz'))+'\\n')
+        destination=Path(self.temp.name)/'failed-run.zip'
+        pack(self.root,destination,frames='critical',interval=100)
+        with ZipFile(destination) as z:
+            names=set(z.namelist())
+        self.assertIn('sample-run/traces/val_seen-1/observations/obs_0003.npz',names)
+        self.assertIn('sample-run/traces/val_seen-1/observations/obs_0004.npz',names)
+
     def test_full_and_no_frames_modes(self):
         full=Path(self.temp.name)/'full.zip'
         none=Path(self.temp.name)/'none.zip'
