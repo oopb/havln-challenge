@@ -112,7 +112,7 @@ NavigationAgent chooses among short candidates using task, visual evidence, obse
 ## Model-control runtime v2
 
 **Strategy authority**: NavigationAgent can issue `navigate_relative(turn_deg,
-distance_m, max_atomic_steps)`, using calibrated turn increments and 0.25m
+distance_m, max_atomic_steps)`, quantized by the executor into calibrated turn increments and 0.25m
 step multiples (0.25 to 3m). It can alternatively issue
 `navigate_to_pixel(u,v,distance_m,max_atomic_steps)` for a current RGB-D
 pixel bearing. A pixel supplies only a bearing hypothesis, not permission

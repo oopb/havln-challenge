@@ -53,11 +53,18 @@ class ModelControlRuntimeTests(unittest.TestCase):
         self.assertEqual(result['requested_motion']['authorization'],
                          'live_per_atomic_action_only')
 
-    def test_uncalibrated_motion_is_rejected_before_registration(self):
+    def test_model_continuous_intent_is_quantized_not_rejected(self):
         r=direct_runtime()
-        self.assertEqual(r._navigate_relative(7.5,.5,1)['status'],'INVALID_ARGUMENTS')
-        self.assertEqual(r._navigate_relative(15,.33,1)['status'],'INVALID_ARGUMENTS')
+        got=r._navigate_relative(19.,.61,2)
+        self.assertEqual(got['status'],'PARTIAL')
+        self.assertEqual(got['requested_motion']['quantized_turn_deg'],15.)
+        self.assertEqual(got['requested_motion']['quantized_distance_m'],.5)
+        self.assertEqual(r.paths['direct_0000']['distance'],.5)
+
+    def test_out_of_bounds_motion_does_not_execute(self):
+        r=direct_runtime()
         self.assertEqual(r._navigate_relative(15,3.25,1)['status'],'INVALID_ARGUMENTS')
+        self.assertEqual(r._navigate_relative(float('nan'),.5,1)['status'],'INVALID_ARGUMENTS')
         r._navigate_local.assert_not_called()
         self.assertEqual(r.paths,{})
 

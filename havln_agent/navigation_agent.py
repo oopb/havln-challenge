@@ -27,7 +27,8 @@ OBSERVE_PROMPT = (
     'Prefer a measured goal-approaching direction over a merely easy turn. '
     'An executable exploration waypoint does not itself imply task progress. '
     'A candidate waypoint is OPTIONAL. You may call navigate_relative with '
-    'a calibrated relative bearing and desired distance directly, or use '
+    'a relative bearing and desired distance directly (the executor quantizes '
+    'to the real action increments), or use '
     'navigate_to_pixel with a normalized RGB-D image target and movement distance. '
     'Do not invent free space: the executor checks current depth for every forward. '
 

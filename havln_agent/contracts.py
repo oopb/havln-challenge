@@ -54,7 +54,7 @@ def registry(camera, max_actions, pitch_deg=0.):
         'inspect_geometry': ('ON-DEMAND full geometry diagnosis after an obstacle, unclear drop or repeated block; normal MOVE uses a fast live depth probe. Inspection provides evidence and does not itself authorize motion.', object_schema({})),
         'get_waypoint_candidates': ('Optional short candidate bearings with current-depth evidence; not mandatory before navigate_relative or navigate_to_pixel. Every forward step gets fresh safety checks.',
             dict(object_schema(dict(target=text, purpose=dict(enum=['approach_landmark', 'explore']))), required=[])),
-        'navigate_relative': ('Model-directed movement: select a calibrated relative bearing and desired segment length directly, without an approved semantic waypoint. Executes a short atomic batch, rechecks live collision before each forward step, and returns a resumable waypoint_id. Use navigate_local with that ID to continue.',
+        'navigate_relative': ('Model-directed movement: select a relative bearing and desired segment length directly, without an approved semantic waypoint. Executor quantizes angles/distances to calibrated Habitat TURN/FORWARD increments and reports the result. Executes a short atomic batch, rechecks live collision before each forward step, and returns a resumable waypoint_id. Use navigate_local with that ID to continue.',
             object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
                 distance_m=dict(type='number',minimum=0.25,maximum=3.0),
                 max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),

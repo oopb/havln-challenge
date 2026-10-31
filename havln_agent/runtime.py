@@ -561,35 +561,34 @@ class AgentRuntime(ToolExecutor):
                 or abs(turn_deg) > 180 or not 0.25 <= distance_m <= 3.0):
             return dict(status='INVALID_ARGUMENTS', reason='relative_motion_out_of_bounds')
         stride = self.camera.turn_angle
-        if abs(turn_deg / stride - round(turn_deg / stride)) > 1e-6:
-            return dict(status='INVALID_ARGUMENTS',
-                        reason='turn_deg_must_match_calibrated_turn_action',
-                        calibrated_turn_deg=stride)
         step = self.camera.forward_step
-        if abs(distance_m / step - round(distance_m / step)) > 1e-6:
-            return dict(status='INVALID_ARGUMENTS',
-                        reason='distance_m_must_match_calibrated_forward_step',
-                        calibrated_forward_step_m=step)
+        # Models express motion intent in continuous units; the executor
+        # quantizes to the supported Habitat actuator increments and reports
+        # what was actually requested of the simulator.
+        actual_turn = round(turn_deg / stride) * stride
+        actual_distance = max(1, round(distance_m / step)) * step
+        actual_distance = min(actual_distance, math.floor(3.0 / step) * step)
         self.refresh()
         source = self.source()
-        angle = math.radians(turn_deg)
+        angle = math.radians(actual_turn)
         heading = source['pose']['heading'] + angle
         path_id = 'direct_%04d' % len(self.memory.tool_ledger)
         path = dict(id=path_id, type='EXPLORATION_WAYPOINT', angle=angle,
-            distance=distance_m, source=source, goal_association=[],
+            distance=actual_distance, source=source, goal_association=[],
             first_step='EXECUTABLE', execution_status='PROPOSED',
             objective=dict(purpose='model_directed_motion', completes_language_goal=False),
             direction_source='navigation_agent',
-            requires_post_turn_recheck=bool(turn_deg),
+            requires_post_turn_recheck=bool(actual_turn),
             geometric_status='NOT_YET_VALIDATED',
-            endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*distance_m,
-                           source['pose']['z'] + math.cos(heading)*distance_m])
+            endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
+                           source['pose']['z'] + math.cos(heading)*actual_distance])
         # No invented collision permission: _execute_waypoint + _step will run
         # current live checks at the actual heading immediately before motion.
         self.paths[path_id] = path
         result = self._navigate_local(path_id, max_atomic_steps)
         return dict(result, waypoint_id=path_id,
                     requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
+                        quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='live_per_atomic_action_only'))
 
     def _navigate_to_pixel(self, u, v, distance_m, max_atomic_steps):
