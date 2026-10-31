@@ -50,7 +50,7 @@ class FullTransitionRegression(unittest.TestCase):
              patch('havln_agent.progress.current_visual_evidence',return_value=True):
             stage,supported,missing,contradictions,details=_stair_evidence(
                 memory,goal,{'o0','o4'},0.,20.,1.25)
-        self.assertEqual(stage,'COMPLETED')
+        self.assertEqual(stage,'COMPLETED',msg=str(dict(missing=missing,supported=supported,details=details,contradictions=contradictions)))
         self.assertEqual(details['source_observation_ids'][0],'o0')
         self.assertEqual(details['motion_steps'],[0,1,2,3])
         self.assertIn('sensor_verified_stair_to_landing_transition',supported)
