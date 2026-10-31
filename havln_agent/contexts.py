@@ -71,8 +71,14 @@ def tool_summary(result):
     if 'paths' in result:
         value['paths']=[waypoint_summary(p) for p in result['paths']]
     if 'semantic' in result:
-        value['grounding']=dict(fields(result,('grounding_id','target','localization','entry_status',
-            'stair_direction','traversable_access')),uncertainty=result['semantic']['uncertainty'])
+        value['grounding']=dict(fields(result,('grounding_id','target','status','localization',
+            'entry_status','stair_direction','traversable_access')),
+            uncertainty=result['semantic'].get('uncertainty'),
+            position=fields(result.get('position') or {},('status','reason','bearing_degrees',
+                'x_right','z_forward','depth_spread_metres','uncertainty_m')),
+            entry=fields(result.get('entry') or {},('status','reason','bearing_degrees',
+                'x_right','z_forward','depth_spread_metres')),
+            interpretation='observation_only_not_motion_permission')
     if 'assessment' in result:value['assessment']=result['assessment']
     if 'memory' in result:value['memory']=result['memory']
     if 'geometry' in result:
@@ -146,7 +152,21 @@ def navigation_context(runtime):
         landmark=language.get('landmark','')+' '+language.get('target',''),top_k=3)['observations']
     last=memory.tool_ledger[-1]['result'] if memory.tool_ledger else None
     navigation_memory = (memory.navigation_summary() if hasattr(memory, 'navigation_summary') else {})
+    grounding_hints = []
+    for item in reversed(memory.groundings):
+        if item['source'].get('subgoal') != index or len(grounding_hints) >= 3:
+            continue
+        grounding_hints.append(dict(grounding_id=item.get('grounding_id'),
+            target=item.get('target'),status=item.get('status'),
+            source_observation_id=item['source'].get('observation_id'),
+            position=fields(item.get('position') or {},('status','reason','bearing_degrees',
+                'x_right','z_forward','depth_spread_metres')),
+            entry=fields(item.get('entry') or {},('status','reason','bearing_degrees')),
+            evidence_uncertainty=(item.get('semantic') or {}).get('uncertainty'),
+            is_current_view=item['source'].get('rgb_hash') == memory.current.get('rgb_hash'),
+            interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
+        grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),

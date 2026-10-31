@@ -458,21 +458,22 @@ class AgentRuntime(ToolExecutor):
                             completes_language_goal=False),
                         execution_requirements=['current_rgbd','live_human_safety','next_step_depth_collision_probe'])
             else:
-                live_ids={g['grounding_id'] for g in self.memory.groundings
-                    if g['source'].get('image_scope','current')=='current'
-                    and not self.estimate_goal(g)['requires_reconfirmation']}
-                paths=[path for path in paths if any(a['grounding_id'] in live_ids
-                    for a in path.get('goal_association',[]))]
+                # Missing / partial grounding does not forbid short motion.
+                # Return every depth-executable candidate for model selection.
                 for path in paths:
-                    path.update(type='GOAL_WAYPOINT',objective=dict(purpose='approach_landmark',target=target,
-                        completes_language_goal=False))
+                    path.update(
+                        type=('GOAL_WAYPOINT' if path.get('goal_association')
+                              else 'EXPLORATION_WAYPOINT'),
+                        objective=dict(purpose='approach_landmark',target=target,
+                            estimated_goal_association=bool(path.get('goal_association')),
+                            completes_language_goal=False,
+                            decision_authority='navigation_agent'))
             # Preserve genuine semantic goal progress in the shortlist. The
             # model still chooses one candidate; no autonomous route policy.
             paths = rank_candidates(paths, purpose)
             offered=paths[:5]
-            straight = next((p for p in paths if abs(p['angle']) < 1e-6), None)
-            if straight and straight.get('first_step')=='EXECUTABLE' and straight not in offered:
-                offered[len(offered)//2] = straight
+            # Do not replace a model-visible candidate with a fixed straight
+            # choice. If useful, straight remains in the ranked options.
             geometry = self.geometry()
             next_step = self.motion_controller.next_step_state(geometry)
             for path in offered:
@@ -558,10 +559,7 @@ class AgentRuntime(ToolExecutor):
                 suggestion='turn_to_observe_and_regenerate_waypoints_before_navigate_local')
         if path['source']['subgoal'] != self.memory.task.current_subgoal_index:
             return dict(status='STALE_TARGET', reason='language_goal_changed')
-        associations = [g for g in self.memory.groundings if any(
-            a['grounding_id'] == g['grounding_id'] for a in path.get('goal_association', []))
-            and g['source'].get('image_scope', 'current') == 'current'
-            and not self.estimate_goal(g)['requires_reconfirmation']]
+        # Target localization is a hint, not an independent motion veto.
         continuing_uncertain = (self.active_waypoint_id == waypoint_id
             and self.motion_controller.target is not None
             and self.memory.active_attempt is not None
@@ -570,8 +568,6 @@ class AgentRuntime(ToolExecutor):
         # translation, but the already chosen STRAIGHT relative segment can
         # be finished within its original two-step command horizon. Never use
         # stale grounding to start a new route or certify goal completion.
-        if path['type']=='GOAL_WAYPOINT' and not associations and not continuing_uncertain:
-            return self.motion_controller.needs_view('grounded_local_objective_required')
         if path['type'] not in ('GOAL_WAYPOINT','EXPLORATION_WAYPOINT'):
             return dict(status='INVALID_TARGET',reason='unknown_waypoint_type')
         target = 'current' if self.active_waypoint_id == waypoint_id and self.motion_controller.target is not None else waypoint_id

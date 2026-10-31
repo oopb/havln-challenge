@@ -275,8 +275,15 @@ class ToolExecutor:
             expected = {'LEVEL_ONLY': 'LEVEL', 'DESCEND_STAIRS': 'DOWN', 'ASCEND_STAIRS': 'UP','LOCAL_TERRAIN':direction}[policy]
             feedback['semantic_direction_mismatch']=(motion['status']=='ESTIMATED' and
                 direction in ('DOWN','UP') and direction != expected)
-            alert_reason=('motion_estimate_unknown' if motion['status']!='ESTIMATED' else
-                'measured_direction_opposes_subgoal' if feedback['semantic_direction_mismatch'] else None)
+            # A measured direction which may oppose the current goal is an
+            # observation for the model, not an automatic local-route veto.
+            if feedback['semantic_direction_mismatch']:
+                self.memory.event('semantic_motion_direction_observed',
+                    observed_direction=direction, expected_direction=expected,
+                    observation_before=feedback['observation_before'],
+                    observation_after=feedback['observation_after'],
+                    source='registered_rgbd_estimate_only')
+            alert_reason=('motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
@@ -403,7 +410,9 @@ class ToolExecutor:
                              if self.memory.task.current_subgoal_index < len(self.memory.task.subgoals) else {})
             relations = [goal_relation(candidate, g, g['current_estimate'], language_goal,
                                        self.camera.turn_angle) for g in groundings]
-            associations = [relation for relation in relations if relation['relevant']]
+            # Include detours and uncertain bearings. These are factual
+            # associations, not permission decisions or prefiltered routes.
+            associations = relations
             for association in associations:
                 value = next(g for g in groundings if g['grounding_id'] == association['grounding_id'])
                 association['stair_direction_hypothesis'] = value['semantic']['stair_direction']
@@ -442,7 +451,7 @@ class ToolExecutor:
                 failure_history=failures[-4:],
                 human_risk=geometry.human_status,
                 execution_status='PROPOSED',
-                goal_status='GOAL_RELEVANT' if associations else 'GOAL_DIRECTION_UNKNOWN',
+                goal_status='GOAL_EVIDENCE_AVAILABLE' if associations else 'GOAL_DIRECTION_UNKNOWN',
                 frame='source_robot_camera', angle_unit='radians',
                 endpoint_xz_m=[source['pose']['x'] - math.sin(heading) * candidate['distance'],
                                source['pose']['z'] + math.cos(heading) * candidate['distance']],
@@ -463,7 +472,7 @@ class ToolExecutor:
             safety_state=dict(visible_floor=dict(status='DEFERRED',
                 reason='inspect_geometry_for_full_terrain_diagnostics'), humans=geometry.human_status,
                 authorization='requires_new_checks_before_every_move', dynamic_motion_prediction='UNAVAILABLE'),
-            goal_status='GOAL_RELEVANT' if any(p['goal_association'] for p in paths) else 'GOAL_DIRECTION_UNKNOWN',
+            goal_status='GOAL_EVIDENCE_AVAILABLE' if any(p['goal_association'] for p in paths) else 'GOAL_DIRECTION_UNKNOWN',
             goal_localization_status='GROUNDING_UNCERTAIN' if excluded else 'AVAILABLE' if groundings else 'UNKNOWN',
         )
 
