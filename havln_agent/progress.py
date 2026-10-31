@@ -125,12 +125,32 @@ def _passed_landmark(memory, matches, motions):
     return False
 
 
+def _verified_stair_transition(directed, landing_steps, landings, displacement,
+                                uncertainty, travel, travel_error, continuous,
+                                contradictions, forward_step):
+    """Independent measured alternative to a precisely localized entry point.
+
+    A correct short descent can begin *on* a stair without ever obtaining an
+    entry box. Never infer the transition from language or commanded actions:
+    require multiple registered descending translations, multiple registered
+    horizontal landing actions, current RGB-D-supported landing appearance,
+    sufficient net displacement, continuity and zero contradictions.
+    """
+    return bool(
+        len(directed) >= 2 and
+        len({a['result']['observation_after'] for a in landing_steps}) >= 2 and
+        landings and continuous and not contradictions and
+        displacement - uncertainty >= max(0.20, forward_step) and
+        travel - travel_error >= 2 * forward_step
+    )
+
+
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     down = stair_motion_direction(goal) == 'DOWN'
     direction, sign = ('down', -1) if down else ('up', 1)
     observed = {o['observation_id']: o for o in memory.observations}
     wanted = task_tokens(goal['landmark'] + ' ' + goal['target'])
-    groundings = [g for g in memory.groundings if g['status'] == 'LOCALIZED'
+    groundings = [g for g in memory.groundings if g['status'] in ('LOCALIZED','PARTIAL')
                   and g['source']['subgoal'] == memory.task.current_subgoal_index
                   and wanted & task_tokens(g['target']) and g['semantic']['confidence'] != 'low']
     origins = [g for g in groundings if g['semantic']['stair_direction'] in (direction, 'unknown')
@@ -206,7 +226,7 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     details.update(relative_vertical_estimate_m=displacement, uncertainty_bound_m=uncertainty,
                    motion_steps=[a['step'] for a in motions],
                    vertical_motion_steps=[a['step'] for a in directed], absolute_height_available=False)
-    descent = near_entry and len(directed) >= 2 and displacement >= max(0.12, 2 * uncertainty)
+    descent = bool(visible) and len(directed) >= 2 and displacement >= max(0.12, 2 * uncertainty)
     if descent:
         supported.append('multi_frame_registered_' + direction + '_motion')
         if not contradictions:
@@ -244,7 +264,20 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     details['alternative_visual_spatial_evidence'] = [item for item in supported if item in (
         'localized_nearby_stair_entry', 'current_landing_visual_region', 'measured_near_landing_plane',
         'registered_movement_along_stair_direction', 'registered_exit_from_initial_stair_entry_region')]
-    if descent and landings and len(landing_steps) >= 2 and left_entry and continuous and not contradictions:
+    independent_transition = _verified_stair_transition(
+        directed, landing_steps, landings, displacement, uncertainty,
+        travel, travel_error, continuous, contradictions, memory.camera.forward_step)
+    details['independent_stair_to_landing_transition'] = independent_transition
+    if independent_transition:
+        # Evidence proves the crossing without requiring a fragile *entry*
+        # pixel exactly at the original robot's floor elevation.
+        supported.extend(('sensor_verified_stair_to_landing_transition',
+                          'registered_movement_along_stair_direction'))
+        details['confirmed_phases'].extend(('FIND_STAIR_ENTRY','ARRIVED_AT_LANDING'))
+        missing = [item for item in missing if item not in (
+            'unambiguous_nearby_stair_entry',
+            'registered_exit_from_initial_stair_entry_region')]
+    elif descent and landings and len(landing_steps) >= 2 and left_entry and continuous and not contradictions:
         details['confirmed_phases'].append('ARRIVED_AT_LANDING')
     if origin['source']['observation_id'] not in ids:
         missing.append('cite_initial_stair_observation')

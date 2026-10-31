@@ -132,3 +132,17 @@ results remain historical, not real-time motion permission.
 event; they do not unilaterally initiate task review or STOP. Hard
 action/model/API resource budgets still apply. Independent task completion
 verification, valid action checks, and human/depth guards remain intact.
+
+
+## Independent completion, alternative measured evidence
+
+The task verifier is not a controller: it never chooses robot direction and
+never trusts self-reported LLM completion. For an initial stair descent whose
+entrance region is not precisely localized, the verifier now also accepts an
+independent *sensor-derived* transition proof: multiple depth-registered downward
+translations, multiple distinct registered level landing steps, current
+RGB-D-supported landing observation, net horizontal/vertical displacement,
+continuous registration and no contradictions. Completion still requires
+authentic cited observations and the runtime's typed success predicates.
+This avoids requiring one exact `entry_box` path through the scene while
+retaining independent evidence to resist false completion.
