@@ -163,7 +163,9 @@ def navigation_context(runtime):
                 'x_right','z_forward','depth_spread_metres')),
             entry=fields(item.get('entry') or {},('status','reason','bearing_degrees')),
             evidence_uncertainty=(item.get('semantic') or {}).get('uncertainty'),
-            is_current_view=item['source'].get('rgb_hash') == memory.current.get('rgb_hash'),
+            is_current_view=(item['source'].get('rgb_hash') == memory.current.get('rgb_hash')
+                and item['source'].get('depth_hash') == memory.current.get('depth_hash')
+                and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
         grounding_evidence=grounding_hints,
@@ -204,7 +206,7 @@ def navigation_context(runtime):
         if path.get('first_step')!='EXECUTABLE':
             continue
         recent.append(waypoint_summary(path))
-        if len(recent)==3:break
+        if len(recent)==9:break
     if recent:
         result['candidate_waypoints']=recent
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'

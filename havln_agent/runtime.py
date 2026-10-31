@@ -471,7 +471,9 @@ class AgentRuntime(ToolExecutor):
             # Preserve genuine semantic goal progress in the shortlist. The
             # model still chooses one candidate; no autonomous route policy.
             paths = rank_candidates(paths, purpose)
-            offered=paths[:5]
+            # Show enough distinct safe bearings for the model to choose its
+            # own detour; no fixed straight-ahead or category-specific choice.
+            offered=paths[:12]
             # Do not replace a model-visible candidate with a fixed straight
             # choice. If useful, straight remains in the ranked options.
             geometry = self.geometry()
