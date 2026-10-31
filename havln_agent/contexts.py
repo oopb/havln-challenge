@@ -219,4 +219,9 @@ def navigation_context(runtime):
             candidate=recent_search.get('candidate'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
+    liveness=getattr(runtime,'navigation_liveness',None) or {}
+    if liveness.get('consecutive_unchanged_decisions',0)>=2:
+        result['decision_liveness']=fields(liveness,(
+            'consecutive_unchanged_decisions',
+            'max_unchanged_evidence_decisions','review_requested','reason'))
     return result
