@@ -36,6 +36,7 @@ class AgentRuntime(ToolExecutor):
         self.active_waypoint_id = None
         self.task_review_requested, self.review_reason = True, 'initial_task'
         self.api_failure = None
+        self.navigation_liveness = None
         self.event_callback, self.event_seq = None, 0
         self.task_planner = TaskPlanner(self)
         self.navigation_agent = NavigationAgent(self)
@@ -598,6 +599,8 @@ class AgentRuntime(ToolExecutor):
         self.assert_owner()
         self.finish_reason = ('goal_completed' if reason == 'goal_completed' else
             'action_budget_exhausted' if reason == 'action_budget_exhausted' else
+            'navigation_no_new_evidence' if reason == 'navigation_no_new_evidence' else
+            'navigation_inference_budget_exhausted' if reason == 'navigation_inference_budget_exhausted' else
             'model_aborted' if reason == 'model_aborted' else 'technical_failure')
         self._authorized_action = True
         try:
