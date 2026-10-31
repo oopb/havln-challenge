@@ -270,6 +270,29 @@ class Geometry:
             self._support_planes=measured_planes(self)
         return self._support_planes
 
+    def movement_probe(self, angle=0.):
+        """Fast live body-depth collision probe; no terrain fitting or certification.
+
+        A detected obstacle or unknown visibility stops the short MOVE batch.
+        NavigationAgent can then invoke inspect_geometry to understand its cause.
+        """
+        depth = self.diagnose(angle, self.camera.forward_step)
+        if depth['path_state'] in ('OCCUPIED', 'DYNAMIC'):
+            state = 'BLOCKED'
+            reason = ('dynamic_human' if depth['path_state'] == 'DYNAMIC'
+                      else 'occupied_next_step')
+        elif not depth['accepted']:
+            state, reason = 'NEEDS_VIEW', 'unknown_depth_or_fov'
+        elif self.human_status['unlocalized']:
+            state, reason = 'NEEDS_VIEW', 'human_localization_unverified'
+        else:
+            state, reason = 'EXECUTABLE', None
+        return dict(state=state, reason=reason, depth=depth,
+                    support=dict(status='DEFERRED', reason='full_terrain_diagnostics_on_demand',
+                                 terrain_certified=False),
+                    check_mode='fast_live_depth_body_sweep',
+                    diagnostic_tool='inspect_geometry' if state != 'EXECUTABLE' else None)
+
     def assess_step(self, angle=0.):
         from . import terrain
         key=round(float(angle),6)

@@ -4,6 +4,7 @@ import math
 import time
 
 from .spatial import angle_delta, relative_pose_error
+from .safety import forward_probe
 
 
 class LocalMotionController:
@@ -95,7 +96,7 @@ class LocalMotionController:
 
     @staticmethod
     def next_step_state(geometry):
-        return geometry.assess_step()
+        return forward_probe(geometry)
 
     def validate(self, runtime, path, resume=False, uncertain_straight=False):
         r = runtime
@@ -155,11 +156,15 @@ class LocalMotionController:
             check = self.next_step_state(geometry)
             if check['state'] == 'BLOCKED':
                 return dict(status='BLOCKED', reason=check['reason'],
-                    safety=dict(diagnostic,terrain_evidence=check['support']),
+                    suggestion='inspect_geometry_if_obstacle_cause_is_unclear',
+                    information_options=['inspect_geometry','turn_and_observe'],
+                    safety=dict(diagnostic,terrain_evidence=check['support'],
+                                check_mode=check.get('check_mode')),
                     validation=validation, original_target=list(endpoint))
             if check['state'] == 'NEEDS_VIEW':
                 return self.needs_view(check['reason'],
-                    safety=dict(diagnostic,terrain_evidence=check['support']),
+                    safety=dict(diagnostic,terrain_evidence=check['support'],
+                                check_mode=check.get('check_mode')),
                     validation=validation, original_target=list(endpoint))
         segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
         segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],

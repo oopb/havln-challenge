@@ -14,7 +14,7 @@ from .local_motion_controller import LocalMotionController
 from .observation import array_hash, frame_info
 from .perception import Geometry, Observation
 from .progress import verify_progress, current_visual_evidence
-from .safety import check_action
+from .safety import check_action, forward_probe
 from .waypoint import generate_waypoints, goal_relation
 from .motion import estimate_translation, landing_support
 from .spatial import goal_estimate
@@ -102,7 +102,7 @@ class ToolExecutor:
             diagnostics = previous.get('directions', [])
         else:
             diagnostics = []
-            generate_waypoints(self.geometry(), self.config['waypoint_distance'], diagnostics)
+            generate_waypoints(self.geometry(), self.config['waypoint_distance'], diagnostics, probe=True)
         record = self.memory.observe(observation, pose, diagnostics)
         if self.record_observation and record is not previous:
             self.record_observation(record, observation)
@@ -222,7 +222,7 @@ class ToolExecutor:
         # created by get_waypoint_candidates, not by the atomic executor.
         geometry = self.geometry() if action == 'MOVE_FORWARD' else None
         diagnostics, candidates = [], []
-        safety_check = geometry.assess_step() if geometry is not None else None
+        safety_check = forward_probe(geometry) if geometry is not None else None
         front = safety_check['depth'] if safety_check is not None else None
         allowed, reason = check_action(action, geometry)
         if allowed is None:
@@ -263,10 +263,7 @@ class ToolExecutor:
             feedback['semantic_direction_mismatch']=(motion['status']=='ESTIMATED' and
                 direction in ('DOWN','UP') and direction != expected)
             alert_reason=('motion_estimate_unknown' if motion['status']!='ESTIMATED' else
-                'measured_direction_opposes_subgoal' if feedback['semantic_direction_mismatch'] else
-                'measured_vertical_conflicts_with_local_support' if abs(motion['translation_m']['y_up']-
-                    (geometry.assess_step()['support'].get('end_height_m',0)-geometry.assess_step()['support'].get('initial_height_m',0)))
-                    >self.camera.max_step_height+motion.get('uncertainty_m',0) else None)
+                'measured_direction_opposes_subgoal' if feedback['semantic_direction_mismatch'] else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
@@ -374,7 +371,7 @@ class ToolExecutor:
             base = list(range(-int(self.camera.hfov / 2 / stride), int(self.camera.hfov / 2 / stride) + 1))
             angles = [i * stride for i in base] + [g['current_estimate']['bearing_deg'] for g in groundings]
             angles = sorted(set(round(a, 4) for a in angles))
-        candidates = generate_waypoints(geometry, self.config['waypoint_distance'], diagnostics, angles)
+        candidates = generate_waypoints(geometry, self.config['waypoint_distance'], diagnostics, angles, probe=True)
         # Offer extra depth-goal distance variants, without selecting one for the LLM.
         for candidate in list(candidates):
             for grounding in groundings:
@@ -450,7 +447,8 @@ class ToolExecutor:
             unknown_space='outside_current_fov_and_unmeasured_depth',
             map_connectivity=self.memory.traversed_routes(),
             association_exclusions=excluded,
-            safety_state=dict(visible_floor=landing_support(geometry), humans=geometry.human_status,
+            safety_state=dict(visible_floor=dict(status='DEFERRED',
+                reason='inspect_geometry_for_full_terrain_diagnostics'), humans=geometry.human_status,
                 authorization='requires_new_checks_before_every_move', dynamic_motion_prediction='UNAVAILABLE'),
             goal_status='GOAL_RELEVANT' if any(p['goal_association'] for p in paths) else 'GOAL_DIRECTION_UNKNOWN',
             goal_localization_status='GROUNDING_UNCERTAIN' if excluded else 'AVAILABLE' if groundings else 'UNKNOWN',

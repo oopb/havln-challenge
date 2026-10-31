@@ -14,6 +14,7 @@ from .grounding import project_grounding
 from .progress import current_visual_evidence, stair_motion_direction
 from .motion import registered_action
 from .tools import ToolExecutor
+from .safety import forward_probe
 from .spatial import validity
 from .contracts import registry
 from .active_observation import ObservationController
@@ -476,7 +477,7 @@ class AgentRuntime(ToolExecutor):
             for path in offered:
                 path.update(bearing_deg=math.degrees(path['angle']), range_m=path['distance'],
                     source_observation_id=path['source']['observation_id'],
-                    first_step=geometry.assess_step(path['angle'])['state'])
+                    first_step=forward_probe(geometry, path['angle'])['state'])
                 self.paths[path['id']].update(path)
             offered_ids = {p['id'] for p in offered}
             for path in generated:
