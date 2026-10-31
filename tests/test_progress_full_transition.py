@@ -18,7 +18,8 @@ def action(index,dy,motion):
             observation_after='o%d'%(index+1),
             rgbd_motion=dict(status='ESTIMATED',
                 vertical_motion=motion,uncertainty_m=.02,
-                translation_m=dict(y_up=dy,z_forward=.25))))
+                translation_m=dict(y_up=dy,z_forward=.25)),
+            landing_support=dict(status='SUPPORTED' if motion=='LEVEL' else 'NOT_EVALUATED')))
 
 
 def grounding(observation_id,landing=False):
