@@ -51,6 +51,7 @@ class FastProbeRuntimeTests(unittest.TestCase):
         runner.done=False
         runner.stop_reason=None
         runner.tool_id='tool_0000'
+        runner.active_subgoal_id='sg_0'
         runner.context_version='test'
         runner.motion_policy='LOCAL_TERRAIN'
         runner.semantic_motion_policy='DESCEND_STAIRS'
