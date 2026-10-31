@@ -223,6 +223,7 @@ class ActiveObservationTests(unittest.TestCase):
         second=ObservationController(r).scan(
             'Find a corridor',['corridor'],'left',30)
         self.assertEqual(second['outcome'],'REPEATED_SEARCH_NO_NEW_VIEW')
+        self.assertEqual(second['status'],'NO_NEW_INFORMATION')
         self.assertEqual(second['covered_turn_deg'],0)
         self.assertFalse(second['usable_for_live_safety'])
         self.assertEqual(len(r.step_calls),2)

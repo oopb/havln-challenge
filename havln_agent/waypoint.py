@@ -29,6 +29,23 @@ def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
                 relevant=not reasons, vertical_motion_verified=False)
 
 
+def rank_candidates(paths, purpose='explore'):
+    """Rank grounded approaches by measured goal distance, not turn convenience.
+
+    Geometry is only a local executability preview. Ranking must not mistake
+    the smallest camera rotation for the best semantic approach. Exploration
+    with no goal association still prefers short turns to limit wasted actions.
+    """
+    def gain(path):
+        return max((a['distance_before_m'] - a['distance_after_m']
+                    for a in path.get('goal_association', [])
+                    if a.get('relevant')), default=0.0)
+    return sorted(paths, key=lambda p: (
+        p.get('first_step') != 'EXECUTABLE',
+        -gain(p) if purpose == 'approach_landmark' else 0.0,
+        abs(p['angle'])))
+
+
 def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None, probe=False):
     # Only offer directions reachable by the actual discrete TURN action.
     # A 7.5-degree candidate with a 15-degree robot TURN was falsely labelled

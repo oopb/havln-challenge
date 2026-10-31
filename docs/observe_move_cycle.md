@@ -87,3 +87,19 @@ available with inspect_geometry and VLM-grounding/landing-evidence tools.
 Unknown-depth or occupied fast probes stop MOVE and return the evidence for
 NavigationAgent to decide whether deeper inspection is useful. Real Geometry
 and ToolExecutor integration regressions cover these paths.
+
+
+## Observation-efficiency audit
+
+Passive observation capture now computes only the forward live-depth status,
+rather than eagerly probing all 5-13 turn directions on each new RGB-D frame.
+The explicit `get_waypoint_candidates` tool retains the full calibrated
+multi-bearing candidate probe and the per-forward collision check is unchanged.
+
+For a grounded semantic target, the five candidate slots prioritize greater
+estimated target-distance reduction; ungrounded exploratory previews still
+prefer short turns. This only sorts offered options, not an autonomous planner.
+
+Identical recently completed active scans now return `NO_NEW_INFORMATION`
+rather than `OK`, so the agent sees that replaying an identical observation
+has no information value. New views after translation remain available.

@@ -15,6 +15,7 @@ from .progress import current_visual_evidence, stair_motion_direction
 from .motion import registered_action
 from .tools import ToolExecutor
 from .safety import forward_probe
+from .waypoint import rank_candidates
 from .spatial import validity
 from .contracts import registry
 from .active_observation import ObservationController
@@ -465,9 +466,9 @@ class AgentRuntime(ToolExecutor):
                 for path in paths:
                     path.update(type='GOAL_WAYPOINT',objective=dict(purpose='approach_landmark',target=target,
                         completes_language_goal=False))
-            # Keep the agent's semantic choice. Describe safety and alignment,
-            # but do not silently select a target or override a blocked view.
-            paths.sort(key=lambda p:(p.get('first_step')!='EXECUTABLE',abs(p['angle'])))
+            # Preserve genuine semantic goal progress in the shortlist. The
+            # model still chooses one candidate; no autonomous route policy.
+            paths = rank_candidates(paths, purpose)
             offered=paths[:5]
             straight = next((p for p in paths if abs(p['angle']) < 1e-6), None)
             if straight and straight.get('first_step')=='EXECUTABLE' and straight not in offered:

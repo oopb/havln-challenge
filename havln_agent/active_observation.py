@@ -131,7 +131,7 @@ class ObservationController:
                     or previous.get('start_depth_hash')!=start_view.get('depth_hash')
                     or now-previous.get('started_monotonic',-1e9)>20):
                 continue
-            return dict(status='OK',outcome='REPEATED_SEARCH_NO_NEW_VIEW',
+            return dict(status='NO_NEW_INFORMATION',outcome='REPEATED_SEARCH_NO_NEW_VIEW',
                 reason='identical_static_scan_recently_completed',
                 covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
                 previous_outcome=previous['outcome'],
