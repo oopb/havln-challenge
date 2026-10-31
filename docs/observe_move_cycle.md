@@ -103,3 +103,7 @@ prefer short turns. This only sorts offered options, not an autonomous planner.
 Identical recently completed active scans now return `NO_NEW_INFORMATION`
 rather than `OK`, so the agent sees that replaying an identical observation
 has no information value. New views after translation remain available.
+
+## Model-controlled movement decisions
+
+NavigationAgent chooses among short candidates using task, visual evidence, observed depth and history. PARTIAL landmark grounding, missing entry localization, and target-distance/direction compatibility no longer veto otherwise executable local candidates. Both goal-associated and unassociated short paths are offered, with evidence and uncertainty, and the model decides whether to try a direction. The physical controller still refuses measured collision, incomplete depth, or human occupancy, and the independent verifier still checks task completion. Estimated motion that opposes task direction is logged as evidence, not an automatic forced change of plan.

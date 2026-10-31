@@ -92,6 +92,9 @@ class FastProbeRuntimeTests(unittest.TestCase):
         self.assertEqual(result['feedback']['landing_support']['status'],
                          'SUPPORTED' if landing_expected else 'NOT_EVALUATED')
         self.assertEqual(land.call_count,1 if landing_expected else 0)
+        if motion_direction == 'UP':
+            self.assertTrue(result['feedback']['semantic_direction_mismatch'])
+            self.assertNotIn('motion_alert',result['feedback'])
         geometry.movement_probe.assert_called_once_with(0.0)
         self.assertEqual(runner.record_step.call_args.args[0]['safety']['scope'],
                          'current_depth_next_step_body_only')
@@ -101,6 +104,9 @@ class FastProbeRuntimeTests(unittest.TestCase):
 
     def test_stair_landing_level_motion_keeps_required_completion_evidence(self):
         self.run_forward('LEVEL',True)
+
+    def test_motion_opposite_to_task_is_not_auto_motion_alert(self):
+        self.run_forward('UP',False)
 
 
 if __name__=='__main__':

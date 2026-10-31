@@ -10,8 +10,7 @@ def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
     stairs = grounding['semantic']['stair_direction'] != 'not_stairs'
     wanted = stair_motion_direction(language_goal)
     direction = grounding.get('stair_direction', 'UNKNOWN')
-    if wanted and direction not in (wanted,'UNKNOWN'):
-        reasons.append('stair_direction_unknown' if direction == 'UNKNOWN' else 'stair_direction_opposes_language_goal')
+    # Direction compatibility is descriptive evidence, not a movement veto.
     error = abs(math.degrees(candidate['angle']) - estimate['bearing_deg'])
     x, z = estimate['x_right_m'], estimate['z_forward_m']
     end_x, end_z = -math.sin(candidate['angle']) * candidate['distance'], math.cos(candidate['angle']) * candidate['distance']
@@ -20,13 +19,18 @@ def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
         reasons.append('bearing_not_toward_goal')
     if before - after <= 0:
         reasons.append('candidate_does_not_reduce_goal_distance')
+    compatibility = ('CONFIRMED' if direction == wanted else
+        'CONFLICTING_EVIDENCE' if direction not in ('UNKNOWN',wanted)
+        else 'UNKNOWN') if wanted else 'NOT_REQUIRED'
     return dict(grounding_id=grounding['grounding_id'], target=grounding['target'],
                 bearing_error_degrees=error, distance_before_m=before, distance_after_m=after,
                 relative_pose_uncertainty_m=estimate['uncertainty_m'],
                 relation='possibly_approaches_entry' if stairs else 'possibly_approaches_visible_target',
-                direction_compatibility=('CONFIRMED' if direction == wanted else 'UNKNOWN') if wanted else 'NOT_REQUIRED',
+                direction_compatibility=compatibility,
                 terrain_support='not_certified', rejection_reasons=reasons,
-                relevant=not reasons, vertical_motion_verified=False)
+                relevant=not reasons, vertical_motion_verified=False,
+                decision_authority='navigation_agent',
+                relevance_is_evidence_not_motion_permission=True)
 
 
 def rank_candidates(paths, purpose='explore'):
