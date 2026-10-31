@@ -226,8 +226,9 @@ class ToolExecutor:
         front = safety_check['depth'] if safety_check is not None else None
         # Reuse the ONE already computed live depth report. Do not run the
         # same body sweep again via check_action() before executing the step.
-        reason = safety_check['reason'] if safety_check and safety_check['state'] != 'EXECUTABLE' else None
-        if reason is not None:
+        rejected = bool(safety_check and safety_check['state'] != 'EXECUTABLE')
+        reason = (safety_check.get('reason') or 'depth_probe_not_executable') if rejected else None
+        if rejected:
             self.memory.event('safety_rejected',requested_action=action,reason=reason,geometry=front)
             return dict(status=safety_check['state'],reason=reason,safety=dict(front,
                 execution_allowed=False,execution_reason=reason,terrain_evidence=safety_check['support']))
