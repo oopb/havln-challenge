@@ -180,7 +180,10 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     near = [g for g in origins if g['entry']['status'] == 'LOCALIZED'
             and g['entry'].get('depth_spread_metres', 99) < 0.6
             and math.hypot(g['entry']['x_right'], g['entry']['z_forward']) <= arrival_distance]
-    origin = near[0] if near else origins[-1]
+    # A later re-grounding is not the physical start of the descent. With no
+    # precisely located entry, retain the EARLIEST eligible observation so
+    # subsequent registered motion remains attributable to this subgoal.
+    origin = near[0] if near else origins[0]
     if 'visual_direction_conflicts_with_tread_depth' in origin.get('stair_evidence', {}).get('direction_rejection_reasons', []):
         contradictions.append('stair_direction_geometry_conflicts')
     details['source_observation_ids'].append(origin['source']['observation_id'])

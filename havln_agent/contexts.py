@@ -171,6 +171,9 @@ def navigation_context(runtime):
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
+        action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
+            forward_step_m=runtime.camera.forward_step,
+            direct_segment_max_m=3.0),
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,

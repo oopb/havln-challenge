@@ -23,6 +23,7 @@ on:
       - "tests/test_model_driven_direction.py"
       - "tests/test_model_control_runtime.py"
       - "tests/test_progress_alternative_evidence.py"
+      - "tests/test_progress_full_transition.py"
       - "havln_agent/export.py"
       - "tests/test_local_exploration.py"
       - "tests/test_scheduler_liveness.py"
@@ -81,6 +82,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_model_control_runtime.py' -v
       - name: Check independent stair transition proof alternatives
         run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
+      - name: Check full registered-motion transition with partial entry
+        run: python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
       - name: Check post-block local exploration and scan deduplication
         run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
       - name: Check evidence-state liveness and bounded API decisions
