@@ -266,4 +266,5 @@ class MemoryService(MemoryRecords):
     def snapshot(self):
         return dict(super().snapshot(),current_place_id=self.current_place_id,places=list(self.places.values()),
             keyframes=list(self.keyframes.values()),landmarks=list(self.landmarks.values()),routes=self._routes(),
-            dynamic_records=copy.deepcopy(self.dynamic),dynamic=self.dynamic_summaries(),hypotheses=self.notes)
+            dynamic_records=copy.deepcopy(self.dynamic),dynamic=self.dynamic_summaries(),hypotheses=self.notes,
+            navigation_summary=self.navigation_summary())

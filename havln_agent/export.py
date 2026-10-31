@@ -326,7 +326,9 @@ def auto_archive(output_dir, archive_dir=None, frames='critical', interval=25):
     """
     output = Path(output_dir).resolve()
     traces = output / 'traces'
-    if not traces.is_dir() or not any(p.is_dir() for p in traces.iterdir()):
+    has_episodes = traces.is_dir() and any(p.is_dir() for p in traces.iterdir())
+    has_startup_logs = any(output.glob('worker-*.log')) or (output/'export_metadata.json').is_file()
+    if not has_episodes and not has_startup_logs:
         return None
     archive_root = (Path(archive_dir).resolve() if archive_dir is not None else
                     output.parent / 'diagnostic-archives')
@@ -340,7 +342,8 @@ def auto_archive(output_dir, archive_dir=None, frames='critical', interval=25):
         number += 1
     temporary = destination.with_suffix('.zip.partial')
     try:
-        manifest = pack(output, temporary, frames=frames, interval=interval)
+        manifest = pack(output, temporary, frames=frames, interval=interval,
+                        allow_empty=not has_episodes)
         import os
         os.replace(temporary, destination)
     finally:

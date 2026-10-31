@@ -131,7 +131,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         row = dict(episode_id=episode_id, actions=actions)
         check_rows([row], [episode_id])
         pose = runtime.motion_controller.pose()
-        summary = dict(episode_id=episode_id, architecture='agent_v5', steps=len(actions),
+        summary = dict(episode_id=episode_id, architecture='observe_move_v1', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
             api_failure=runtime.api_failure, navigation_liveness=runtime.navigation_liveness,
             seconds=time.monotonic()-started,

@@ -54,3 +54,5 @@ RGB-D frames; cache and worker task configuration files are omitted.
 
 `--worker-task` and `--preflight` do not archive. Failed simulator startup
 before any trace directory exists cannot produce a useful archive.
+
+Audit follow-up: waypoint summaries preserve goal-distance and direction alignment; successful and failed entrypoint runs are covered by tests; startup worker logs are archived even without an episode trace. Architecture IDs match in episode summaries and runtime state.
