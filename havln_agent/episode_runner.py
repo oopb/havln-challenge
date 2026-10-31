@@ -87,7 +87,8 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
 
     def record_event(record):
         append('events', record)
-        if record['event'] in ('navigation_decision', 'task_plan', 'finish_verdict'):
+        if record['event'] in ('navigation_decision', 'task_plan', 'finish_verdict',
+                               'navigation_mode_changed'):
             append('state', runtime.state_view())
     runtime.event_callback = record_event
     try:

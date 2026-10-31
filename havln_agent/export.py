@@ -1,5 +1,6 @@
 """Independent scan workers and episode resume, reusing official export checks."""
 import argparse
+from datetime import datetime, timezone
 from contextlib import nullcontext
 from dataclasses import asdict
 import gzip
@@ -20,6 +21,7 @@ import yaml
 
 from .api_client import APIClient, canonical, PROMPT_VERSION, model_endpoints
 from .episode_runner import run_episode
+from scripts.pack_agent_diagnostics import pack
 from .habitat_adapter import camera_from_config, environment_config, runtime_imports
 from .progress_monitor import ProgressMonitor
 from scripts.export_cma_submission import SOURCE_REVISION, SPLITS, atomic_json, check_rows, sha256
@@ -246,7 +248,8 @@ def export(args, config):
     state = json.loads((source / '.release.json').read_text())
     if state['revision'] != SOURCE_REVISION or any(sha256(source / p) != digest for p, digest in state['files'].items()):
         raise ValueError('Pinned public sources have been modified')
-    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, ROOT / 'scripts/export_cma_submission.py']
+    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, ROOT / 'scripts/export_cma_submission.py',
+           ROOT / 'scripts/pack_agent_diagnostics.py']
     try:
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
                                   capture_output=True, text=True)
@@ -314,6 +317,41 @@ def export(args, config):
     print('Completed Agent export: ' + str(output))
 
 
+def auto_archive(output_dir, archive_dir=None, frames='critical', interval=25):
+    """Archive traces automatically after success or failure, on the mounted host volume.
+
+    The archive lives NEXT TO the output runs, never in the run itself. Worker
+    subprocesses never invoke this function. Each archive is immutable and
+    preserves the original run directory; crashes can still be diagnosed.
+    """
+    output = Path(output_dir).resolve()
+    traces = output / 'traces'
+    if not traces.is_dir() or not any(p.is_dir() for p in traces.iterdir()):
+        return None
+    archive_root = (Path(archive_dir).resolve() if archive_dir is not None else
+                    output.parent / 'diagnostic-archives')
+    archive_root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    prefix = output.name + '-' + timestamp
+    destination = archive_root / (prefix + '-diagnostic.zip')
+    number = 1
+    while destination.exists() or destination.with_suffix('.zip.partial').exists():
+        destination = archive_root / (prefix + '-' + str(number) + '-diagnostic.zip')
+        number += 1
+    temporary = destination.with_suffix('.zip.partial')
+    try:
+        manifest = pack(output, temporary, frames=frames, interval=interval)
+        import os
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print('[HA-VLN] Diagnostics archived: ' + str(destination), flush=True)
+    for episode, values in manifest['episodes'].items():
+        print('[HA-VLN] %s: %s/%s RGB-D frames' % (
+            episode, values['included_frames'], values['total_frames']), flush=True)
+    return destination
+
+
 def preflight(args):
     # Report missing dependencies without importing or modifying the simulator.
     report = {'dependencies': {name: importlib.util.find_spec(name) is not None
@@ -354,6 +392,12 @@ def main():
     parser.add_argument('--progress-interval', type=float, default=3.0,
                         help='Terminal worker progress polling in seconds (default 3; 0 disables)')
     parser.add_argument('--worker-task', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--archive-dir', type=Path,
+                        help='Host-mounted diagnostic archive folder (default: sibling diagnostic-archives)')
+    parser.add_argument('--archive-frames', choices=['auto','critical','all','none'], default='auto',
+                        help='auto: all frames for single-episode smoke, critical for larger runs')
+    parser.add_argument('--no-auto-archive', action='store_true',
+                        help='Disable automatic diagnostic archive on completion/failure')
     args = parser.parse_args()
     if args.worker_task:
         run_worker(args.worker_task)
@@ -375,4 +419,19 @@ def main():
         if not 1 <= args.max_steps <= 500:
             parser.error('--max-steps must be between 1 and 500')
         config['runtime']['max_steps'] = args.max_steps
-    export(args, config)
+    failure = None
+    try:
+        export(args, config)
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        if not args.no_auto_archive:
+            frames = ('all' if args.episode_limit == 1 else 'critical') if args.archive_frames == 'auto' else args.archive_frames
+            try:
+                auto_archive(args.output_dir, args.archive_dir, frames=frames)
+            except Exception as archive_error:
+                if failure is None:
+                    raise
+                print('[HA-VLN] Diagnostic archive FAILED while handling run error: '
+                      + str(archive_error), file=sys.stderr, flush=True)

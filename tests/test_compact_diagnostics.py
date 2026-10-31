@@ -94,6 +94,23 @@ class CompactTraceTests(unittest.TestCase):
         self.assertNotIn('PRIVATE_API_TOKEN_X',(self.trace/'api.jsonl').read_text())
         self.assertFalse((self.trace/'api-navigation_agent.jsonl').exists())
 
+    def test_archive_contains_diagnostic_event_logs_but_no_worker_task(self):
+        (self.trace/'memory.jsonl').write_text('{}\n')
+        (self.trace/'safety.jsonl').write_text('{}\n')
+        (self.trace/'progress.jsonl').write_text('{}\n')
+        (self.trace/'task_planner.jsonl').write_text('{}\n')
+        (self.root/'worker-0.log').write_text('worker finished\n')
+        (self.root/'worker-0.json').write_text('{\"config\":\"internal\"}')
+        archive=Path(self.temp.name)/'logs.zip'
+        pack(self.root,archive)
+        with ZipFile(archive) as z:
+            names=set(z.namelist())
+        prefix='sample-run/traces/val_seen-1/'
+        for name in ('memory.jsonl','safety.jsonl','progress.jsonl','task_planner.jsonl'):
+            self.assertIn(prefix+name,names)
+        self.assertIn('sample-run/worker-0.log',names)
+        self.assertNotIn('sample-run/worker-0.json',names)
+
     def test_full_and_no_frames_modes(self):
         full=Path(self.temp.name)/'full.zip'
         none=Path(self.temp.name)/'none.zip'

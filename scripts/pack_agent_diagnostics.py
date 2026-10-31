@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
-TRACE_NAMES = ('api.jsonl','navigation_agent.jsonl','tools.jsonl','steps.jsonl',
-    'events.jsonl','memory.json','episode.json','summary.json','result.json',
-    'final_state.json','failure.json','state.jsonl','visual_perception.jsonl')
+TRACE_NAMES = ('api.jsonl','navigation_agent.jsonl','task_planner.jsonl',
+    'visual_perception.jsonl','tools.jsonl','steps.jsonl','safety.jsonl',
+    'progress.jsonl','events.jsonl','memory.jsonl','memory.json','episode.json',
+    'summary.json','result.json','final_state.json','failure.json','state.jsonl')
 
 
 def read(path, default):
@@ -37,6 +38,10 @@ def select_frames(trace, interval):
         if i%interval==0 or action.get('action')=='MOVE_FORWARD':
             indices.update((max(0,i-1),i,min(i+1,len(steps)-1)))
     for i in indices:
+        for key in ('input_file','post_file'):
+            filename = steps[i].get(key)
+            if filename:
+                chosen.add(Path(filename).stem)
         for key in ('observation','post_observation'):
             meta = steps[i].get(key) or {}
             ident = hashes.get((meta.get('rgb_hash'),meta.get('depth_hash')))
@@ -60,7 +65,11 @@ def pack(root, destination, frames='critical', interval=25):
         raise ValueError('missing traces directory')
     episodes=sorted(x for x in trace_root.iterdir() if x.is_dir())
     if not episodes:raise ValueError('no episode directories')
-    files=set(root.glob('*.json'))
+    # Worker task JSON may expose per-model settings and is not needed for diagnosis.
+    files={p for p in root.glob('*.json')
+           if not (p.name.startswith('worker-') and p.name.endswith('.json')
+                   and '.progress.' not in p.name)}
+    files.update(root.glob('worker-*.log'))
     files.update((root/'shards').glob('*.json'))
     catalog={}
     for trace in episodes:
