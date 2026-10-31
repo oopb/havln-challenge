@@ -14,7 +14,7 @@ from .local_motion_controller import LocalMotionController
 from .observation import array_hash, frame_info
 from .perception import Geometry, Observation
 from .progress import verify_progress, current_visual_evidence
-from .safety import check_action, forward_probe
+from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
 from .motion import estimate_translation, landing_support
 from .spatial import goal_estimate
@@ -224,8 +224,10 @@ class ToolExecutor:
         diagnostics, candidates = [], []
         safety_check = forward_probe(geometry) if geometry is not None else None
         front = safety_check['depth'] if safety_check is not None else None
-        allowed, reason = check_action(action, geometry)
-        if allowed is None:
+        # Reuse the ONE already computed live depth report. Do not run the
+        # same body sweep again via check_action() before executing the step.
+        reason = safety_check['reason'] if safety_check and safety_check['state'] != 'EXECUTABLE' else None
+        if reason is not None:
             self.memory.event('safety_rejected',requested_action=action,reason=reason,geometry=front)
             return dict(status=safety_check['state'],reason=reason,safety=dict(front,
                 execution_allowed=False,execution_reason=reason,terrain_evidence=safety_check['support']))
@@ -248,8 +250,16 @@ class ToolExecutor:
             observation_before=before_record['observation_id'],
             observation_after=None,
             rgbd_motion=motion,
-            landing_support=landing_support(Geometry(after, self.camera, self.config['safety_margin']))
-            if action == 'MOVE_FORWARD' else None,
+            # Only level translation on a stair subgoal needs landing-plane
+            # evidence for semantic completion. No full terrain fit is used
+            # to approve the forward action (already executed above).
+            landing_support=(landing_support(Geometry(after, self.camera, self.config['safety_margin']))
+                if action == 'MOVE_FORWARD' and motion and motion['status'] == 'ESTIMATED'
+                and motion['vertical_motion'] == 'LEVEL'
+                and getattr(self, 'semantic_motion_policy', self.motion_policy)
+                    in ('DESCEND_STAIRS','ASCEND_STAIRS')
+                else dict(status='NOT_EVALUATED', reason='not_a_stair_landing_candidate',
+                          terrain_certified=False) if action == 'MOVE_FORWARD' else None),
             goal_association=(self.memory.active_attempt['target'].get('goal_association', [])
                               if self.memory.active_attempt else []),
         )
@@ -292,7 +302,7 @@ class ToolExecutor:
                 front=front,
                 captured_at=before.captured_at,
                 checked_at=checked_at,
-                scope=('current_depth_next_step_body_and_local_support' if geometry is not None
+                scope=('current_depth_next_step_body_only' if geometry is not None
                        else 'no_forward_displacement'),
                 human_semantics=geometry.human_status if geometry is not None else None,
                 terrain_evidence=safety_check['support'] if safety_check is not None else None,

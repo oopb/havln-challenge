@@ -53,9 +53,10 @@ def generate_waypoints(geometry, max_distance, diagnostics=None, angles=None, pr
                           requires_post_turn_recheck=(degrees != 0))
         if diagnostics is not None:
             diagnostics.append(diagnostic)
-        # Only genuinely executable first-step directions become navigation
-        # waypoints. NEEDS_VIEW describes a camera turn needed to investigate,
-        # not an authorized 0.5m route. Otherwise the navigator can spend all
+        # Only currently depth-executable first-step directions become
+        # waypoints in probe mode. Terrain traversability is NOT certified.
+        # NEEDS_VIEW describes a camera turn needed to investigate, not an
+        # authorized 0.5m route. Otherwise the navigator can spend all
         # 100 actions turning toward unverified paths without attempting motion.
         if check['state'] == 'EXECUTABLE':
             candidates.append(
