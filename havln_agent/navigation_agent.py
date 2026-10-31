@@ -52,7 +52,8 @@ OBSERVE_PROMPT = (
     'current RGB-D and refresh geometry/grounding. Camera-only view directions '
     'are not executable movement waypoints. '
     'Treat NO_NEW_INFORMATION and REPEATED_SEARCH_NO_NEW_VIEW as evidence of '
-    'low information value, not absolute prohibitions. Prefer 
+    'low information value, not absolute prohibitions. Use purpose=intentional_recheck '
+    'or force_recheck=true when an older view must actually be rechecked. Prefer 
     'evaluating a short available waypoint or an actually different view. '
     'Observe whenever it materially informs the decision, even during a paused '
     'local route; the route will be revalidated before it resumes. '

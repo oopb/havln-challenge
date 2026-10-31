@@ -63,17 +63,17 @@ class FakeRuntime:
 
 
 class LivenessTests(unittest.TestCase):
-    def test_zero_evidence_loop_reviews_once_then_finishes(self):
-        runtime=FakeRuntime(unchanged=3)
+    def test_zero_evidence_loop_is_advisory_then_uses_real_inference_budget(self):
+        runtime=FakeRuntime(decision_limit=12,unchanged=3)
         events=[]
         run(runtime,lambda role,event:events.append((role,event)))
-        self.assertEqual(runtime.termination,'navigation_no_new_evidence')
-        self.assertEqual(runtime.reviews,1)
-        self.assertEqual(len(runtime.calls),6)
-        self.assertEqual(runtime.decisions,7) # six navigations + one review
-        self.assertEqual(runtime.navigation_liveness['consecutive_unchanged_decisions'],6)
-        self.assertEqual(len([e for e in runtime.events if e['event']=='navigation_liveness_review']),1)
-        self.assertEqual(len([e for e in runtime.events if e['event']=='navigation_liveness_exhausted']),1)
+        self.assertEqual(runtime.termination,'navigation_inference_budget_exhausted')
+        self.assertEqual(runtime.reviews,0)
+        self.assertEqual(len(runtime.calls),12)
+        self.assertEqual(runtime.decisions,12)
+        self.assertEqual(runtime.navigation_liveness['consecutive_unchanged_decisions'],12)
+        self.assertEqual(len([e for e in runtime.events if e['event']=='navigation_liveness_advisory']),1)
+        self.assertFalse(any(e['event']=='navigation_liveness_exhausted' for e in runtime.events))
 
     def test_real_action_resets_stall_even_when_model_repeats_tool(self):
         runtime=FakeRuntime(unchanged=3)
@@ -94,7 +94,7 @@ class LivenessTests(unittest.TestCase):
         self.assertEqual(guard.feedback(runtime),'REVIEW_NO_PROGRESS')
         runtime.plan_revision+=1
         self.assertIsNone(guard.feedback(runtime))
-        self.assertEqual(guard.feedback(runtime),'NO_EVIDENCE_PROGRESS')
+        self.assertIsNone(guard.feedback(runtime))
 
     def test_inference_budget_limits_tool_calls_even_if_no_evidence_limit_high(self):
         runtime=FakeRuntime(decision_limit=4,unchanged=100)

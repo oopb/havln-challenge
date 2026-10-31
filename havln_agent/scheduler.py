@@ -121,12 +121,10 @@ def run(runtime,append):
             outcome=liveness.feedback(runtime)
             runtime.navigation_liveness=liveness.diagnostic(runtime)
             if outcome=='REVIEW_NO_PROGRESS':
-                # Offer the high-level planner ONE evidence-linked opportunity
-                # to revise the route. Do not reset merely because it rewrites
-                # the same semantic goal in different words.
-                runtime.task_review_requested=True
-                runtime.review_reason='repeated_decisions_without_new_sensor_or_action_evidence'
-                runtime.event('navigation_liveness_review',source='scheduler',
+                # Advisory, not a scheduler-owned task review or forced STOP.
+                # The model sees decision_liveness and can request a review
+                # itself, change its movement intent or keep investigating.
+                runtime.event('navigation_liveness_advisory',source='scheduler',
                     diagnostic=runtime.navigation_liveness,
                     last_tool=result.get('tool'),last_status=result.get('status'))
         except BudgetExceeded:

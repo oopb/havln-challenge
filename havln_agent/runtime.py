@@ -261,9 +261,10 @@ class AgentRuntime(ToolExecutor):
             return self.motion_controller.needs_view('human_localization_unverified')
 
     def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
-                          checkpoint_degrees=30, look='none'):
+                          checkpoint_degrees=30, look='none', force_recheck=False):
         return self.observation_controller.scan(
-            objective, target_types, direction, sweep_degrees, checkpoint_degrees, look)
+            objective, target_types, direction, sweep_degrees, checkpoint_degrees,
+            look, force_recheck=force_recheck)
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
@@ -300,9 +301,8 @@ class AgentRuntime(ToolExecutor):
                     for d in (previous or {}).get('directions',[]))
                 dynamic_allowed=False
                 if purpose=='dynamic_recheck':
-                    # Dynamic obstacles may genuinely move. Permit an explicit
-                    # revisit, but throttle equivalent sectors using wall time
-                    # instead of blindly replaying every LLM request.
+                    # Explicit model-directed dynamic rechecks should not be
+                    # blocked by a fixed wall-clock timer.
                     target_heading=endpoint.get('heading_deg',0)
                     target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
                     now=time.monotonic()
@@ -311,10 +311,8 @@ class AgentRuntime(ToolExecutor):
                         and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
                         and abs(e.get('target_pitch_deg',0)-target_pitch)<1
                         and same_stance(e.get('pose'),self.motion_controller.pose())]
-                    dynamic_allowed=(not previous_checks
-                        or now-previous_checks[-1].get('time_monotonic',now)<0
-                        or now-previous_checks[-1].get('time_monotonic',now)>=60)
-                if not previously_free and not dynamic_allowed:
+                    dynamic_allowed=True
+                if not previously_free and not dynamic_allowed and purpose != 'intentional_recheck':
                     return dict(status='NO_NEW_INFORMATION',
                         reason='repeated_camera_sector_after_measured_block',
                         no_new_information_reason='all_requested_absolute_views_already_recorded',

@@ -122,14 +122,15 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertEqual(len(r.visual_perception.calls),3)
         self.assertEqual(r.pitch_deg,-30.)
 
-    def test_active_navigation_requires_explicit_cancel(self):
-        r=FakeRuntime([])
+    def test_active_navigation_can_pause_to_scan_without_cancelling_path(self):
+        r=FakeRuntime([visual(found=True)])
         r.motion_controller.target=(.2,.3)
         result=ObservationController(r).scan(
-            'Find stairs',['stair_entry'],'left',90)
-        self.assertEqual(result['status'],'INVALID_ARGUMENTS')
-        self.assertFalse(r.step_calls)
-        self.assertFalse(r.memory.observation_searches)
+            'Find stairs',['stair_entry'],'left',30)
+        self.assertEqual(result['status'],'OK')
+        self.assertTrue(result['paused_waypoint_preserved'])
+        self.assertEqual(r.motion_controller.target,(.2,.3))
+        self.assertEqual(r.step_calls,['TURN_LEFT','TURN_LEFT'])
 
     def test_budget_limit_preserves_partial_scan(self):
         r=FakeRuntime([],fail_on=2)
