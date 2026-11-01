@@ -283,12 +283,29 @@ class ToolExecutor:
                     observation_before=feedback['observation_before'],
                     observation_after=feedback['observation_after'],
                     source='registered_rgbd_estimate_only')
-            alert_reason=('motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
+            # Some Habitat MOVE_FORWARD receipts produce byte-identical RGB-D
+            # before/after (e.g. 13 actions in the provided eval-batch4 trace).
+            # Treat this as an explicit *no observed motion* stall rather than
+            # an ordinary odometry gap. Never infer a collision or ground-truth
+            # translation from this alone; but halt this local route so the
+            # model can pick a different short motion/observation strategy.
+            alert_reason=(
+                'no_observed_frame_change_after_forward'
+                if motion['status'] != 'ESTIMATED' and not changed_rgb and not changed_depth
+                else 'motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
                     measurement=motion, displacement_verified=False)
                 feedback['motion_alert'] = alert
+                if alert_reason == 'no_observed_frame_change_after_forward':
+                    alert['movement_evidence'] = 'identical_rgb_and_depth_hashes_after_executed_forward'
+                    alert['collision_proven'] = False
+                    self.memory.event('no_observed_forward_motion',
+                        action_step=alert['action_step'],
+                        observation_before=feedback['observation_before'],
+                        observation_after=feedback['observation_after'],
+                        motion_epoch=self.motion_controller.pose().get('motion_epoch'))
                 self.memory.event('motion_attention_required', **alert)
         self.done = bool(done) or action == 'STOP'
         record = dict(
@@ -608,6 +625,9 @@ class ToolExecutor:
                     attempt['forward_actions'] += 1
                 alert = result['feedback'].get('motion_alert') or {}
                 if alert and alert.get('reason') != 'motion_estimate_unknown':
+                    # A byte-identical post-step camera view cannot justify a
+                    # blind second forward. Yield to NavigationAgent instead
+                    # of exhausting the same relative-forward horizon.
                     self.executable_segment = None
                     return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
                         alert['reason'], motion_alert=alert)

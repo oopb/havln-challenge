@@ -1,6 +1,8 @@
 """Independent scan workers and episode resume, reusing official export checks."""
 import argparse
 from datetime import datetime, timezone
+from contextlib import contextmanager
+import fcntl
 from contextlib import nullcontext, redirect_stdout, ExitStack
 from dataclasses import asdict
 import gzip
@@ -29,6 +31,31 @@ from scripts.export_cma_submission import SOURCE_REVISION, SPLITS, atomic_json, 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / 'scripts/run_api_agent.py'
 DEFAULT_MANIFEST = Path('/opt/havln-challenge/codabench/phase1/reference/public_reference_manifest.json')
+
+
+@contextmanager
+def exclusive_run_directory(output_dir):
+    """Single writer for both evaluation and assembly; released by the OS.
+
+    fcntl locks are non-blocking and process-scoped. Worker subprocesses do not
+    inherit the parent file descriptor (Popen closes unrelated descriptors).
+    A stale lock FILE is harmless after process exit/crash.
+    """
+    output=Path(output_dir).resolve()
+    output.mkdir(parents=True,exist_ok=True)
+    path=output/'.agent-export.lock'
+    with path.open('a+') as handle:
+        try:
+            fcntl.flock(handle.fileno(),fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError(
+                'Another export/assemble process owns this output directory: '
+                +str(output)+'. Do not run overlapping batches in one directory. '
+                'Use a new --output-dir or finish the existing run.') from None
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(),fcntl.LOCK_UN)
 
 
 def load_config(path):
@@ -622,7 +649,8 @@ def main():
                 stack.enter_context(redirect_stdout(stack.enter_context(open(os.devnull,'w'))))
             failure = None
             try:
-                assemble_saved_workers(args.output_dir)
+                with exclusive_run_directory(args.output_dir):
+                    assemble_saved_workers(args.output_dir)
             except BaseException as error:
                 failure = error
                 raise
@@ -661,7 +689,8 @@ def main():
             stack.enter_context(redirect_stdout(null_output))
         failure = None
         try:
-            export(args, config)
+            with exclusive_run_directory(args.output_dir):
+                export(args, config)
         except BaseException as error:
             failure = error
             raise

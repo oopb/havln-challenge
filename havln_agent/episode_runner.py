@@ -167,6 +167,12 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             safety_rejections=sum(e['event']=='safety_rejected' for e in runtime.memory.events),
             motion_registration_states=dict(Counter((a['result'].get('rgbd_motion') or {}).get('status','UNKNOWN')
                 for a in runtime.memory.actions if a['action']=='MOVE_FORWARD')),
+            forward_actions_with_no_observed_frame_change=sum(
+                a['action']=='MOVE_FORWARD'
+                and a['result'].get('rgb_changed') is False
+                and a['result'].get('depth_changed') is False
+                for a in runtime.memory.actions),
+            no_motion_feedback_scope='identical_post_forward_rgbd_hashes_not_collision_proof',
             geometry_rejection_reasons=dict(Counter(d.get('reason') for r in runtime.memory.tool_ledger
                 for d in r['result'].get('directions',[]) if d.get('status')!='EXECUTABLE')),
             visual_tool_errors=sum(r['result']['status']=='TOOL_ERROR' and r['result'].get('recoverable',False)
