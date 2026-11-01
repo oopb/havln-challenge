@@ -292,14 +292,21 @@ class ToolExecutor:
             alert_reason=(
                 'no_observed_frame_change_after_forward'
                 if motion['status'] != 'ESTIMATED' and not changed_rgb and not changed_depth
+                else 'no_resolvable_forward_translation'
+                if motion['status'] != 'ESTIMATED'
+                and motion.get('reason') == 'no_resolvable_forward_translation'
                 else 'motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
                     measurement=motion, displacement_verified=False)
                 feedback['motion_alert'] = alert
-                if alert_reason == 'no_observed_frame_change_after_forward':
-                    alert['movement_evidence'] = 'identical_rgb_and_depth_hashes_after_executed_forward'
+                if alert_reason in ('no_observed_frame_change_after_forward',
+                                    'no_resolvable_forward_translation'):
+                    alert['movement_evidence'] = (
+                        'identical_rgb_and_depth_hashes_after_executed_forward'
+                        if alert_reason == 'no_observed_frame_change_after_forward'
+                        else 'well_distributed_static_rgbd_matches_near_zero_displacement')
                     alert['collision_proven'] = False
                     self.memory.event('no_observed_forward_motion',
                         action_step=alert['action_step'],

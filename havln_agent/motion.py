@@ -134,9 +134,19 @@ def estimate_translation(before, after, camera, excluded_before=None):
     x, y, z = map(float, translation)
     pitch = np.radians(before.pitch_deg)
     y, z = y*np.cos(pitch)+z*np.sin(pitch), z*np.cos(pitch)-y*np.sin(pitch)
+    result['rejected_translation_hypothesis_m'] = dict(
+        x_right=x,y_up=y,z_forward=z)
     if abs(x) > camera.forward_step * 0.4 or not 0.02 < z < camera.forward_step * 1.6 \
             or abs(y) > camera.forward_step+camera.max_step_height:
-        result['reason'] = 'inconsistent_with_forward_camera_motion'
+        # Strong, broadly distributed stationary matches are distinguishable
+        # from a generic matching failure. Never treat commanded movement as
+        # ground truth, and never call this a certified collision.
+        stationary = (abs(x) <= .03 and abs(y) <= .035 and abs(z) <= .025
+            and count >= 12 and float(coverage.min()) >= .4 and
+            len(tiles) >= 6 and depth_span >= .3)
+        result['reason'] = ('no_resolvable_forward_translation'
+                            if stationary else 'inconsistent_with_forward_camera_motion')
+        result['stationary_image_hypothesis'] = bool(stationary)
         return result
     result.update(status='ESTIMATED', reason=None, translation_m=dict(x_right=x, y_up=y, z_forward=z),
                   uncertainty_m=3 * sigma, spatial_tiles=len(tiles),

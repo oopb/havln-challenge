@@ -161,7 +161,13 @@ class MemoryService(MemoryRecords):
                 vertical_motion=motion.get('vertical_motion', 'UNKNOWN') if estimated else 'UNKNOWN',
                 vertical_change_m_est=round(displacement.get('y_up', 0), 3) if estimated else None,
                 uncertainty_m=round(motion.get('uncertainty_m', 0), 3) if estimated else None,
-                semantic_direction_mismatch=bool(feedback.get('semantic_direction_mismatch', False))))
+                semantic_direction_mismatch=bool(feedback.get('semantic_direction_mismatch', False)),
+                visual_change=bool(feedback.get('visual_change',False)),
+                registration_reason=motion.get('reason'),
+                no_resolvable_forward_progress=(not estimated and
+                    motion.get('reason') == 'no_resolvable_forward_translation'),
+                rejected_translation_hypothesis_m=(motion.get(
+                    'rejected_translation_hypothesis_m') if not estimated else None)))
         desired = ('DOWN' if policy == 'DESCEND_STAIRS' else
                    'UP' if policy == 'ASCEND_STAIRS' else 'LEVEL')
         successes = [item for item in motions if item['vertical_motion'] == desired]
