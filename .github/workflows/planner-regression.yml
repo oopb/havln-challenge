@@ -27,6 +27,7 @@ on:
       - "tests/test_direct_motion_execution.py"
       - "tests/test_progress_alternative_evidence.py"
       - "tests/test_progress_full_transition.py"
+      - "tests/test_cross_epoch_landmark_proof.py"
       - "tests/test_cross_epoch_evidence_and_task_control.py"
       - "tests/test_turn_verification_without_visual_scene.py"
       - "tests/test_direct_navigation_failure_memory.py"
@@ -96,6 +97,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
       - name: Check full registered-motion transition with partial entry
         run: python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
+      - name: Check landmark crossing cannot leak pose across epochs
+        run: python -m unittest discover -s tests -p 'test_cross_epoch_landmark_proof.py' -v
       - name: Check cross-epoch motion proof and model-owned semantic progression
         run: python -m unittest discover -s tests -p 'test_cross_epoch_evidence_and_task_control.py' -v
       - name: Check turn-only evidence and final arrival safeguards
