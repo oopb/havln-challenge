@@ -96,6 +96,20 @@ class OptionalOdometryTests(unittest.TestCase):
         self.assertEqual(output['status'],'UNKNOWN')
         fallback.assert_not_called()
 
+    def test_unavailable_optional_backend_is_visible_in_diagnostics(self):
+        primary=dict(status='UNKNOWN',reason='inconsistent_or_dynamic_correspondences',
+                     observation_pair={})
+        with patch('havln_agent.motion._estimate_patch_translation',
+                   return_value=primary), \
+             patch('havln_agent.motion_fallback.estimate_orb_translation',
+                   return_value=dict(status='UNAVAILABLE',
+                                     reason='opencv_python_not_available')):
+            output=estimate_translation(None,None,self.camera)
+        self.assertIs(output,primary)
+        self.assertEqual(output['secondary_odometry']['status'],'UNAVAILABLE')
+        self.assertEqual(output['secondary_odometry']['reason'],
+                         'opencv_python_not_available')
+
     def test_missing_opencv_preserves_existing_unknown(self):
         primary=dict(status='UNKNOWN',reason='insufficient_static_correspondences',
                      observation_pair={})
