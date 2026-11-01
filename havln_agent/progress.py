@@ -158,8 +158,8 @@ def registered_motion_history(memory, subgoal=None):
     No commanded-only step or visual text is converted into movement evidence.
     """
     index = memory.task.current_subgoal_index if subgoal is None else subgoal
-    observed = {o['observation_id']:o for o in memory.observations}
-    start = memory.task.subgoal_started
+    observed = {o['observation_id']:o for o in getattr(memory,'observations',[])}
+    start = getattr(memory.task,'subgoal_started',0)
     rows = []
     for action in memory.actions:
         if (action.get('step', -1) < start or action.get('action') != 'MOVE_FORWARD'
