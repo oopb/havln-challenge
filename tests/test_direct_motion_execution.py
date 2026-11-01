@@ -39,6 +39,7 @@ def runtime():
     r.stop_reason=None
     r.active_waypoint_id=None
     r.active_subgoal_id='sg_0'
+    r.plan_revision=1
     r.motion_policy='LEVEL_ONLY'
     r.semantic_motion_policy='LEVEL_ONLY'
     r.context_version='test'
