@@ -129,6 +129,10 @@ def planner_context(runtime):
     task=runtime.memory.task
     index=task.current_subgoal_index
     return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','success_criteria')),
+        stair_replay=stair_replay_hint(runtime.memory),
+        registered_motion_evidence={key:value for key,value in
+            registered_motion_history(runtime.memory).items() if key!='rows'},
+        provisional_transitions=getattr(task,'provisional_transitions',[])[-3:],
         verified_milestones=[dict(subgoal=m['subgoal'],source_observation_ids=m.get('observation_ids',[])[-2:],
             executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported']) for m in task.completion_evidence[-3:]],
         new_evidence=runtime.memory.recall_observation(runtime.memory.current_place_id,
