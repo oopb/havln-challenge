@@ -60,6 +60,37 @@ class FullTransitionRegression(unittest.TestCase):
         self.assertEqual(details['source_observation_ids'][0],'o0')
         self.assertIn('sensor_verified_stair_to_landing_transition',supported)
 
+    def test_later_unknown_forward_does_not_erase_completed_stair_transition(self):
+        observations=[observed(i) for i in range(6)]
+        observations[4].update(rgb_hash='r4',depth_hash='d4',
+                               pose=dict(motion_epoch=0,heading=0.))
+        land=grounding('o4',landing=True)
+        land['source'].update(image_scope='current',rgb_hash='r4',
+                              depth_hash='d4',pose=dict(motion_epoch=0,heading=0.))
+        unknown=action(4,0.,'UNKNOWN')
+        unknown['result']['rgbd_motion']['status']='UNKNOWN'
+        mem=SimpleNamespace(
+            camera=SimpleNamespace(forward_step=.25),
+            task=SimpleNamespace(current_subgoal_index=0,subgoal_started=0),
+            current=dict(pose=dict(motion_epoch=1),observation_id='o5'),
+            observations=observations,
+            scene_history=[dict(source=dict(observation_id='o0',subgoal=0),
+                scene=dict(landmarks=[dict(name='Descending staircase')]))],
+            groundings=[land],
+            actions=[action(0,-.23,'DOWN'),action(1,-.23,'DOWN'),
+                     action(2,0.,'LEVEL'),action(3,0.,'LEVEL'),unknown])
+        with patch('havln_agent.progress.registered_action',
+                   side_effect=lambda a,obs:a['result']['rgbd_motion']['status']=='ESTIMATED'), \
+             patch('havln_agent.progress.current_visual_evidence',return_value=False):
+            stage,supported,missing,contradictions,details=_stair_evidence(
+                mem,dict(action='descend stairs',landmark='stairs',target='stairs'),
+                {'o0','o4'},0.,10.,1.25)
+        self.assertEqual(stage,'COMPLETED',msg=str((supported,missing,details)))
+        self.assertEqual(details['evidence_cutoff_step'],4)
+        self.assertEqual(details['motion_steps'],[0,1,2,3])
+        self.assertTrue(details['continuous_rgbd_motion_chain'])
+        self.assertIn('sensor_verified_stair_to_landing_transition',supported)
+
     def test_later_camera_view_does_not_erase_proven_past_landing(self):
         # Regression: a historical landing's source hashes are authentic,
         # even if the robot later looks somewhere else before verification.
