@@ -101,7 +101,8 @@ def estimate_orb_translation(before, after, camera, excluded_before=None):
     try:
         import cv2
     except (ImportError, OSError):
-        return None
+        return dict(status='UNAVAILABLE',reason='opencv_python_not_available',
+                    source='orb_mutual_rgbd_static_consensus')
     if after.captured_at < before.captured_at:
         return None
     try:
