@@ -262,7 +262,7 @@ def _historical_stair_scene_anchor(memory, goal, observed, first_down_step):
             continue
         names=[str(item.get('name','')) for item in scene.get('landmarks',[])]
         stair_names=[name for name in names if re.search(
-            r'\\b(?:stair(?:case|well|way|s)?|treads?|steps?)\\b', name, re.I)]
+            r'\b(?:stair(?:case|well|way|s)?|treads?|steps?)\b', name, re.I)]
         if stair_names:
             candidates.append((obs['step'],ident,stair_names[0]))
     if not candidates:

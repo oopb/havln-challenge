@@ -37,6 +37,28 @@ def grounding(observation_id,landing=False):
 
 
 class FullTransitionRegression(unittest.TestCase):
+    def test_early_scene_and_later_grounded_landing_can_verify_independent_transition(self):
+        memory=SimpleNamespace(
+            camera=SimpleNamespace(forward_step=.25),
+            task=SimpleNamespace(current_subgoal_index=0,subgoal_started=0),
+            current=dict(pose=dict(motion_epoch=0)),
+            observations=[observed(i) for i in range(5)],
+            scene_history=[dict(
+                source=dict(observation_id='o0',subgoal=0),
+                scene=dict(landmarks=[dict(name='Descending wooden staircase')]))],
+            groundings=[grounding('o4',landing=True)],
+            actions=[action(0,-.23,'DOWN'),action(1,-.23,'DOWN'),
+                     action(2,0.,'LEVEL'),action(3,0.,'LEVEL')])
+        goal=dict(action='descend stairs',landmark='stairs',target='stairs')
+        with patch('havln_agent.progress.registered_action',return_value=True), \
+             patch('havln_agent.progress.current_visual_evidence',return_value=True):
+            stage,supported,missing,contradictions,details=_stair_evidence(
+                memory,goal,{'o0','o4'},0.,20.,1.25)
+        self.assertEqual(stage,'COMPLETED',msg=str((supported,missing,details)))
+        self.assertTrue(details['independent_stair_to_landing_transition'])
+        self.assertEqual(details['source_observation_ids'][0],'o0')
+        self.assertIn('sensor_verified_stair_to_landing_transition',supported)
+
     def test_partial_entry_and_later_landing_still_preserve_initial_motion(self):
         memory=SimpleNamespace(
             camera=SimpleNamespace(forward_step=.25),
