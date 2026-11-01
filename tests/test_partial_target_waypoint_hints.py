@@ -35,6 +35,7 @@ class PartialWaypointHintTests(unittest.TestCase):
             grounding['source']['rgb_hash']='old-rgb'
         e.memory=SimpleNamespace(
             groundings=[grounding],tool_ledger=[],experiences=[],
+            traversed_routes=lambda:[],
             current=dict(revisit_matches=[]),
             task=SimpleNamespace(current_subgoal_index=1,subgoals=[
                 dict(action='Turn left'),dict(action='Approach open doorway')]))
