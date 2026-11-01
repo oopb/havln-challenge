@@ -72,7 +72,7 @@ def _features(observation, camera, excluded=None):
     return np.asarray(descriptors), np.asarray(xyz), np.asarray(pixels)
 
 
-def estimate_translation(before, after, camera, excluded_before=None):
+def _estimate_patch_translation(before, after, camera, excluded_before=None):
     result = dict(status='UNKNOWN', source='mutual_rgb_patches_and_measured_depth',
                   frame='previous_robot_camera', position_verified=False,
                   vertical_motion='UNKNOWN', reason='insufficient_static_correspondences')
@@ -153,6 +153,37 @@ def estimate_translation(before, after, camera, excluded_before=None):
                   uncertainty_kind='registration_residual_not_calibrated_ground_truth',
                   vertical_motion='UP' if y > 3 * sigma else 'DOWN' if y < -3 * sigma else 'LEVEL')
     return result
+
+
+
+def estimate_translation(before, after, camera, excluded_before=None):
+    """Two independent RGB-D estimators, with fail-closed evidence precedence.
+
+    Existing patch matching remains primary and authoritative when accepted.
+    ORB is attempted only for an UNKNOWN result, never to override a strong
+    stationary result, nonchronological pair or actual observed odometry.
+    Missing OpenCV leaves behavior identical to the former patch estimator.
+    """
+    primary = _estimate_patch_translation(before,after,camera,excluded_before)
+    if primary['status']=='ESTIMATED' or primary.get('reason') in (
+            'no_resolvable_forward_translation','non_chronological_rgbd_pair'):
+        return primary
+    from .motion_fallback import estimate_orb_translation
+    secondary = estimate_orb_translation(before,after,camera,excluded_before)
+    if secondary is None:
+        return primary
+    primary['secondary_odometry'] = {k:secondary.get(k) for k in (
+        'status','reason','matches','inliers','inlier_fraction','spatial_coverage',
+        'spatial_tiles','depth_span_m','residual_rms_m','measured_hypothesis_m')
+        if k in secondary}
+    if secondary['status'] != 'ESTIMATED':
+        return primary
+    # A candidate does not displace public RGB-D pairing or manufacture an
+    # odometry bridge: both estimators were run on this identical frame pair.
+    secondary['observation_pair'] = primary['observation_pair']
+    secondary['primary_estimator_failure_reason'] = primary.get('reason')
+    secondary['position_verified'] = False
+    return secondary
 
 
 def landing_support(geometry, box=None):
