@@ -253,7 +253,11 @@ def assemble(output, jobs, expected, fingerprint, diagnostic):
         for job in jobs:
             if job['split'] != split:
                 continue
-            payload = json.loads((output / 'shards' / (job['key'] + '.json')).read_text())
+            shard_file = output / 'shards' / (job['key'] + '.json')
+            if not shard_file.is_file():
+                raise ValueError('Missing completed shard %s; check worker-*.log and '
+                                 'worker-*.progress.json before assembling' % shard_file)
+            payload = json.loads(shard_file.read_text())
             if payload['fingerprint'] != fingerprint:
                 raise ValueError('Shard provenance differs')
             check_rows(payload['rows'], job['ids'])
@@ -274,6 +278,65 @@ def assemble(output, jobs, expected, fingerprint, diagnostic):
             archive.write(output / filename, arcname=filename)
     subprocess.run(['havln-validate', str(partial)], check=True)
     os.replace(partial, output / 'submission.zip')
+
+
+def assemble_saved_workers(output):
+    """Finish a completed batch using its ORIGINAL run's provenance and shards.
+
+    This recovery path never imports Habitat or calls a model. The previous
+    run's code fingerprint is intentionally preserved: updating the packaging
+    code must not require rerunning expensive finished episodes.
+    """
+    output = Path(output).resolve()
+    receipt = output / 'export_metadata.json'
+    if not receipt.is_file():
+        raise ValueError('No original export_metadata.json in %s' % output)
+    metadata = json.loads(receipt.read_text())
+    identity = metadata.get('identity') or {}
+    execution = metadata.get('execution') or {}
+    workers = execution.get('workers') or []
+    fingerprint = metadata.get('fingerprint')
+    splits = identity.get('splits') or []
+    if not fingerprint or not splits or not workers:
+        raise ValueError('Missing original run identity or worker manifest; cannot recover safely')
+    jobs = []
+    expected = {split: [] for split in splits}
+    worker_ids = set()
+    for worker in workers:
+        worker_id = str(worker['worker_id'])
+        if worker_id in worker_ids:
+            raise ValueError('Duplicate worker in original run manifest: '+worker_id)
+        worker_ids.add(worker_id)
+        task_file = output / ('worker-' + worker_id + '.json')
+        if not task_file.is_file():
+            raise ValueError('Missing original worker task: %s' % task_file)
+        task = json.loads(task_file.read_text())
+        if task.get('fingerprint') != fingerprint:
+            raise ValueError('Saved worker fingerprint differs: %s' % worker_id)
+        if str(Path(task['output']).resolve()) != str(output):
+            raise ValueError('Saved worker output directory differs: %s' % worker_id)
+        assigned = task.get('jobs') or []
+        if sum(len(j['ids']) for j in assigned) != worker['episode_count']:
+            raise ValueError('Original worker manifest episode count differs: %s' % worker_id)
+        for job in assigned:
+            if job['split'] not in expected:
+                raise ValueError('Unknown split in saved shard: '+job['split'])
+            jobs.append(job)
+            expected[job['split']].extend(job['ids'])
+    if len({j['key'] for j in jobs}) != len(jobs):
+        raise ValueError('Duplicate shard key in saved workers')
+    for split, ids in expected.items():
+        if len(set(ids)) != len(ids):
+            raise ValueError('Duplicate episode assignment in saved split: '+split)
+        if identity.get('episode_limit') is not None and len(ids) != identity['episode_limit']:
+            raise ValueError('Saved episode coverage differs from original requested limit: '+split)
+    # This checks every individual shard, provenance, complete coverage and
+    # each exported action sequence before marking the run complete.
+    assemble(output,jobs,expected,fingerprint,metadata['diagnostic'])
+    metadata.update(complete=True,episodes={s:len(ids) for s,ids in expected.items()})
+    atomic_json(receipt,metadata)
+    print('Recovered Agent export from saved shards: '+str(output))
+    return metadata
 
 
 def export(args, config):
@@ -366,7 +429,17 @@ def export(args, config):
                 process.wait()
         for log in logs:
             log.close()
-    assemble(output, jobs, expected, fingerprint, diagnostic)
+    # Workers save the DISTRIBUTED shard keys (including -partNNNN).
+    # Do not assemble against the original pre-distribution scene names.
+    assigned_jobs = [job for slot in slots for job in slot['jobs']]
+    if len({job['key'] for job in assigned_jobs}) != len(assigned_jobs):
+        raise ValueError('Duplicate shard key in batch assignment')
+    for split, ids in expected.items():
+        assigned = [episode_id for job in assigned_jobs if job['split']==split
+                    for episode_id in job['ids']]
+        if len(assigned) != len(set(assigned)) or set(assigned) != set(ids):
+            raise ValueError('Batch split has missing or duplicate episode assignments: '+split)
+    assemble(output, assigned_jobs, expected, fingerprint, diagnostic)
     metadata.update(complete=True, episodes={split: len(ids) for split, ids in expected.items()})
     atomic_json(receipt, metadata)
     print('Completed Agent export: ' + str(output))
@@ -457,6 +530,10 @@ def main():
     parser.add_argument('--progress-interval', type=float, default=3.0,
                         help='Terminal worker progress polling in seconds (default 3; 0 disables)')
     parser.add_argument('--worker-task', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--assemble-only', action='store_true',
+                        help='Recover final split JSON from the original worker shards, '
+                             'without running Habitat or calling APIs. Compatible with '
+                             'an earlier code fingerprint after a packager-only update.')
     parser.add_argument('--archive-dir', type=Path,
                         help='Host-mounted diagnostic archive folder (default: sibling diagnostic-archives)')
     parser.add_argument('--archive-frames', choices=['auto','critical','all','none'], default='auto',
@@ -471,6 +548,30 @@ def main():
         sys.exit(0 if preflight(args) else 1)
     if args.output_dir is None:
         parser.error('--output-dir is required')
+    if args.assemble_only:
+        # Do this BEFORE load_config / runtime imports / fingerprint checks.
+        # It is explicitly for an already paid-for run from a previous commit.
+        with ExitStack() as stack:
+            if args.terminal_log == 'off':
+                stack.enter_context(redirect_stdout(stack.enter_context(open(os.devnull,'w'))))
+            failure = None
+            try:
+                assemble_saved_workers(args.output_dir)
+            except BaseException as error:
+                failure = error
+                raise
+            finally:
+                if not args.no_auto_archive:
+                    try:
+                        auto_archive(args.output_dir,args.archive_dir,
+                                     frames='critical' if args.archive_frames=='auto'
+                                     else args.archive_frames)
+                    except Exception as error:
+                        if failure is None:
+                            raise
+                        print('[HA-VLN] Recovery archive failed: '+str(error),
+                              file=sys.stderr,flush=True)
+        return
     if not math.isfinite(args.progress_interval) or not 0 <= args.progress_interval <= 60:
         parser.error('--progress-interval must be a finite number between 0 and 60 seconds')
     if args.episode_limit is not None and args.episode_limit < 1:
