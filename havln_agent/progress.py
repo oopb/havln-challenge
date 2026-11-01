@@ -15,7 +15,9 @@ def stair_motion_direction(goal):
     The same classification drives planning criteria, motion policy and progress
     checks. A 'descent' milestone must not silently become a LEVEL_ONLY route.
     """
-    action = str(goal.get('action', ''))
+    # Prefer the actual source instruction over a planner paraphrase, which
+    # can mention a previous landmark or next maneuver in its description.
+    action = str(goal.get('source_text') or goal.get('action', ''))
     if re.search(r'\b(?:descend\w*|descent|downstairs)\b|\b(?:go|walk|move|head)\s+down\s+(?:the\s+)?stairs\b|下楼|下台阶', action, re.I):
         return 'DOWN'
     if re.search(r'\b(?:ascend\w*|ascent|upstairs)\b|\b(?:go|walk|move|head)\s+up\s+(?:the\s+)?stairs\b|上楼|上台阶', action, re.I):
@@ -25,12 +27,15 @@ def stair_motion_direction(goal):
 
 def turn_requirement(goal):
     """Derive an orientation-only requirement from the existing language action."""
-    text = goal.get('action', '').lower()
+    # The task's original sentence has precedence: a planner label such as
+    # "entry into foyer following right turn" describes a translation, not
+    # the preceding orientation milestone.
+    text = str(goal.get('source_text') or goal.get('action', '')).lower()
     text = re.sub(r'\brightward\b','right',text)
     text = re.sub(r'\bleftward\b','left',text)
-    if not re.search(r'\b(turn|rotate|orient|orientation|reorient|face|facing|heading)\b|转身|掉头|左转|右转|调整朝向', text):
+    if not re.search(r'\b(turn\w*|rotat\w*|orient\w*|reorient\w*|face|facing|heading)\b|转身|掉头|左转|右转|调整朝向', text):
         return None
-    if re.search(r'\b(walk|proceed|enter|exit|pass|continue|descend|ascend|climb|advance|go|move|follow)\b|然后.*走', text):
+    if re.search(r'\b(walk\w*|proceed\w*|enter\w*|exit\w*|pass\w*|continue\w*|descend\w*|ascend\w*|climb\w*|advance\w*|go|move\w*|follow\w*)\b|然后.*走', text):
         return None
     around = bool(re.search(r'\baround\b|opposite|reverse|转身|掉头', text))
     explicit = re.search(r'(\d+(?:\.\d+)?)\s*(?:degrees?|°|度)', text)
@@ -50,7 +55,11 @@ def requires_landmark_crossing(goal):
     generic path phrasing must not invent a landmark_passed predicate.
     """
     text = str(goal.get('action', ''))
-    explicit = bool(re.search(r'\b(?:enter|entry|pass|cross)\b|穿过|经过|进入', text, re.I))
+    # Entering a named room must NOT require passing the *room landmark*
+    # behind the robot. Crossing a specifically referenced boundary does.
+    # Requiring "foyer behind robot" is an impossible success condition for
+    # ordinary enter-the-foyer instructions.
+    explicit = bool(re.search(r'\b(?:pass|cross)\b|穿过|经过', text, re.I))
     if explicit:
         return True
     if re.search(r'\bthrough\b', text, re.I):
@@ -62,7 +71,8 @@ def turn_evidence(memory):
     task = memory.task
     goal = task.subgoals[task.current_subgoal_index] if task.current_subgoal_index < len(task.subgoals) else {}
     requirement = turn_requirement(goal)
-    actions = [a for a in memory.actions if a['step'] >= task.subgoal_started]
+    actions = [a for a in memory.actions if a['step'] >= task.subgoal_started
+               and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index]
     signed = sum((1 if a['action'] == 'TURN_LEFT' else -1 if a['action'] == 'TURN_RIGHT' else 0)
                  * memory.camera.turn_angle for a in actions)
     degrees = (signed + 180) % 360 - 180
@@ -145,6 +155,50 @@ def _verified_stair_transition(directed, landing_steps, landings, displacement,
     )
 
 
+def registered_motion_history(memory, subgoal=None):
+    """Replay tamper-evident RGB-D action receipts independent of pose epoch.
+
+    An epoch reset invalidates old *coordinates*, not already measured motion.
+    No commanded-only step or visual text is converted into movement evidence.
+    """
+    index = memory.task.current_subgoal_index if subgoal is None else subgoal
+    observed = {o['observation_id']:o for o in getattr(memory,'observations',[])}
+    start = getattr(memory.task,'subgoal_start_steps',{}).get(
+        str(index),getattr(memory.task,'subgoal_started',0))
+    rows = []
+    for action in memory.actions:
+        if (action.get('step', -1) < start or action.get('action') != 'MOVE_FORWARD'
+                or action.get('subgoal',index) != index):
+            continue
+        motion = action.get('result',{}).get('rgbd_motion') or {}
+        valid = registered_action(action,observed)
+        translation = motion.get('translation_m') or {}
+        rows.append(dict(
+            step=action['step'],motion_epoch=action['pose'].get('motion_epoch',0),
+            status='ESTIMATED' if valid else 'UNKNOWN',
+            vertical_motion=motion.get('vertical_motion','UNKNOWN') if valid else 'UNKNOWN',
+            delta_y_m=translation.get('y_up') if valid else None,
+            uncertainty_m=motion.get('uncertainty_m') if valid else None,
+            observation_before=action['result'].get('observation_before'),
+            observation_after=action['result'].get('observation_after'),
+            unknown_reason=motion.get('reason') if not valid else None))
+    down = [r for r in rows if r['status']=='ESTIMATED' and
+            r['delta_y_m'] < -r['uncertainty_m']]
+    up = [r for r in rows if r['status']=='ESTIMATED' and
+          r['delta_y_m'] > r['uncertainty_m']]
+    return dict(
+        recorded_forward_steps=len(rows),
+        registered_forward_steps=sum(r['status']=='ESTIMATED' for r in rows),
+        unknown_forward_steps=[r['step'] for r in rows if r['status']=='UNKNOWN'],
+        registered_down_steps=[r['step'] for r in down],
+        registered_up_steps=[r['step'] for r in up],
+        observed_downward_m_est=round(-sum(r['delta_y_m'] for r in down),4),
+        observed_upward_m_est=round(sum(r['delta_y_m'] for r in up),4),
+        motion_epochs=sorted({r['motion_epoch'] for r in rows}),
+        rows=rows,
+        caveat='historical_registered_local_motion_not_global_pose_or_landing_proof')
+
+
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     down = stair_motion_direction(goal) == 'DOWN'
     direction, sign = ('down', -1) if down else ('up', 1)
@@ -155,11 +209,14 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
                   and wanted & task_tokens(g['target']) and g['semantic']['confidence'] != 'low']
     origins = [g for g in groundings if g['semantic']['stair_direction'] in (direction, 'unknown')
                and g.get('semantic_presence', 'VISIBLE') == 'VISIBLE'
-               and (g['position']['status'] == 'LOCALIZED' or g['entry']['status'] == 'LOCALIZED')
-               and observed[g['source']['observation_id']]['step'] >= memory.task.subgoal_started
-               and g['source']['pose'].get('motion_epoch',0)==memory.current['pose'].get('motion_epoch',0)]
+               and (g['position']['status'] in ('LOCALIZED','PARTIAL')
+                    or g['entry']['status'] in ('LOCALIZED','PARTIAL'))
+               and g['source']['observation_id'] in observed
+               and observed[g['source']['observation_id']]['step'] >= memory.task.subgoal_started]
+    origins.sort(key=lambda g:observed[g['source']['observation_id']]['step'])
     supported, missing, contradictions = [], [], []
     details = dict(source_observation_ids=[], motion_steps=[], direction=direction)
+    details['historical_motion_evidence'] = registered_motion_history(memory)
     details['confirmed_phases'] = []
     visible = [g for g in memory.groundings if g['source']['subgoal'] == memory.task.current_subgoal_index
                and wanted & task_tokens(g['target']) and g['semantic'].get('target_visible')
@@ -174,7 +231,14 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         and a['result']['rgbd_motion']['status'] == 'UNKNOWN'
     })
     if not origins:
-        return 'NOT_STARTED', supported, ['localized_staircase_and_direction'], contradictions, details
+        # Metric movement can be historical fact even without a *semantic*
+        # landmark anchor. Mark it unattributed, never completed or false.
+        observed_motion = bool(details['historical_motion_evidence'][
+            'registered_'+direction+'_steps'])
+        if observed_motion:
+            supported.append('unattributed_registered_vertical_motion')
+        return ('IN_PROGRESS' if observed_motion else 'NOT_STARTED'), supported, [
+            'localized_staircase_and_direction'], contradictions, details
     if 'staircase_observed' not in supported:
         supported.append('staircase_observed')
     near = [g for g in origins if g['entry']['status'] == 'LOCALIZED'
@@ -183,15 +247,20 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     # A later re-grounding is not the physical start of the descent. With no
     # precisely located entry, retain the EARLIEST eligible observation so
     # subsequent registered motion remains attributable to this subgoal.
-    origin = near[0] if near else origins[0]
+    origin = origins[0]  # Earliest eligible observation; NEVER prefer a later entry box.
     if 'visual_direction_conflicts_with_tread_depth' in origin.get('stair_evidence', {}).get('direction_rejection_reasons', []):
         contradictions.append('stair_direction_geometry_conflicts')
     details['source_observation_ids'].append(origin['source']['observation_id'])
     origin_step = observed[origin['source']['observation_id']]['step']
+    details['anchor_after_measured_motion'] = any(
+        step < origin_step for step in details['historical_motion_evidence'][
+            'registered_'+direction+'_steps'])
+    if details['anchor_after_measured_motion']:
+        supported.append('historical_vertical_motion_before_semantic_anchor')
     entry = origin['entry']
     near_entry = (entry['status'] == 'LOCALIZED' and entry.get('depth_spread_metres', 99) < 0.6
                   and math.hypot(entry['x_right'], entry['z_forward']) <= arrival_distance)
-    if near_entry:
+    if near_entry or near:
         supported.append('localized_nearby_stair_entry')
         details['confirmed_phases'].append('FIND_STAIR_ENTRY')
     else:
@@ -199,18 +268,27 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     heading = origin['source']['pose']['heading'] + math.radians(
         entry.get('bearing_degrees', origin['position'].get('bearing_degrees', 0)))
     motions = [a for a in memory.actions if a['step'] >= origin_step and a['action'] == 'MOVE_FORWARD'
+               and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index
                and registered_action(a, observed)
                and abs(angle_delta(a['pose']['heading'], heading)) <= math.radians(45)]
     forward_window=[a for a in memory.actions if motions and origin_step<=a['step']<=motions[-1]['step']
-                    and a['action']=='MOVE_FORWARD']
+                    and a['action']=='MOVE_FORWARD'
+                    and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index]
     continuous=bool(motions) and [a['step'] for a in forward_window]==[a['step'] for a in motions]
     # TURN/LOOK and same-position RGB-D refreshes may lie between registered
     # steps. They change observations, never supply translation evidence.
+    # Continuity is a *proof* constraint, not a history-retention policy.
+    # Never compare absolute coordinates across different reanchor epochs.
     continuous=continuous and all(
-        observed[left['result']['observation_after']]['pose']['x']==observed[right['result']['observation_before']]['pose']['x']
+        left['pose'].get('motion_epoch',0)==right['pose'].get('motion_epoch',0)
+        and observed[left['result']['observation_after']]['pose'].get('motion_epoch',0)
+            == observed[right['result']['observation_before']]['pose'].get('motion_epoch',0)
+        and observed[left['result']['observation_after']]['pose']['x']==observed[right['result']['observation_before']]['pose']['x']
         and observed[left['result']['observation_after']]['pose']['z']==observed[right['result']['observation_before']]['pose']['z']
         for left,right in zip(motions,motions[1:]))
-    if motions and any(a['action'] == 'MOVE_FORWARD' and a['step'] > motions[-1]['step'] for a in memory.actions):
+    if motions and any(a['action'] == 'MOVE_FORWARD' and a['step'] > motions[-1]['step']
+                       and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index
+                       for a in memory.actions):
         continuous = False
     details['continuous_rgbd_motion_chain'] = continuous
     if motions and not continuous:
@@ -221,7 +299,7 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
                 -a['result']['rgbd_motion']['uncertainty_m']]
     if opposite:
         contradictions.append('registered_motion_opposes_stair_instruction')
-    if motions and near_entry:
+    if motions and (near_entry or near):
         supported.append('registered_movement_along_stair_direction')
         details['confirmed_phases'].append('APPROACHING_STAIRS')
     displacement = sum(sign * a['result']['rgbd_motion']['translation_m']['y_up'] for a in directed)
@@ -258,8 +336,13 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     travel = sum(a['result']['rgbd_motion']['translation_m']['z_forward'] *
                  math.cos(angle_delta(a['pose']['heading'], heading)) for a in motions)
     travel_error = sum(a['result']['rgbd_motion']['uncertainty_m'] for a in motions)
-    entry_distance = math.hypot(entry.get('x_right', 0), entry.get('z_forward', 0))
-    left_entry = near_entry and travel - travel_error > max(memory.camera.forward_step, entry_distance)
+    entry_for_distance = entry if near_entry else {}
+    entry_distance = math.hypot(entry_for_distance.get('x_right', 0),
+                                entry_for_distance.get('z_forward', 0))
+    # A later localized entrance from another epoch can support semantic
+    # recognition, NEVER prove metric travel away from the earlier entry.
+    left_entry = bool(near_entry) and continuous and (
+        travel - travel_error > max(memory.camera.forward_step, entry_distance))
     if left_entry and len(landing_steps) >= 2:
         supported.append('registered_exit_from_initial_stair_entry_region')
     else:
@@ -282,9 +365,16 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
             'registered_exit_from_initial_stair_entry_region')]
     elif descent and landings and len(landing_steps) >= 2 and left_entry and continuous and not contradictions:
         details['confirmed_phases'].append('ARRIVED_AT_LANDING')
-    if origin['source']['observation_id'] not in ids:
-        missing.append('cite_initial_stair_observation')
-    stage = 'IN_PROGRESS' if motions and near_entry else 'APPROACHING'
+    # Missing a citation for the first relevant view must not erase registered
+    # physical history. Require one cited *relevant* grounding to confirm
+    # semantic task completion, while exposing source IDs for recovery.
+    cited_grounding=any(g['source']['observation_id'] in ids for g in origins)
+    details['cited_grounding_observation_ids']=[g['source']['observation_id']
+                                                  for g in origins if g['source']['observation_id'] in ids]
+    if not cited_grounding:
+        missing.append('cite_stair_observation')
+    stage = ('IN_PROGRESS' if motions and near_entry
+             or details['anchor_after_measured_motion'] else 'APPROACHING')
     if descent and landings:
         stage = 'POSSIBLY_COMPLETED'
     if not missing and not contradictions:
@@ -315,6 +405,7 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
         estimates = [goal_estimate(g, memory, memory.current['pose'], now, max_age,
                                   static_max_age, human_max_age) for g in matches]
         actions = [a for a in memory.actions if a['step'] >= task.subgoal_started
+                   and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index
                    and a['result'].get('visual_change')]
         text = goal['action'].lower()
         stairs = stair_motion_direction(goal) is not None
@@ -382,6 +473,7 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
             phases=result.get('confirmed_phases',[])
             observed={o['observation_id']:o for o in memory.observations}
             registered=[a for a in memory.actions if a['step']>=task.subgoal_started
+                        and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index
                         and a['action']=='MOVE_FORWARD' and registered_action(a,observed)]
             criteria=goal.get('success_criteria',[])
             arrived='ARRIVED_AT_LANDING' in phases
@@ -407,8 +499,21 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
                                                 observation_ids=observation_ids,
                                                 executed_steps=result['evidence_details'].get('motion_steps', []),
                                                 verification=result.copy()))
-            task.current_subgoal_index += 1
-            task.subgoal_started = len(memory.actions)
+            # If the model had provisionally visited later subgoals, some may
+            # already be VERIFIED; do not re-run them. After the last goal,
+            # return to any unverified older milestone instead of entering an
+            # invalid no-goal state.
+            next_index = task.current_subgoal_index + 1
+            while next_index < len(task.subgoals) and next_index in task.completed_subgoals:
+                next_index += 1
+            if next_index == len(task.subgoals):
+                unresolved = [i for i in range(len(task.subgoals))
+                              if i not in task.completed_subgoals]
+                if unresolved:
+                    next_index = unresolved[0]
+            task.current_subgoal_index = next_index
+            task.subgoal_start_steps.setdefault(str(next_index),len(memory.actions))
+            task.subgoal_started = task.subgoal_start_steps[str(next_index)]
         elif result['status'] == 'RECORDED':
             task.progress_claims.append(dict(claim=claim, evidence=evidence, observation_ids=observation_ids,
                                             subgoal=task.current_subgoal_index, step=len(memory.actions)))
@@ -417,7 +522,9 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
     if result['missing']:
         result['information_options'] = ['ground_landmark', 'analyze_scene', 'query_task_memory', 'query_spatial_memory']
         if any('motion' in item or 'transition' in item or 'crossing' in item for item in result['missing']):
-            result['information_options'].extend(['get_waypoint_candidates', 'navigate_local'])
+            result['information_options'].extend(['get_waypoint_candidates',
+                'navigate_relative','navigate_to_pixel','navigate_local',
+                'select_subgoal'])
             result['evidence_details']['motion_evidence_precondition'] = (
                 'Only model-requested navigation with a justified path and live Safety approval can '
                 'produce motion evidence. Observation or a completion claim alone cannot supply it.')

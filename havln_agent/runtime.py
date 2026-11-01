@@ -690,6 +690,58 @@ class AgentRuntime(ToolExecutor):
             self.review_reason = 'verified_milestone'
         return value
 
+    def _select_subgoal(self, subgoal_index, reason, observation_ids):
+        """Model-owned task navigation; proofs and semantic intent are separate.
+
+        Selecting a new task does not modify completion_evidence. All earlier
+        motion and observations remain available for later retrospective proof.
+        """
+        task = self.memory.task
+        previous = task.current_subgoal_index
+        count = len(task.subgoals)
+        if not 0 <= subgoal_index < count:
+            return dict(status='INVALID_ARGUMENTS',reason='unknown_subgoal_index')
+        if subgoal_index == previous:
+            return dict(status='INVALID_ARGUMENTS',reason='already_active_subgoal')
+        if subgoal_index in task.completed_subgoals:
+            return dict(status='INVALID_ARGUMENTS',reason='cannot_revisit_verified_subgoal')
+        prior_seen = {int(k) for k in task.subgoal_start_steps}
+        if subgoal_index not in prior_seen and subgoal_index != previous + 1:
+            return dict(status='INVALID_ARGUMENTS',
+                        reason='cannot_skip_unvisited_ordered_milestones')
+        known = {o['observation_id'] for o in self.memory.observations}
+        if not set(observation_ids) <= known:
+            return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
+        if not reason.strip():
+            return dict(status='INVALID_ARGUMENTS',reason='missing_model_reason')
+        # A model decision can change the active navigation objective, never
+        # fabricate a VERIFIED status or erase an unverified earlier task.
+        self._cancel_local_navigation('model_changed_active_semantic_subgoal')
+        task.provisional_transitions.append(dict(from_subgoal=previous,
+            to_subgoal=subgoal_index,reason=reason,observation_ids=observation_ids,
+            step=len(self.memory.actions),verified=False,
+            evidence_scope='navigation_strategy_not_completion_certification'))
+        task.current_subgoal_index = subgoal_index
+        task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
+        task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
+        self.memory.progress_stage = 'PROVISIONAL_UNVERIFIED'
+        # Preserve older verifier feedback in history; do not mislabel its
+        # result as proof about the newly selected task.
+        self.task_review_requested = False
+        self.review_reason = 'model_selected_semantic_milestone'
+        self.set_semantic_goal()
+        self.event('model_selected_subgoal',source='navigation_agent',
+            from_subgoal=previous,to_subgoal=subgoal_index,
+            observation_ids=observation_ids,
+            completion_verified=False)
+        return dict(status='OK',current_subgoal_index=subgoal_index,
+            previous_subgoal_index=previous,
+            selection='PROVISIONAL_UNVERIFIED',
+            unverified_subgoals=[i for i in range(count)
+                if i not in task.completed_subgoals],
+            reason=reason,
+            final_success_requires_all_verified=True)
+
     def _request_task_review(self, reason):
         if self.memory.task.current_subgoal_index >= len(self.memory.task.subgoals):
             return dict(status='REJECTED', reason='all_subgoals_verified_request_finish')

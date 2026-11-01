@@ -2,7 +2,7 @@
 import math
 import time
 
-from .progress import turn_evidence, current_visual_evidence
+from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
 from .local_exploration import last_block, local_coverage
 
@@ -170,7 +170,28 @@ def navigation_context(runtime):
                 and item['source'].get('depth_hash') == memory.current.get('depth_hash')
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
+    prior_motion_evidence=[]
+    for transition in reversed(getattr(memory.task,'provisional_transitions',[])):
+        idx=transition['from_subgoal']
+        if idx==index or any(x['subgoal_index']==idx for x in prior_motion_evidence):
+            continue
+        prior_motion_evidence.append(dict(subgoal_index=idx,
+            **{k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
+               if k!='rows'}))
+        if len(prior_motion_evidence)>=2:
+            break
     result=dict(goal=runtime.active_subgoal,
+        prior_subgoal_motion_evidence=prior_motion_evidence,
+        task_selection=dict(
+            current_subgoal_index=index,
+            total_subgoals=len(memory.task.subgoals),
+            verified_subgoals=list(getattr(memory.task,'completed_subgoals',[])),
+            provisional_transitions=getattr(memory.task,'provisional_transitions',[])[-3:],
+            unverified_subgoal_indices=[i for i in range(len(memory.task.subgoals))
+                if i not in getattr(memory.task,'completed_subgoals',[])],
+            select_subgoal_is_navigation_decision_not_verified_completion=True),
+        historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
+            if key!='rows'},
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             direct_segment_max_m=3.0),

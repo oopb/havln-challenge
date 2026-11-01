@@ -142,6 +142,7 @@ class MemoryService(MemoryRecords):
 
     def navigation_summary(self):
         """Short motion and failure history; never a certificate of task completion."""
+        from .progress import registered_motion_history
         goal_index = self.task.current_subgoal_index
         policy = getattr(self.runtime, 'semantic_motion_policy',
                          getattr(self.runtime, 'motion_policy', 'LEVEL_ONLY'))
@@ -184,6 +185,8 @@ class MemoryService(MemoryRecords):
             last_progress_motion=successes[-1] if successes else None,
             last_motion=motions[-1] if motions else None,
             recent_failed_waypoints=failures,
+            historical_motion_evidence={key:value for key,value in registered_motion_history(self).items()
+                if key!='rows'},
             note='RGB-D translation is estimated, not simulator ground truth')
 
     def _routes(self):
@@ -244,6 +247,10 @@ class MemoryService(MemoryRecords):
         milestones=[m for m in task.completion_evidence if subgoal_id is None or m['subgoal']==index]
         feedback=self.progress_feedback or {}
         return dict(current_subgoal_id='sg_%d' % task.current_subgoal_index,
+            provisional_transitions=copy.deepcopy(task.provisional_transitions[-4:]),
+            verified_subgoal_indices=list(task.completed_subgoals),
+            unverified_subgoal_indices=[i for i in range(len(task.subgoals))
+                if i not in task.completed_subgoals],
             goal=fields(task.subgoals[index],('action','target','landmark','success_criteria')) if index<len(task.subgoals) else None,
             goal_evidence_state='intent',verified_milestones=[milestone_summary(m) for m in milestones[-4:]],
             missing_evidence=feedback.get('missing',[]) if feedback.get('subgoal')==index else ['fresh_task_verification'],
