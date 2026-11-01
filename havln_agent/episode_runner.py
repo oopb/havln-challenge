@@ -145,7 +145,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             net_displacement_m_est=(pose['x']**2+pose['z']**2)**.5,
             translation_m_est=sum(r['result'].get('translation_m') or 0 for r in runtime.memory.tool_ledger),
             translation_source='rgbd_estimate_only_not_physical_ground_truth',
-            waypoint_completed=sum(r['call']['tool']=='navigate_local' and r['result']['status']=='TARGET_REACHED'
+            waypoint_completed=sum(r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel') and r['result']['status']=='TARGET_REACHED'
                 for r in runtime.memory.tool_ledger),
             waypoint_candidate_queries=sum(r['call']['tool']=='get_waypoint_candidates'
                 for r in runtime.memory.tool_ledger),
@@ -153,7 +153,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
                 r['call']['tool']=='get_waypoint_candidates' and not r['result'].get('paths')
                 for r in runtime.memory.tool_ledger),
             local_navigation_blocked_calls=sum(
-                r['call']['tool']=='navigate_local' and (
+                r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel') and (
                     r['result'].get('reason')=='occupied_next_step'
                     or r['result'].get('interrupted_status')=='BLOCKED'
                     or r['result'].get('status')=='BLOCKED')
