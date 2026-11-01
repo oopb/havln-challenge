@@ -173,7 +173,7 @@ class MemoryService(MemoryRecords):
         successes = [item for item in motions if item['vertical_motion'] == desired]
         failures = []
         evidence_obs={o['observation_id']:o for o in self.observations}
-        live_pose=(self.current or {}).get('pose') or {}
+        live_pose=(getattr(self,'current',None) or {}).get('pose') or {}
         for record in reversed(self.tool_ledger):
             call, result = record.get('call') or {}, record.get('result') or {}
             if call.get('tool') not in ('navigate_local','navigate_relative','navigate_to_pixel'):
