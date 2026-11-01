@@ -157,6 +157,29 @@ to disable live polling. `--terminal-log off` disables all normal terminal
 progress and startup/completion messages but retains error diagnostics on stderr,
 worker logs, the full per-episode trace and automatic archives.
 
+### Recover an already-completed parallel run after shard assembly failure
+
+Before fixing the batch assembler, `--batch 4` could successfully finish all
+workers but then try to open a nonexistent pre-split shard such as
+`val_seen-s8pcmisQ38h.json`. The individual `-partNNNN.json` shards and
+the original worker task manifests can be reused **without rerunning Habitat
+or reissuing any model requests**:
+
+```bash
+python /toolkit/scripts/run_api_agent.py \\
+  --output-dir /workspace/agent-runs/eval-batch4 \\
+  --assemble-only --terminal-log on --archive-frames critical
+```
+
+This reads the **original** `export_metadata.json` and `worker-<ID>.json`
+manifests, verifies their stored run fingerprint and exact episode coverage,
+checks each shard's action sequence, writes split diagnostic JSON, and only then
+marks the export complete. No `--config`, `--batch`, credentials, GPU or
+simulator initialization is required for `--assemble-only`. A missing shard
+still signals an incomplete/failed worker rather than silently skipping it.
+A new ordinary run after code changes must use a new output directory because
+its code fingerprint differs; use `--assemble-only` to salvage existing work.
+
 ### Parallel batch evaluation on one or more GPUs
 
 `--batch N` launches **N independent Habitat worker processes per GPU**,

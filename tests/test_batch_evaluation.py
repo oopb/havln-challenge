@@ -7,8 +7,9 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from scripts.export_cma_submission import atomic_json
 
-from havln_agent.export import distribute_jobs, worker_slots, main
+from havln_agent.export import distribute_jobs, worker_slots, main, assemble, assemble_saved_workers
 from havln_agent.progress_monitor import ProgressMonitor
 
 
@@ -91,6 +92,74 @@ class BatchEvaluationTests(unittest.TestCase):
                     'havln_agent.export.export',side_effect=fake_export),contextlib.redirect_stdout(stdout):
                 main()
             self.assertEqual(stdout.getvalue(),'')
+
+    def test_batch4_from_one_scene_assembles_only_real_part_shards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)
+            jobs=[dict(key='val_seen-s8pcmisQ38h',split='val_seen',
+                       ids=['1','2','3','4'])]
+            slots=worker_slots(jobs,[0],4)
+            saved=[]
+            for slot in slots:
+                for job in slot['jobs']:
+                    saved.append(job)
+                    atomic_json(output/'shards'/(job['key']+'.json'),
+                        dict(fingerprint='old-code',rows=[
+                            dict(episode_id=episode_id,actions=['TURN_LEFT','STOP'])
+                            for episode_id in job['ids']]))
+            self.assertFalse((output/'shards/val_seen-s8pcmisQ38h.json').exists())
+            self.assertEqual(len(saved),4)
+            assemble(output,saved,dict(val_seen=['1','2','3','4']),
+                     'old-code',True)
+            recovered=json.loads((output/'val_seen.diagnostic.json').read_text())
+            self.assertEqual([x['episode_id'] for x in recovered['episodes']],
+                             ['1','2','3','4'])
+
+    def test_reassemble_previous_run_without_simulator_or_api_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)
+            jobs=[dict(key='val_seen-s8pcmisQ38h',split='val_seen',
+                       ids=['1','2','3','4'])]
+            slots=worker_slots(jobs,[0],4)
+            atomic_json(output/'export_metadata.json',dict(
+                fingerprint='previous-commit-fingerprint',
+                identity=dict(agent='previous-commit',splits=['val_seen'],episode_limit=4),
+                diagnostic=True,complete=False,
+                execution=dict(batch_per_gpu=4,workers=[
+                    dict(worker_id=s['worker_id'],gpu=s['gpu'],
+                         episode_count=sum(len(j['ids']) for j in s['jobs']))
+                    for s in slots])))
+            for slot in slots:
+                atomic_json(output/('worker-'+slot['worker_id']+'.json'),
+                    dict(output=str(output),fingerprint='previous-commit-fingerprint',
+                         jobs=slot['jobs']))
+                for job in slot['jobs']:
+                    atomic_json(output/'shards'/(job['key']+'.json'),
+                        dict(fingerprint='previous-commit-fingerprint',
+                             rows=[dict(episode_id=i,actions=['STOP'])
+                                   for i in job['ids']]))
+            receipt=assemble_saved_workers(output)
+            self.assertTrue(receipt['complete'])
+            self.assertEqual(receipt['episodes'],dict(val_seen=4))
+            self.assertEqual(json.loads((output/'export_metadata.json').read_text())
+                             ['fingerprint'],'previous-commit-fingerprint')
+            result=json.loads((output/'val_seen.diagnostic.json').read_text())
+            self.assertEqual(len(result['episodes']),4)
+
+    def test_missing_partial_shard_fails_before_marking_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)
+            jobs=[dict(key='val_seen-scene-part0000',split='val_seen',ids=['1'])]
+            atomic_json(output/'export_metadata.json',dict(
+                fingerprint='unchanged',identity=dict(splits=['val_seen'],episode_limit=1),
+                diagnostic=True,complete=False,
+                execution=dict(workers=[dict(worker_id='0-b0',episode_count=1)])))
+            atomic_json(output/'worker-0-b0.json',dict(output=str(output),
+                        fingerprint='unchanged',jobs=jobs))
+            with self.assertRaisesRegex(ValueError,'Missing completed shard'):
+                assemble_saved_workers(output)
+            self.assertFalse(json.loads((output/'export_metadata.json').read_text())
+                             ['complete'])
 
     def test_batch_argument_rejects_zero_and_above_safety_ceiling(self):
         for batch in ('0','33'):
