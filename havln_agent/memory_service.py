@@ -172,6 +172,8 @@ class MemoryService(MemoryRecords):
                    'UP' if policy == 'ASCEND_STAIRS' else 'LEVEL')
         successes = [item for item in motions if item['vertical_motion'] == desired]
         failures = []
+        evidence_obs={o['observation_id']:o for o in self.observations}
+        live_pose=(self.current or {}).get('pose') or {}
         for record in reversed(self.tool_ledger):
             call, result = record.get('call') or {}, record.get('result') or {}
             if call.get('tool') not in ('navigate_local','navigate_relative','navigate_to_pixel'):
@@ -181,7 +183,18 @@ class MemoryService(MemoryRecords):
             effective = result.get('interrupted_status') or result.get('status')
             if effective in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION','INTERRUPTED','STALE_TARGET'):
                 args=call.get('args') or {}
+                failure_obs=evidence_obs.get(result.get('end_observation_id')) or {}
+                past_pose=failure_obs.get('pose') or {}
+                same_epoch=(bool(past_pose) and past_pose.get('motion_epoch',0)
+                            ==live_pose.get('motion_epoch',0))
+                same_local_stance=(same_epoch and math.hypot(
+                    past_pose.get('x',1e5)-live_pose.get('x',-1e5),
+                    past_pose.get('z',1e5)-live_pose.get('z',-1e5)) < .35)
                 failures.append(dict(
+                    failure_heading_deg=(round(math.degrees(past_pose['heading']),1)
+                                         if 'heading' in past_pose else None),
+                    comparable_with_current_stance=bool(same_local_stance),
+                    failure_motion_epoch=past_pose.get('motion_epoch'),
                     tool_call_id=record.get('call_id'),tool=call.get('tool'),
                     status=effective,reason=result.get('reason'),
                     waypoint_id=result.get('waypoint_id') or args.get('waypoint_id'),
@@ -196,6 +209,8 @@ class MemoryService(MemoryRecords):
             total_forward_actions=len(motions),
             recent_forward_motion=motions[-6:],
             last_progress_motion=successes[-1] if successes else None,
+            last_registered_motion=next((v for v in reversed(motions)
+                if v['vertical_motion']!='UNKNOWN'),None),
             last_motion=motions[-1] if motions else None,
             recent_failed_waypoints=failures,
             historical_motion_evidence={key:value for key,value in registered_motion_history(self).items()
