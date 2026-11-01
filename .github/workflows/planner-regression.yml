@@ -22,6 +22,7 @@ on:
       - "tests/test_observation_efficiency.py"
       - "tests/test_model_driven_direction.py"
       - "tests/test_model_control_runtime.py"
+      - "tests/test_direct_motion_execution.py"
       - "tests/test_progress_alternative_evidence.py"
       - "tests/test_progress_full_transition.py"
       - "havln_agent/export.py"
@@ -80,6 +81,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_model_driven_direction.py' -v
       - name: Check model-control runtime, pixel directions, and calibration
         run: python -m unittest discover -s tests -p 'test_model_control_runtime.py' -v
+      - name: Check end-to-end direct route, pause and resume execution
+        run: python -m unittest discover -s tests -p 'test_direct_motion_execution.py' -v
       - name: Check independent stair transition proof alternatives
         run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
       - name: Check full registered-motion transition with partial entry
