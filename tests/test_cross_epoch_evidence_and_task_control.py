@@ -122,6 +122,7 @@ class CrossEpochHistoryTests(unittest.TestCase):
         self.assertIsNone(turn_requirement(entry))
         self.assertIn('registered_translation',required_conditions(entry))
         self.assertNotIn('orientation_completed',required_conditions(entry))
+        self.assertNotIn('landmark_passed',required_conditions(entry))
         self.assertEqual(normalize_conditions(turn),['orientation_completed'])
 
 

@@ -30,7 +30,8 @@ class TaskPlannerContractTests(unittest.TestCase):
                     landmark='hallway', target='hallway')
         self.assertFalse(requires_landmark_crossing(goal))
         self.assertNotIn('landmark_passed', required_conditions(goal))
-        self.assertTrue(requires_landmark_crossing(dict(action='Enter the foyer.')))
+        self.assertFalse(requires_landmark_crossing(dict(action='Enter the foyer.')))
+        self.assertTrue(requires_landmark_crossing(dict(action='Cross the doorway.')))
 
     def test_missing_model_predicates_do_not_abort_startup(self):
         text = ('Begin by descending the stairs. Make a right turn. '

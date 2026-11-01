@@ -55,7 +55,11 @@ def requires_landmark_crossing(goal):
     generic path phrasing must not invent a landmark_passed predicate.
     """
     text = str(goal.get('action', ''))
-    explicit = bool(re.search(r'\b(?:enter|entry|pass|cross)\b|穿过|经过|进入', text, re.I))
+    # Entering a named room must NOT require passing the *room landmark*
+    # behind the robot. Crossing a specifically referenced boundary does.
+    # Requiring "foyer behind robot" is an impossible success condition for
+    # ordinary enter-the-foyer instructions.
+    explicit = bool(re.search(r'\b(?:pass|cross)\b|穿过|经过', text, re.I))
     if explicit:
         return True
     if re.search(r'\bthrough\b', text, re.I):
@@ -476,9 +480,21 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
                                                 observation_ids=observation_ids,
                                                 executed_steps=result['evidence_details'].get('motion_steps', []),
                                                 verification=result.copy()))
-            task.current_subgoal_index += 1
-            task.subgoal_start_steps.setdefault(str(task.current_subgoal_index),len(memory.actions))
-            task.subgoal_started = task.subgoal_start_steps[str(task.current_subgoal_index)]
+            # If the model had provisionally visited later subgoals, some may
+            # already be VERIFIED; do not re-run them. After the last goal,
+            # return to any unverified older milestone instead of entering an
+            # invalid no-goal state.
+            next_index = task.current_subgoal_index + 1
+            while next_index < len(task.subgoals) and next_index in task.completed_subgoals:
+                next_index += 1
+            if next_index == len(task.subgoals):
+                unresolved = [i for i in range(len(task.subgoals))
+                              if i not in task.completed_subgoals]
+                if unresolved:
+                    next_index = unresolved[0]
+            task.current_subgoal_index = next_index
+            task.subgoal_start_steps.setdefault(str(next_index),len(memory.actions))
+            task.subgoal_started = task.subgoal_start_steps[str(next_index)]
         elif result['status'] == 'RECORDED':
             task.progress_claims.append(dict(claim=claim, evidence=evidence, observation_ids=observation_ids,
                                             subgoal=task.current_subgoal_index, step=len(memory.actions)))
@@ -487,7 +503,9 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
     if result['missing']:
         result['information_options'] = ['ground_landmark', 'analyze_scene', 'query_task_memory', 'query_spatial_memory']
         if any('motion' in item or 'transition' in item or 'crossing' in item for item in result['missing']):
-            result['information_options'].extend(['get_waypoint_candidates', 'navigate_local'])
+            result['information_options'].extend(['get_waypoint_candidates',
+                'navigate_relative','navigate_to_pixel','navigate_local',
+                'select_subgoal'])
             result['evidence_details']['motion_evidence_precondition'] = (
                 'Only model-requested navigation with a justified path and live Safety approval can '
                 'produce motion evidence. Observation or a completion claim alone cannot supply it.')

@@ -22,7 +22,10 @@ COMMON_PROMPT = (
     'historical_motion_evidence even after motion_epoch changes; an epoch '
     'invalidates old *coordinates*, not historical verified RGB-D movement. '
     'Treat PROVISIONAL_UNVERIFIED transitions as hypotheses. Use verify_subgoal '
-    'with authentic observations and registered movements, and never request_finish '
+    'with authentic observations and registered movements; if evidence is still '
+    'incomplete but sensor history suggests the next milestone, use '
+    'select_subgoal rather than repeating the same visual query. Do not treat '
+    'a model-selected milestone as VERIFIED, and never request_finish '
     'just because exploration is slow. '
 )
 OBSERVE_PROMPT = (
