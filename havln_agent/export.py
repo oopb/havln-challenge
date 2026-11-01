@@ -161,6 +161,58 @@ def worker_slots(jobs, gpu_ids, batch):
             for i,(gpu,local) in enumerate(gpu_slots) if partitions[i]]
 
 
+def verify_existing_run_provenance(output, fingerprint):
+    """Stop before starting paid API work if saved results came from other code.
+
+    A previous batch may have left a valid metadata receipt but mixed completed
+    shards from different runs. Their numeric episode IDs alone are NOT enough
+    to combine them into a scientific evaluation.
+    """
+    for pattern in ('shards/*.json','traces/*/result.json'):
+        for path in sorted(output.glob(pattern)):
+            payload = json.loads(path.read_text())
+            existing = payload.get('fingerprint')
+            if existing != fingerprint:
+                raise ValueError(
+                    'Mixed evaluation provenance: %s has fingerprint %s, '
+                    'current run is %s. Preserve this directory and use a '
+                    'NEW --output-dir. Do not use --retry-incomplete to mix '
+                    'different code/config versions.' % (
+                        path, str(existing)[:16], fingerprint[:16]))
+
+
+def record_worker_failure(task_path, error):
+    """Persist the failure instead of leaving a stale 'finished' marker."""
+    task = json.loads(Path(task_path).read_text())
+    output = Path(task['output'])
+    worker = task.get('worker_id', str(task['gpu']))
+    progress = output / ('worker-' + worker + '.progress.json')
+    state = json.loads(progress.read_text()) if progress.exists() else {}
+    state.update(phase='failed',worker_id=worker,
+        error_type=type(error).__name__,error=str(error)[:400],
+        failed_at_epoch=time.time())
+    atomic_json(progress,state)
+
+
+def worker_failure_details(output, slots, codes):
+    """Concise stderr diagnosis even when --terminal-log off."""
+    failed=[]
+    for slot, code in zip(slots,codes):
+        if code == 0:
+            continue
+        worker=slot['worker_id']
+        progress=output / ('worker-' + worker + '.progress.json')
+        state=json.loads(progress.read_text()) if progress.exists() else {}
+        items=['worker='+worker,'gpu='+str(slot['gpu']),'exit='+str(code),
+               'episode='+str(state.get('episode_id','unknown')),
+               'phase='+str(state.get('phase','unknown'))]
+        if state.get('error'):
+            items.append('error='+str(state['error'])[:200])
+        items.append('log='+str(output / ('worker-' + worker + '.log')))
+        failed.append(' '.join(items))
+    return '; '.join(failed)
+
+
 def completed_episode(directory, fingerprint, episode_id):
     result_path = directory / 'result.json'
     if not result_path.exists():
@@ -188,6 +240,8 @@ def run_worker(task_path):
     # Same-GPU workers must NEVER share cache and progress directories.
     client = APIClient(task['config'], output / 'cache' / worker_id)
     progress_file = output / ('worker-' + worker_id + '.progress.json')
+    atomic_json(progress_file,dict(phase='starting',worker_id=worker_id,
+        split='pending',episode_id='pending',started_at_epoch=time.time()))
     for job in task['jobs']:
         shard = output / 'shards' / (job['key'] + '.json')
         rows, pending = [], []
@@ -381,6 +435,9 @@ def export(args, config):
     if receipt.exists() and json.loads(receipt.read_text())['fingerprint'] != fingerprint:
         raise ValueError('Output configuration/code/runtime differs; use a fresh output directory')
     output.mkdir(parents=True, exist_ok=True)
+    # Check all existing saved rows/shards before opening clients or workers.
+    # A mixed old/new run can have a valid receipt for the newest launch.
+    verify_existing_run_provenance(output,fingerprint)
     # Validate credentials/config once, before launching any simulator worker.
     APIClient(config, output / 'cache/preflight')
     diagnostic = (args.episode_limit is not None or set(args.splits) != set(SPLITS) or
@@ -421,7 +478,8 @@ def export(args, config):
                 monitor.report()
         codes = [process.wait() for process in processes]
         if any(codes):
-            raise RuntimeError('Agent worker failed: ' + str(codes) + '; inspect worker logs')
+            raise RuntimeError('Agent worker failed: ' +
+                worker_failure_details(output,slots,codes))
     finally:
         for process in processes:
             if process.poll() is None:
@@ -542,7 +600,15 @@ def main():
                         help='Disable automatic diagnostic archive on completion/failure')
     args = parser.parse_args()
     if args.worker_task:
-        run_worker(args.worker_task)
+        try:
+            run_worker(args.worker_task)
+        except BaseException as error:
+            try:
+                record_worker_failure(args.worker_task,error)
+            except Exception:
+                # Do not conceal the original exception when disk is full.
+                pass
+            raise
         return
     if args.preflight:
         sys.exit(0 if preflight(args) else 1)
