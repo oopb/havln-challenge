@@ -38,6 +38,71 @@ def grounding(observation_id,landing=False):
 
 
 class FullTransitionRegression(unittest.TestCase):
+    def test_early_landing_sighting_cannot_certify_later_exit_motion(self):
+        # The floor is visible after DOWN receipts but before either
+        # supported LEVEL receipt: it is not yet an observed arrival.
+        mem=SimpleNamespace(
+            camera=SimpleNamespace(forward_step=.25),
+            task=SimpleNamespace(current_subgoal_index=0,subgoal_started=0),
+            current=dict(pose=dict(motion_epoch=0)),
+            observations=[observed(i) for i in range(5)],
+            scene_history=[dict(
+                source=dict(observation_id='o0',subgoal=0),
+                scene=dict(landmarks=[dict(name='Descending wooden staircase')]))],
+            groundings=[grounding('o2',landing=True)],
+            actions=[action(0,-.23,'DOWN'),action(1,-.23,'DOWN'),
+                     action(2,0.,'LEVEL'),action(3,0.,'LEVEL')])
+        with patch('havln_agent.progress.registered_action',return_value=True), \
+             patch('havln_agent.progress.current_visual_evidence',return_value=True):
+            stage,_,missing,_,details=_stair_evidence(
+                mem,dict(action='descend stairs',landmark='stairs',target='stairs'),
+                {'o0','o2'},0.,10.,1.25)
+        self.assertNotEqual(stage,'COMPLETED')
+        self.assertIsNone(details['evidence_cutoff_step'])
+        self.assertIn('current_grounded_landing_with_depth_support',missing)
+        self.assertFalse(details['independent_stair_to_landing_transition'])
+
+    def test_later_landing_capture_wins_over_premature_sighting(self):
+        # The first apparent landing MUST NOT truncate the subsequent
+        # two independently registered, depth-supported exit steps.
+        mem=SimpleNamespace(
+            camera=SimpleNamespace(forward_step=.25),
+            task=SimpleNamespace(current_subgoal_index=0,subgoal_started=0),
+            current=dict(pose=dict(motion_epoch=0)),
+            observations=[observed(i) for i in range(5)],
+            scene_history=[dict(
+                source=dict(observation_id='o0',subgoal=0),
+                scene=dict(landmarks=[dict(name='Descending wooden staircase')]))],
+            groundings=[grounding('o2',landing=True),
+                        grounding('o4',landing=True)],
+            actions=[action(0,-.23,'DOWN'),action(1,-.23,'DOWN'),
+                     action(2,0.,'LEVEL'),action(3,0.,'LEVEL')])
+        with patch('havln_agent.progress.registered_action',return_value=True), \
+             patch('havln_agent.progress.current_visual_evidence',return_value=True):
+            stage,_,missing,_,details=_stair_evidence(
+                mem,dict(action='descend stairs',landmark='stairs',target='stairs'),
+                {'o0','o2','o4'},0.,10.,1.25)
+        self.assertEqual(stage,'COMPLETED',msg=str(missing))
+        self.assertEqual(details['evidence_cutoff_step'],4)
+        self.assertEqual(details['motion_steps'],[0,1,2,3])
+        self.assertTrue(details['independent_stair_to_landing_transition'])
+
+    def test_missing_hashes_cannot_authenticate_historical_landing(self):
+        from havln_agent.progress import _captured_landing_proof
+        obs=dict(observation_id='o4',step=4,pose=dict(motion_epoch=0))
+        src=dict(observation_id='o4',image_scope='current',
+                 pose=dict(motion_epoch=0))
+        self.assertFalse(_captured_landing_proof(
+            dict(source=src),{'o4':obs},1))
+        src['rgb_hash']='r4'
+        src['depth_hash']='d4'
+        obs.update(rgb_hash='r4',depth_hash='d4')
+        self.assertTrue(_captured_landing_proof(
+            dict(source=src),{'o4':obs},1))
+        del src['image_scope']
+        self.assertFalse(_captured_landing_proof(
+            dict(source=src),{'o4':obs},1))
+
     def test_early_scene_and_later_grounded_landing_can_verify_independent_transition(self):
         memory=SimpleNamespace(
             camera=SimpleNamespace(forward_step=.25),
