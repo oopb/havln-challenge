@@ -74,7 +74,10 @@ class DirectMovementExecutionTests(unittest.TestCase):
             self.assertEqual(r.active_waypoint_id,pid)
             self.assertEqual(r.memory.routes[pid]['evidence_state'],
                              'geometry_supported')
-            self.assertEqual(r.memory.routes[pid]['state'],'EXECUTABLE')
+            # Arrival at a NEW RGB-D view invalidates old collision
+            # authorization; a registered route becomes CANDIDATE again.
+            self.assertEqual(r.memory.routes[pid]['state'],'CANDIDATE')
+            self.assertEqual(r.memory.routes[pid]['traversability'],'UNKNOWN')
             self.assertEqual(r.motion_controller.target is not None,True)
             # The model may observe without cancelling its bounded local route.
             r._step('TURN_LEFT')
