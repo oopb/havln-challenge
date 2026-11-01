@@ -142,6 +142,7 @@ class MemoryService(MemoryRecords):
 
     def navigation_summary(self):
         """Short motion and failure history; never a certificate of task completion."""
+        from .progress import registered_motion_history
         goal_index = self.task.current_subgoal_index
         policy = getattr(self.runtime, 'semantic_motion_policy',
                          getattr(self.runtime, 'motion_policy', 'LEVEL_ONLY'))
@@ -184,6 +185,8 @@ class MemoryService(MemoryRecords):
             last_progress_motion=successes[-1] if successes else None,
             last_motion=motions[-1] if motions else None,
             recent_failed_waypoints=failures,
+            historical_motion_evidence={key:value for key,value in registered_motion_history(self).items()
+                if key!='rows'},
             note='RGB-D translation is estimated, not simulator ground truth')
 
     def _routes(self):

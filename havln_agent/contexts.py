@@ -2,7 +2,7 @@
 import math
 import time
 
-from .progress import turn_evidence, current_visual_evidence
+from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
 from .local_exploration import last_block, local_coverage
 
@@ -171,6 +171,8 @@ def navigation_context(runtime):
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
+        historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
+            if key!='rows'},
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             direct_segment_max_m=3.0),
