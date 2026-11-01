@@ -231,9 +231,14 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         and a['result']['rgbd_motion']['status'] == 'UNKNOWN'
     })
     if not origins:
-        # Even with no localized target in the CURRENT coordinate epoch,
-        # actual measured motion remains visible for the model to reason over.
-        return 'NOT_STARTED', supported, ['localized_staircase_and_direction'], contradictions, details
+        # Metric movement can be historical fact even without a *semantic*
+        # landmark anchor. Mark it unattributed, never completed or false.
+        observed_motion = bool(details['historical_motion_evidence'][
+            'registered_'+direction+'_steps'])
+        if observed_motion:
+            supported.append('unattributed_registered_vertical_motion')
+        return ('IN_PROGRESS' if observed_motion else 'NOT_STARTED'), supported, [
+            'localized_staircase_and_direction'], contradictions, details
     if 'staircase_observed' not in supported:
         supported.append('staircase_observed')
     near = [g for g in origins if g['entry']['status'] == 'LOCALIZED'
@@ -247,6 +252,11 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         contradictions.append('stair_direction_geometry_conflicts')
     details['source_observation_ids'].append(origin['source']['observation_id'])
     origin_step = observed[origin['source']['observation_id']]['step']
+    details['anchor_after_measured_motion'] = any(
+        step < origin_step for step in details['historical_motion_evidence'][
+            'registered_'+direction+'_steps'])
+    if details['anchor_after_measured_motion']:
+        supported.append('historical_vertical_motion_before_semantic_anchor')
     entry = origin['entry']
     near_entry = (entry['status'] == 'LOCALIZED' and entry.get('depth_spread_metres', 99) < 0.6
                   and math.hypot(entry['x_right'], entry['z_forward']) <= arrival_distance)
@@ -363,7 +373,8 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
                                                   for g in origins if g['source']['observation_id'] in ids]
     if not cited_grounding:
         missing.append('cite_stair_observation')
-    stage = 'IN_PROGRESS' if motions and near_entry else 'APPROACHING'
+    stage = ('IN_PROGRESS' if motions and near_entry
+             or details['anchor_after_measured_motion'] else 'APPROACHING')
     if descent and landings:
         stage = 'POSSIBLY_COMPLETED'
     if not missing and not contradictions:

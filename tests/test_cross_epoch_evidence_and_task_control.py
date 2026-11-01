@@ -99,6 +99,19 @@ class CrossEpochHistoryTests(unittest.TestCase):
         self.assertEqual(m.task.current_subgoal_index,0)
         self.assertFalse(m.task.completed_subgoals)
 
+    def test_late_grounding_does_not_erase_unattributed_earlier_motion(self):
+        m=memory()
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        stage,supported,missing,contradictions,detail=_stair_evidence(
+            m,m.task.subgoals[0],{'obs_0051'},0.,10.,1.25)
+        self.assertEqual(stage,'IN_PROGRESS')
+        self.assertTrue(detail['anchor_after_measured_motion'])
+        self.assertEqual(detail['historical_motion_evidence']['registered_down_steps'],
+                         [22,23,24,25])
+        self.assertIn('historical_vertical_motion_before_semantic_anchor',supported)
+        self.assertNotIn('multi_frame_registered_down_motion',supported)
+        self.assertIn('multi_frame_registered_down_motion',missing)
+
     def test_unverified_commands_do_not_create_descent_evidence(self):
         m=memory()
         for a in m.actions:

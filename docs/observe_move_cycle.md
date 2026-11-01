@@ -161,3 +161,28 @@ retaining independent evidence to resist false completion.
 - Pixel target projection and the direct-route source refer to the same
   captured RGB-D observation. No extra initial refresh changes the bearing;
   each actual forward action still obtains a new live frame.
+
+
+## Cross-epoch progress versus current-coordinate safety (PR #24)
+
+Each RGB-D-estimated MOVE_FORWARD is retained as a hash-checked local action
+receipt, including its source/target observation IDs, direction, translation,
+uncertainty and motion epoch. The history survives future odometry re-anchors,
+which invalidate ONLY the global reference for new waypoint coordinates.
+NavigationAgent sees recent verified/unknown motion history and can explicitly
+select the next ordered semantic subgoal with `select_subgoal` while preserving
+all unresolved milestones as PROVISIONAL_UNVERIFIED. This does NOT add to
+`completed_subgoals`, does not create a landing observation and cannot authorize
+a final success claim. The model can return to an earlier unverified milestone.
+No model-selected subgoal or stored old depth can bypass per-action collision
+checks.
+
+Stair completion remains independently checked using real paired RGB-D
+translation, continuity within the same motion-epoch coordinate scope, level
+landing receipts and current visual/depth evidence. Historical downward
+movement alone is retained and reported but never proves a landing. Later
+re-grounding cannot replace an earlier observed descent anchor or create a
+cross-epoch metric exit-from-entry distance. Task evidence conditions use the
+actual cited source sentence, not a planner paraphrase: a standalone right turn
+requires orientation evidence; entering the foyer requires translation/target
+evidence, not a fictitious requirement to pass the foyer behind the agent.
