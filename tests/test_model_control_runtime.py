@@ -27,7 +27,8 @@ def direct_runtime():
     pose=dict(x=0.,y=0.,z=0.,heading=0.,pitch_deg=0.,
               motion_epoch=0,position_uncertainty=.05,motion_error_total=0)
     r.motion_controller=SimpleNamespace(pose=lambda:dict(pose),target=None)
-    r.memory=SimpleNamespace(tool_ledger=[],task=SimpleNamespace(current_subgoal_index=0))
+    r.memory=SimpleNamespace(tool_ledger=[],task=SimpleNamespace(current_subgoal_index=0),
+                             note_candidates=Mock())
     r.refresh=Mock()
     r.source=Mock(return_value=dict(observation_id='obs_0000',
         rgb_hash='r',depth_hash='d',pose=pose,subgoal=0,
@@ -50,6 +51,8 @@ class ModelControlRuntimeTests(unittest.TestCase):
         self.assertEqual(r.paths['direct_0000']['objective']['purpose'],
                          'model_directed_motion')
         r._navigate_local.assert_called_once_with('direct_0000',3)
+        r.memory.note_candidates.assert_called_once()
+        self.assertEqual(r.memory.note_candidates.call_args.args[0][0]['id'],'direct_0000')
         self.assertEqual(result['requested_motion']['authorization'],
                          'live_per_atomic_action_only')
 
@@ -83,6 +86,13 @@ class ModelControlRuntimeTests(unittest.TestCase):
         self.assertIn('not_walkability_certificate',
                       outcome['pixel_target']['interpretation'])
         self.assertEqual(r._navigate_relative.call_args.args[1:],(.5,2))
+        self.assertEqual(
+            r._navigate_relative.call_args.kwargs['_source']['observation_id'],
+            'obs_0000')
+        self.assertEqual(outcome['pixel_target']['source_observation_id'],'obs_0000')
+        # The pixel is sampled from exactly one fresh frame. Motion validation
+        # later fetches new depth only when actually executing the atomic step.
+        r.refresh.assert_called_once_with()
 
     def test_unknown_pixel_depth_requires_view_without_motion(self):
         r=direct_runtime()

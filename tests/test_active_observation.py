@@ -99,6 +99,31 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertFalse(candidate['geometry']['motion_authorized'])
         r.memory.note_semantics.assert_called_once()
 
+    def test_explicit_force_recheck_bypasses_observation_and_vlm_cache(self):
+        from unittest.mock import patch
+        r=FakeRuntime([])
+        r.visual_perception.search_view=Mock(return_value=visual(found=True))
+        with patch.object(ObservationController, '_existing_result',
+                          return_value=(visual(found=True),'obs_old')) as stale:
+            result=ObservationController(r).scan(
+                'Find stairs',['stair_entry'],'left',30,force_recheck=True)
+        self.assertEqual(result['outcome'],'TARGET_CANDIDATE_FOUND')
+        self.assertEqual(result['best_candidate']['evidence_origin'],'vlm_current_frame')
+        self.assertEqual(r.visual_perception.search_view.call_args.kwargs,
+                         {'force_recheck':True})
+        stale.assert_not_called()
+
+    def test_fresh_observation_disables_image_question_cache(self):
+        from unittest.mock import patch
+        agent=VisualPerception(SimpleNamespace(client=None))
+        with patch('havln_agent.visual_perception.image_url',
+                   return_value='data:image/png;base64,AA'):
+            with patch.object(agent,'complete',return_value=visual()) as call:
+                agent.search_view(SimpleNamespace(rgb=None),
+                                  dict(observation_id='obs_1'),
+                                  'look for person',['person'],force_recheck=True)
+        self.assertFalse(call.call_args.kwargs['cache'])
+
     def test_full_sweep_uses_checkpoint_vlm_not_per_15degree_step(self):
         r=FakeRuntime([visual(),visual(),visual()])
         result=ObservationController(r).scan(

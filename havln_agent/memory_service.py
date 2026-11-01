@@ -118,8 +118,11 @@ class MemoryService(MemoryRecords):
 
     def note_candidates(self, paths):
         for path in paths:
+            direct = path.get('direction_source') == 'navigation_agent'
             self.routes[path['id']]=dict(id=path['id'],waypoint_type=path['type'],from_place=self.current_place_id,to_place=None,
-                state='CANDIDATE',traversability=path['first_step'],evidence_state='geometry_supported',
+                state='CANDIDATE',
+                traversability='UNKNOWN' if direct else path['first_step'],
+                evidence_state='model_motion_proposal_unverified' if direct else 'geometry_supported',
                 source_observation_ids=[path['source_observation_id']],bearing_deg=path['bearing_deg'],
                 requires_live_revalidation=True)
 

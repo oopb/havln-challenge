@@ -146,3 +146,18 @@ continuous registration and no contradictions. Completion still requires
 authentic cited observations and the runtime's typed success predicates.
 This avoids requiring one exact `entry_box` path through the scene while
 retaining independent evidence to resist false completion.
+
+
+## Post-merge model-control runtime audit
+
+- `force_recheck=true` now bypasses both the cached observation-search
+  checkpoint and the VLM image/question result cache, guaranteeing a fresh
+  model request (subject to external service availability). Default scans
+  may still reuse exactly matching historical static visual hypotheses.
+- Direct navigation registers a `model_motion_proposal_unverified` route in
+  spatial memory. This is **never** an executable clearance certificate; a
+  fresh per-action depth probe is required before moving and validated route
+  receipts update the state.
+- Pixel target projection and the direct-route source refer to the same
+  captured RGB-D observation. No extra initial refresh changes the bearing;
+  each actual forward action still obtains a new live frame.

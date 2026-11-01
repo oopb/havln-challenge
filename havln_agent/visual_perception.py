@@ -68,7 +68,7 @@ class VisualPerception:
         return perceive(self,observation,context,
             dict(observation_id=source['observation_id'],scope=source.get('image_scope','current')))
 
-    def search_view(self, observation, source, objective, target_types):
+    def search_view(self, observation, source, objective, target_types, force_recheck=False):
         """One RGB checkpoint for an active scan; never grants motion safety."""
         from .vision_protocol import coordinate_schema, coordinate_prompt
         from .vision_protocol import normalize_coordinates
@@ -91,7 +91,7 @@ class VisualPerception:
             'The controller independently owns real turns and live Depth safety. '
             + coordinate_prompt(request),
             request,coordinate_schema(SEARCH_SCHEMA, 'image_1000_xyxy'),
-            image_url=image_url(observation),cache=True,
+            image_url=image_url(observation),cache=not force_recheck,
             normalize=lambda value: normalize_coordinates(value, SEARCH_SCHEMA),
             result_schema=SEARCH_SCHEMA)
 
