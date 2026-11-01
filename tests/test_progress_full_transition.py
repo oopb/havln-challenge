@@ -1,5 +1,6 @@
 """Full independent completion path with only partially localized entrances."""
 import unittest
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -58,6 +59,36 @@ class FullTransitionRegression(unittest.TestCase):
         self.assertTrue(details['independent_stair_to_landing_transition'])
         self.assertEqual(details['source_observation_ids'][0],'o0')
         self.assertIn('sensor_verified_stair_to_landing_transition',supported)
+
+    def test_later_camera_view_does_not_erase_proven_past_landing(self):
+        # Regression: a historical landing's source hashes are authentic,
+        # even if the robot later looks somewhere else before verification.
+        observations=[observed(i) for i in range(5)]
+        observations[-1].update(rgb_hash='rgb4',depth_hash='depth4',
+            pose=dict(motion_epoch=0,heading=0.))
+        landing=grounding('o4',landing=True)
+        landing['source'].update(image_scope='current',rgb_hash='rgb4',
+                                depth_hash='depth4',pose=dict(motion_epoch=0,heading=0.))
+        mem=SimpleNamespace(
+            camera=SimpleNamespace(forward_step=.25),
+            task=SimpleNamespace(current_subgoal_index=0,subgoal_started=0),
+            current=dict(pose=dict(motion_epoch=0,heading=math.pi),
+                         observation_id='later_view'),
+            observations=observations,
+            scene_history=[dict(
+                source=dict(observation_id='o0',subgoal=0),
+                scene=dict(landmarks=[dict(name='Descending wooden staircase')]))],
+            groundings=[landing],
+            actions=[action(0,-.23,'DOWN'),action(1,-.23,'DOWN'),
+                     action(2,0.,'LEVEL'),action(3,0.,'LEVEL')])
+        goal=dict(action='descend stairs',landmark='stairs',target='stairs')
+        with patch('havln_agent.progress.registered_action',return_value=True), \
+             patch('havln_agent.progress.current_visual_evidence',return_value=False):
+            stage,supported,missing,contradictions,details=_stair_evidence(
+                mem,goal,{'o0','o4'},0.,20.,1.25)
+        self.assertEqual(stage,'COMPLETED',msg=str((missing,contradictions)))
+        self.assertEqual(details['landing_evidence_scope'],
+                         'registered_rgbd_at_capture_not_current_position')
 
     def test_captured_landing_survives_later_camera_turn(self):
         from havln_agent.progress import _captured_landing_proof

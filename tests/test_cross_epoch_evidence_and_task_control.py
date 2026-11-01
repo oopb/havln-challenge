@@ -106,6 +106,19 @@ class CrossEpochHistoryTests(unittest.TestCase):
         self.assertNotEqual(stage,'COMPLETED')
         self.assertIn('multi_frame_level_landing_transition',missing)
 
+    def test_navigation_hint_provides_historical_scene_citation_but_no_completion(self):
+        from havln_agent.progress import stair_replay_hint
+        m=memory()
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        m.scene_history=[dict(scene=dict(landmarks=[
+            dict(name='Wooden staircase descending')]),
+            source=dict(observation_id='obs_0018',subgoal=0))]
+        h=stair_replay_hint(m)
+        self.assertEqual(h['registered_vertical_steps'],[22,23,24,25])
+        self.assertEqual(h['preceding_scene_observation_id'],'obs_0018')
+        self.assertEqual(h['proof_status'],'HISTORICAL_COMPONENTS_NOT_COMPLETION')
+        self.assertFalse(h['captured_landing_observation_ids'])
+
     def test_unrelated_historical_scene_does_not_label_descent(self):
         m=memory()
         m.groundings=[grounding(51,5,'LOCALIZED')]
