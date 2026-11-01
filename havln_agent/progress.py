@@ -452,7 +452,8 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     landing_capture_steps=[]
     for g in groundings:
         loc=observed.get(g['source'].get('observation_id'))
-        if not loc or loc['step'] <= origin_step or g['source']['observation_id'] not in ids:
+        if (not loc or loc['step'] <= max(origin_step, min(historical_steps) if historical_steps else origin_step)
+                or g['source']['observation_id'] not in ids):
             continue
         if ((g.get('landing_geometry') or {}).get('status')=='SUPPORTED'
                 and g['semantic'].get('landing_box') is not None
