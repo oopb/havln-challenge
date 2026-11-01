@@ -15,9 +15,9 @@ def stair_motion_direction(goal):
     The same classification drives planning criteria, motion policy and progress
     checks. A 'descent' milestone must not silently become a LEVEL_ONLY route.
     """
-    # Prefer the actual source instruction over a planner paraphrase, which
-    # can mention a previous landmark or next maneuver in its description.
-    action = str(goal.get('source_text') or goal.get('action', ''))
+    # The planner's individual milestone action is the semantic scope.
+    # source_text may contain *multiple* distinct milestones in one sentence.
+    action = str(goal.get('action', ''))
     if re.search(r'\b(?:descend\w*|descent|downstairs)\b|\b(?:go|walk|move|head)\s+down\s+(?:the\s+)?stairs\b|下楼|下台阶', action, re.I):
         return 'DOWN'
     if re.search(r'\b(?:ascend\w*|ascent|upstairs)\b|\b(?:go|walk|move|head)\s+up\s+(?:the\s+)?stairs\b|上楼|上台阶', action, re.I):
@@ -27,10 +27,9 @@ def stair_motion_direction(goal):
 
 def turn_requirement(goal):
     """Derive an orientation-only requirement from the existing language action."""
-    # The task's original sentence has precedence: a planner label such as
-    # "entry into foyer following right turn" describes a translation, not
-    # the preceding orientation milestone.
-    text = str(goal.get('source_text') or goal.get('action', '')).lower()
+    # Only interpret this milestone, not an entire source sentence containing
+    # a descent, turn and room entry together.
+    text = str(goal.get('action', '')).lower()
     text = re.sub(r'\brightward\b','right',text)
     text = re.sub(r'\bleftward\b','left',text)
     if not re.search(r'\b(turn\w*|rotat\w*|orient\w*|reorient\w*|face|facing|heading)\b|转身|掉头|左转|右转|调整朝向', text):
@@ -430,7 +429,9 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
                              claim == 'bottom_visible' and any(g['semantic']['lower_landing_visible'] for g in matches))
                 if satisfied:
                     result.update(status='RECORDED', reason='stage_evidence_recorded')
-        elif not fresh_scene:
+        elif not fresh_scene and not turning:
+            # In-place orientation is proven by actual TURN receipts; it does
+            # not need a new expensive scene-analysis call.
             result.update(reason='current_visual_evidence_required', missing=['current_scene_evidence'])
         else:
             motion = ([a for a in actions if a['action'].startswith('TURN_')] if turning else
@@ -461,7 +462,8 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
                               len(task.subgoals) - 1 else 'task_target_not_grounded_nearby',
                               missing=['nearby_task_target'])
             elif task.current_subgoal_index == len(task.subgoals) - 1 and not (
-                scene['scene']['final_target_visible'] and scene['scene']['final_target_evidence'].strip()
+                fresh_scene and scene['scene']['final_target_visible']
+                and scene['scene']['final_target_evidence'].strip()
             ):
                 result.update(reason='final_arrival_visual_evidence_required', missing=['final_arrival_visual_evidence'])
             elif claim == 'subgoal_completed':

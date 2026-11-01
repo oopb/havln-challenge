@@ -168,13 +168,20 @@ class MemoryService(MemoryRecords):
         failures = []
         for record in reversed(self.tool_ledger):
             call, result = record.get('call') or {}, record.get('result') or {}
-            if call.get('tool') != 'navigate_local':
+            if call.get('tool') not in ('navigate_local','navigate_relative','navigate_to_pixel'):
                 continue
-            if result.get('status') in ('BLOCKED', 'NEEDS_VIEW', 'REQUIRES_ATTENTION', 'INTERRUPTED'):
+            if record.get('subgoal_id') not in (None, 'sg_%d' % goal_index):
+                continue
+            effective = result.get('interrupted_status') or result.get('status')
+            if effective in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION','INTERRUPTED','STALE_TARGET'):
+                args=call.get('args') or {}
                 failures.append(dict(
-                    tool_call_id=record.get('call_id'),
-                    status=result.get('status'), reason=result.get('reason'),
-                    waypoint_id=(call.get('args') or {}).get('waypoint_id'),
+                    tool_call_id=record.get('call_id'),tool=call.get('tool'),
+                    status=effective,reason=result.get('reason'),
+                    waypoint_id=result.get('waypoint_id') or args.get('waypoint_id'),
+                    requested_motion=result.get('requested_motion') or
+                        {k:args[k] for k in ('turn_deg','distance_m') if k in args},
+                    pixel_target=result.get('pixel_target'),
                     observation_id=result.get('end_observation_id')))
             if len(failures) == 3:
                 break

@@ -138,6 +138,22 @@ class CrossEpochHistoryTests(unittest.TestCase):
         self.assertNotIn('landmark_passed',required_conditions(entry))
         self.assertEqual(normalize_conditions(turn),['orientation_completed'])
 
+    def test_multiple_milestones_share_one_source_sentence(self):
+        instruction='Descend the stairs, turn right at the bottom and enter the foyer.'
+        descend=dict(action='Descend the stairs',source_text=instruction,
+                     landmark='stairs',target='lower landing')
+        turn=dict(action='In-place right turn at the lower landing',
+                  source_text=instruction,landmark='landing',target='foyer direction')
+        foyer=dict(action='Enter the foyer',source_text=instruction,
+                   landmark='foyer',target='foyer')
+        from havln_agent.progress import stair_motion_direction
+        self.assertEqual(stair_motion_direction(descend),'DOWN')
+        self.assertIsNone(stair_motion_direction(turn))
+        self.assertIsNone(stair_motion_direction(foyer))
+        self.assertEqual(required_conditions(turn),{'orientation_completed'})
+        self.assertIn('registered_translation',required_conditions(foyer))
+        self.assertNotIn('orientation_completed',required_conditions(foyer))
+
 
 class ProvisionalTaskControlTests(unittest.TestCase):
     def runtime(self):

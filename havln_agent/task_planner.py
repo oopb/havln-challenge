@@ -18,7 +18,9 @@ PLAN_SCHEMA=object_schema(dict(subgoals=dict(type='array',minItems=1,maxItems=30
 
 def required_conditions(goal, final=False):
     """Runtime-owned evidence contract, never a free-form planner decision."""
-    action=(goal.get('source_text') or goal['action']).lower()
+    # Use the single planned milestone, not a source sentence shared by
+    # several ordered milestones.
+    action=goal['action'].lower()
     direction=stair_motion_direction(goal)
     if direction=='DOWN':
         required={'entry_confirmed','actual_descent_observed','target_nearby'}
