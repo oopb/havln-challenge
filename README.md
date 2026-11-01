@@ -153,7 +153,43 @@ counts, total tool calls, latest tool name/result, completed HTTP attempts,
 current API request phase, and elapsed time. This output is emitted by the
 parent process; full worker logs and trace JSONL are still saved unchanged.
 Use `--progress-interval 1` for faster refresh or `--progress-interval 0`
-to disable console polling. `worker-<GPU>.progress.json` and the per-episode
+to disable live polling. `--terminal-log off` disables all normal terminal
+progress and startup/completion messages but retains error diagnostics on stderr,
+worker logs, the full per-episode trace and automatic archives.
+
+### Parallel batch evaluation on one or more GPUs
+
+`--batch N` launches **N independent Habitat worker processes per GPU**,
+each with a separate simulator, model client, API cache, progress marker and log.
+Episodes are split into unique shards; if there are fewer episodes than worker
+slots, surplus slots are not launched. It is NOT simultaneous actions within
+a single episode and does not shorten the intrinsic latency of one episode.
+
+```bash
+# H100 GPU 0: 4 concurrent episodes, if the split contains >=4 episodes
+python -u scripts/run_api_agent.py --config configs/agent.yaml \\
+  --splits val_seen --episode-limit 8 --max-steps 128 \\
+  --gpu-ids 0 --batch 4 --terminal-log off \\
+  --output-dir /workspace/eval-batch4
+
+# Two visible GPUs, two processes each (up to four independent episodes)
+python -u scripts/run_api_agent.py --config configs/agent.yaml \\
+  --gpu-ids 0 1 --batch 2 --terminal-log on \\
+  --output-dir /workspace/eval-two-gpus
+```
+
+With `--batch 1` the legacy one-process-per-GPU behavior and worker filenames
+are preserved. For `--batch 4 --gpu-ids 0`, files are named
+`worker-0-b0.log` through `worker-0-b3.log`, with corresponding progress
+markers and isolated caches. The software accepts 1-32 processes **per GPU**;
+32 is an argument validation ceiling, not a claim that a GPU can run 32 Habitat
+instances. Start at 2 on an 80GB H100; try 4 and 8 only after measuring actual
+per-worker peak GPU memory, host RAM/CPU pressure and provider API throttling.
+Avoid using the same output directory from two simultaneous parent launchers.
+A rerun with changed --batch preserves completed episode traces, but uses new
+worker shards and filenames.
+
+`worker-<ID>.progress.json` and the per-episode
 `api-inflight.json` are small live state markers, not proof of task success.
 
 

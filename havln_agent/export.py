@@ -1,7 +1,7 @@
 """Independent scan workers and episode resume, reusing official export checks."""
 import argparse
 from datetime import datetime, timezone
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout, ExitStack
 from dataclasses import asdict
 import gzip
 import hashlib
@@ -118,6 +118,49 @@ def build_jobs(data, splits, manifest, limit):
     return jobs, expected, datasets
 
 
+def distribute_jobs(jobs, worker_count):
+    """Split oversized scene groups and balance distinct episodes across workers.
+
+    Each shard has one owner; a worker owns its own Habitat environment,
+    HTTP client, cache, trace files and progress marker. This is process-level
+    concurrency, never parallel actions within a single episode.
+    """
+    if worker_count < 1:
+        raise ValueError('worker_count must be positive')
+    total = sum(len(job['ids']) for job in jobs)
+    if not total:
+        return [[] for _ in range(worker_count)]
+    target = max(1, math.ceil(total / worker_count))
+    pieces = []
+    for job in jobs:
+        ids = job['ids']
+        chunks = [ids[i:i+target] for i in range(0,len(ids),target)]
+        for index, chunk in enumerate(chunks):
+            key = (job['key'] if len(chunks) == 1 else
+                   f"{job['key']}-part{index:04d}")
+            pieces.append(dict(key=key,split=job['split'],ids=chunk))
+    assigned = [[] for _ in range(worker_count)]
+    load = [0] * worker_count
+    # Largest-first bin packing prevents a large scene from monopolizing GPU 0.
+    for piece in sorted(pieces,key=lambda x:(-len(x['ids']),x['key'])):
+        index = min(range(worker_count),key=lambda i:(load[i],i))
+        assigned[index].append(piece)
+        load[index] += len(piece['ids'])
+    return assigned
+
+
+def worker_slots(jobs, gpu_ids, batch):
+    """Return unique worker IDs, GPU binding and non-overlapping scene jobs."""
+    if batch == 1:
+        return [dict(worker_id=str(gpu),gpu=gpu,
+                     jobs=jobs[i::len(gpu_ids)])
+                for i,gpu in enumerate(gpu_ids)]
+    gpu_slots = [(gpu,index) for gpu in gpu_ids for index in range(batch)]
+    partitions = distribute_jobs(jobs,len(gpu_slots))
+    return [dict(worker_id=f'{gpu}-b{local}',gpu=gpu,jobs=partitions[i])
+            for i,(gpu,local) in enumerate(gpu_slots) if partitions[i]]
+
+
 def completed_episode(directory, fingerprint, episode_id):
     result_path = directory / 'result.json'
     if not result_path.exists():
@@ -141,8 +184,10 @@ def run_worker(task_path):
     random.seed(task['seed'])
     np.random.seed(task['seed'])
     data, output = Path(task['data']), Path(task['output'])
-    client = APIClient(task['config'], output / 'cache' / str(task['gpu']))
-    progress_file = output / ('worker-' + str(task['gpu']) + '.progress.json')
+    worker_id = task.get('worker_id',str(task['gpu']))
+    # Same-GPU workers must NEVER share cache and progress directories.
+    client = APIClient(task['config'], output / 'cache' / worker_id)
+    progress_file = output / ('worker-' + worker_id + '.progress.json')
     for job in task['jobs']:
         shard = output / 'shards' / (job['key'] + '.json')
         rows, pending = [], []
@@ -279,23 +324,33 @@ def export(args, config):
                   config['runtime']['max_steps'] != 500)
     metadata = dict(fingerprint=fingerprint, identity=identity, complete=False, diagnostic=diagnostic)
     atomic_json(receipt, metadata)
+    slots = worker_slots(jobs,args.gpu_ids,args.batch)
+    metadata['execution'] = dict(batch_per_gpu=args.batch,
+        active_workers=len(slots),
+        gpu_ids=list(args.gpu_ids),
+        workers=[dict(worker_id=s['worker_id'],gpu=s['gpu'],
+                      episode_count=sum(len(j['ids']) for j in s['jobs']))
+                 for s in slots])
+    atomic_json(receipt, metadata)
     processes, logs = [], []
     try:
-        for index, gpu in enumerate(args.gpu_ids):
-            task = dict(config=config, data=str(data), output=str(output), gpu=gpu, source=str(source),
+        for slot in slots:
+            gpu, worker_id = slot['gpu'], slot['worker_id']
+            task = dict(config=config, data=str(data), output=str(output), gpu=gpu,
+                        worker_id=worker_id,source=str(source),
                         runtime_config=str(args.runtime_config.resolve()), fingerprint=fingerprint,
                         seed=args.seed, retry_incomplete=args.retry_incomplete,
-                        verbose=args.verbose, jobs=jobs[index::len(args.gpu_ids)])
-            task_path = output / ('worker-' + str(gpu) + '.json')
+                        verbose=args.verbose, jobs=slot['jobs'])
+            task_path = output / ('worker-' + worker_id + '.json')
             atomic_json(task_path, task)
-            log = (output / ('worker-' + str(gpu) + '.log')).open('a')
+            log = (output / ('worker-' + worker_id + '.log')).open('a')
             logs.append(log)
             processes.append(subprocess.Popen([sys.executable, str(ENTRYPOINT), '--worker-task', str(task_path)],
                                               stdout=log, stderr=subprocess.STDOUT))
         interval = getattr(args, 'progress_interval', 3.0)
-        if interval > 0:
-            monitor = ProgressMonitor(output, args.gpu_ids)
-            print('[HA-VLN] Live terminal progress enabled; full worker output remains in worker-<GPU>.log',
+        if interval > 0 and args.terminal_log == 'on' and slots:
+            monitor = ProgressMonitor(output,[s['worker_id'] for s in slots])
+            print('[HA-VLN] Live terminal progress enabled; worker logs remain in worker-<ID>.log',
                   flush=True)
             monitor.report()
             while any(process.poll() is None for process in processes):
@@ -386,6 +441,13 @@ def main():
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--splits', nargs='+', choices=SPLITS, default=list(SPLITS))
     parser.add_argument('--gpu-ids', nargs='+', type=int, default=[0])
+    parser.add_argument('--batch', type=int, default=1,
+                        help='Concurrent independent Habitat worker processes PER GPU (1-32; default 1). '
+                             'Only distinct episodes run concurrently; actual safe limit depends on VRAM, '
+                             'CPU RAM/cores and API provider rate limits.')
+    parser.add_argument('--terminal-log', choices=['on','off'], default='on',
+                        help='Show live progress and parent informational messages in the terminal (default on). '
+                             'Worker logs, JSON traces, errors and archives are preserved with off.')
     parser.add_argument('--episode-limit', type=int)
     parser.add_argument('--max-steps', type=int, help='Diagnostic action budget, including executed STOP')
     parser.add_argument('--seed', type=int, default=0)
@@ -413,6 +475,8 @@ def main():
         parser.error('--progress-interval must be a finite number between 0 and 60 seconds')
     if args.episode_limit is not None and args.episode_limit < 1:
         parser.error('--episode-limit must be positive')
+    if not 1 <= args.batch <= 32:
+        parser.error('--batch must be between 1 and 32 processes per GPU')
     if len(set(args.splits)) != len(args.splits):
         parser.error('splits must be distinct')
     if len(set(args.gpu_ids)) != len(args.gpu_ids) or any(g < 0 for g in args.gpu_ids):
@@ -422,19 +486,25 @@ def main():
         if not 1 <= args.max_steps <= 500:
             parser.error('--max-steps must be between 1 and 500')
         config['runtime']['max_steps'] = args.max_steps
-    failure = None
-    try:
-        export(args, config)
-    except BaseException as error:
-        failure = error
-        raise
-    finally:
-        if not args.no_auto_archive:
-            frames = ('all' if args.episode_limit == 1 else 'critical') if args.archive_frames == 'auto' else args.archive_frames
-            try:
-                auto_archive(args.output_dir, args.archive_dir, frames=frames)
-            except Exception as archive_error:
-                if failure is None:
-                    raise
-                print('[HA-VLN] Diagnostic archive FAILED while handling run error: '
-                      + str(archive_error), file=sys.stderr, flush=True)
+    # Suppress ONLY normal parent stdout. Child worker stdout/stderr still
+    # goes to worker-<ID>.log; errors remain visible on parent stderr.
+    with ExitStack() as stack:
+        if args.terminal_log == 'off':
+            null_output = stack.enter_context(open(os.devnull, 'w'))
+            stack.enter_context(redirect_stdout(null_output))
+        failure = None
+        try:
+            export(args, config)
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            if not args.no_auto_archive:
+                frames = ('all' if args.episode_limit == 1 else 'critical') if args.archive_frames == 'auto' else args.archive_frames
+                try:
+                    auto_archive(args.output_dir, args.archive_dir, frames=frames)
+                except Exception as archive_error:
+                    if failure is None:
+                        raise
+                    print('[HA-VLN] Diagnostic archive FAILED while handling run error: '
+                          + str(archive_error), file=sys.stderr, flush=True)
