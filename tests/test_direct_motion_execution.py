@@ -105,8 +105,9 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertEqual(feedback['motion_alert']['reason'],
                          'no_observed_frame_change_after_forward')
         self.assertFalse(feedback['motion_alert']['collision_proven'])
-        self.assertEqual(result['status'],'PARTIAL')
-        self.assertEqual(result['interrupted_status'],'REQUIRES_ATTENTION')
+        # Internal _navigate_relative yields the raw controller status; the
+        # outer ToolExecutor.execute wraps executed actions as PARTIAL.
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
         self.assertEqual(result['reason'],
                          'no_observed_frame_change_after_forward')
         self.assertFalse(result['target_reached'])
