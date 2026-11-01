@@ -341,12 +341,16 @@ def _captured_landing_proof(grounding, observations, last_vertical_step):
     observed=observations.get(source.get('observation_id'))
     if not observed or observed['step'] <= last_vertical_step:
         return False
-    if source.get('image_scope','current') != 'current':
+    if source.get('image_scope') != 'current':
         return False
-    if not all(source.get(k)==observed.get(k)
-               for k in ('rgb_hash','depth_hash','pose')):
+    # Missing fields must never authenticate each other as None == None.
+    if not all(isinstance(source.get(k), str) and source[k] for k in
+               ('rgb_hash', 'depth_hash')):
         return False
-    return True
+    if not isinstance(source.get('pose'), dict) or not source['pose']:
+        return False
+    return all(source[k] == observed.get(k)
+               for k in ('rgb_hash', 'depth_hash', 'pose'))
 
 
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
@@ -455,10 +459,28 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         if (not loc or loc['step'] <= max(origin_step, min(historical_steps) if historical_steps else origin_step)
                 or g['source']['observation_id'] not in ids):
             continue
-        if ((g.get('landing_geometry') or {}).get('status')=='SUPPORTED'
-                and g['semantic'].get('landing_box') is not None
-                and (_captured_landing_proof(g,observed,origin_step)
-                     or current_visual_evidence(g['source'],memory,now,max_age))):
+        if ((g.get('landing_geometry') or {}).get('status')!='SUPPORTED'
+                or g['semantic'].get('landing_box') is None
+                or not (_captured_landing_proof(g,observed,origin_step)
+                        or current_visual_evidence(g['source'],memory,now,max_age))):
+            continue
+        # A landing-like floor can be seen before actually stepping off the
+        # stairs. Never cut the proof interval at that early sighting. It
+        # must follow two *registered* supported LEVEL forwards after the last
+        # registered directed stair movement in that candidate interval.
+        prior_forwards=[a for a in memory.actions
+            if a['action']=='MOVE_FORWARD' and origin_step<=a['step']<loc['step']
+            and a.get('subgoal',memory.task.current_subgoal_index)
+                ==memory.task.current_subgoal_index]
+        prior_vertical=max((a['step'] for a in prior_forwards
+            if registered_action(a,observed)
+            and sign*a['result']['rgbd_motion']['translation_m']['y_up']
+                >a['result']['rgbd_motion']['uncertainty_m']),default=origin_step)
+        prior_level=[a for a in prior_forwards if a['step']>prior_vertical
+            and registered_action(a,observed)
+            and a['result']['rgbd_motion']['vertical_motion']=='LEVEL'
+            and (a['result'].get('landing_support') or {}).get('status')=='SUPPORTED']
+        if len({a['result']['observation_after'] for a in prior_level})>=2:
             landing_capture_steps.append(loc['step'])
     evidence_cutoff_step=min(landing_capture_steps) if landing_capture_steps else None
     details['evidence_cutoff_step']=evidence_cutoff_step
@@ -543,8 +565,19 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         supported.append('multi_frame_level_landing_transition')
     else:
         missing.append('multi_frame_level_landing_transition')
+    # The cited RGB-D landing must be captured AFTER the required level exit
+    # receipts, not merely some time after the first measured descent.
+    level_capture_steps=sorted({observed[a['result']['observation_after']]['step']
+        for a in landing_steps
+        if a['result']['observation_after'] in observed})
+    earliest_valid_landing_step=(level_capture_steps[1]
+                                 if len(level_capture_steps)>=2 else None)
     landings = [g for g in groundings
-                if g['source']['observation_id'] in ids
+                if earliest_valid_landing_step is not None
+                and g['source']['observation_id'] in ids
+                and g['source']['observation_id'] in observed
+                and observed[g['source']['observation_id']]['step']
+                    >=earliest_valid_landing_step
                 and (_captured_landing_proof(g, observed, last_vertical)
                      or (observed.get(g['source']['observation_id'],{})
                          .get('step',-1) > last_vertical
