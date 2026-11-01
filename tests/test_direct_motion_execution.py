@@ -89,6 +89,33 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertEqual([a['action'] for a in r.memory.actions].count('MOVE_FORWARD'),2)
         self.assertEqual([a['action'] for a in r.memory.actions].count('TURN_RIGHT'),1)
 
+    def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
+        r=runtime()
+        unknown=dict(status='UNKNOWN',
+            reason='inconsistent_with_forward_camera_motion')
+        # The test fixture returns byte-identical RGB and depth frames, as
+        # observed in 13 real forward actions in evaluation episode 4.
+        with patch('havln_agent.tools.estimate_translation',return_value=unknown):
+            result=r._navigate_relative(0,.75,3)
+        self.assertEqual(len(r.memory.actions),1)
+        self.assertEqual(r.memory.actions[0]['action'],'MOVE_FORWARD')
+        feedback=r.memory.actions[0]['result']
+        self.assertFalse(feedback['rgb_changed'])
+        self.assertFalse(feedback['depth_changed'])
+        self.assertEqual(feedback['motion_alert']['reason'],
+                         'no_observed_frame_change_after_forward')
+        self.assertFalse(feedback['motion_alert']['collision_proven'])
+        # Internal _navigate_relative yields the raw controller status; the
+        # outer ToolExecutor.execute wraps executed actions as PARTIAL.
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],
+                         'no_observed_frame_change_after_forward')
+        self.assertFalse(result['target_reached'])
+        self.assertEqual(r.motion_controller.motion_epoch,1)
+        self.assertTrue(any(e['event']=='no_observed_forward_motion'
+                            for e in r.memory.events))
+        self.assertEqual(r.motion_controller.z,0.)
+
     def test_direct_route_starts_unverified_before_first_live_probe(self):
         r=runtime()
         r._navigate_local=Mock(return_value=dict(status='PARTIAL'))

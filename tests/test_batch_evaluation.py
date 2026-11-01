@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from scripts.export_cma_submission import atomic_json
 
-from havln_agent.export import distribute_jobs, worker_slots, main, assemble, assemble_saved_workers
+from havln_agent.export import distribute_jobs, worker_slots, main, assemble, assemble_saved_workers, exclusive_run_directory
 from havln_agent.progress_monitor import ProgressMonitor
 
 
@@ -50,6 +50,16 @@ class BatchEvaluationTests(unittest.TestCase):
         self.assertCountEqual(flat,original)
         shard_keys=[j['key'] for w in workers for j in w['jobs']]
         self.assertEqual(len(shard_keys),len(set(shard_keys)))
+
+    def test_run_directory_exclusively_locks_even_when_cli_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with exclusive_run_directory(tmp):
+                with self.assertRaisesRegex(RuntimeError,'Another export/assemble'):
+                    with exclusive_run_directory(tmp):
+                        pass
+            # The lock FILE can remain: kernel releases it on process exit.
+            with exclusive_run_directory(tmp):
+                self.assertTrue((Path(tmp)/'.agent-export.lock').exists())
 
     def test_one_episode_runs_only_one_process_even_when_batch_is_large(self):
         jobs=[dict(key='val_seen-one',split='val_seen',ids=['1'])]
