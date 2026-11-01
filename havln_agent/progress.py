@@ -467,7 +467,14 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
                and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index
                and registered_action(a, observed)
                and abs(angle_delta(a['pose']['heading'], heading)) <= math.radians(45)]
-    forward_window=[a for a in memory.actions if motions and origin_step<=a['step']<=motions[-1]['step']
+    # When a landing capture ends a proof interval, account for EVERY
+    # forward action before that capture, including failed registration after
+    # the last accepted LEVEL step. Otherwise an unknown gap could silently
+    # bridge the measured motion and a later unrelated landing image.
+    window_end=(evidence_cutoff_step if evidence_cutoff_step is not None
+                else motions[-1]['step']+1 if motions else origin_step)
+    forward_window=[a for a in memory.actions
+                    if motions and origin_step<=a['step']<window_end
                     and a['action']=='MOVE_FORWARD'
                     and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index]
     continuous=bool(motions) and [a['step'] for a in forward_window]==[a['step'] for a in motions]
@@ -475,6 +482,22 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     # steps. They change observations, never supply translation evidence.
     # Continuity is a *proof* constraint, not a history-retention policy.
     # Never compare absolute coordinates across different reanchor epochs.
+    # A captured landing must belong to the same uninterrupted local
+    # motion epoch as the end of the measured traversal; visual similarity
+    # from a new reanchor is not a metric bridge.
+    if continuous and evidence_cutoff_step is not None:
+        capture=next((g for g in groundings
+            if observed.get(g['source'].get('observation_id'),{}).get('step')
+            == evidence_cutoff_step
+            and (g.get('landing_geometry') or {}).get('status')=='SUPPORTED'),None)
+        last_after=observed.get(motions[-1]['result']['observation_after'])
+        if capture is None or last_after is None:
+            continuous=False
+        else:
+            landing_obs=observed[capture['source']['observation_id']]
+            continuous=(
+                landing_obs['pose'].get('motion_epoch',0)
+                ==last_after['pose'].get('motion_epoch',0))
     continuous=continuous and all(
         left['pose'].get('motion_epoch',0)==right['pose'].get('motion_epoch',0)
         and observed[left['result']['observation_after']]['pose'].get('motion_epoch',0)
