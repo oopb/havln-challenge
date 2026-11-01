@@ -117,10 +117,11 @@ class ActiveObservationTests(unittest.TestCase):
         from unittest.mock import patch
         agent=VisualPerception(SimpleNamespace(client=None))
         with patch('havln_agent.visual_perception.image_url',
-                   return_value='data:image/png;base64,AA'), \\
-             patch.object(agent,'complete',return_value=visual()) as call:
-            agent.search_view(SimpleNamespace(rgb=None),dict(observation_id='obs_1'),
-                              'look for person',['person'],force_recheck=True)
+                   return_value='data:image/png;base64,AA'):
+            with patch.object(agent,'complete',return_value=visual()) as call:
+                agent.search_view(SimpleNamespace(rgb=None),
+                                  dict(observation_id='obs_1'),
+                                  'look for person',['person'],force_recheck=True)
         self.assertFalse(call.call_args.kwargs['cache'])
 
     def test_full_sweep_uses_checkpoint_vlm_not_per_15degree_step(self):
