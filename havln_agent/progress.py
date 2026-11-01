@@ -445,7 +445,25 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         missing.append('unambiguous_nearby_stair_entry')
     heading = origin['source']['pose']['heading'] + math.radians(
         entry.get('bearing_degrees', origin['position'].get('bearing_degrees', 0)))
-    motions = [a for a in memory.actions if a['step'] >= origin_step and a['action'] == 'MOVE_FORWARD'
+    # Completion is a past *interval*, not a property of the current odometry
+    # chain. A later unrelated failed MOVE cannot erase a previously complete
+    # stair-to-landing traversal. Scope the proof to the earliest cited,
+    # capture-authenticated, depth-supported landing AFTER the descent began.
+    landing_capture_steps=[]
+    for g in groundings:
+        loc=observed.get(g['source'].get('observation_id'))
+        if not loc or loc['step'] <= origin_step or g['source']['observation_id'] not in ids:
+            continue
+        if ((g.get('landing_geometry') or {}).get('status')=='SUPPORTED'
+                and g['semantic'].get('landing_box') is not None
+                and (_captured_landing_proof(g,observed,origin_step)
+                     or current_visual_evidence(g['source'],memory,now,max_age))):
+            landing_capture_steps.append(loc['step'])
+    evidence_cutoff_step=min(landing_capture_steps) if landing_capture_steps else None
+    details['evidence_cutoff_step']=evidence_cutoff_step
+    motions = [a for a in memory.actions if a['step'] >= origin_step
+               and (evidence_cutoff_step is None or a['step'] < evidence_cutoff_step)
+               and a['action'] == 'MOVE_FORWARD'
                and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index
                and registered_action(a, observed)
                and abs(angle_delta(a['pose']['heading'], heading)) <= math.radians(45)]
@@ -464,10 +482,6 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         and observed[left['result']['observation_after']]['pose']['x']==observed[right['result']['observation_before']]['pose']['x']
         and observed[left['result']['observation_after']]['pose']['z']==observed[right['result']['observation_before']]['pose']['z']
         for left,right in zip(motions,motions[1:]))
-    if motions and any(a['action'] == 'MOVE_FORWARD' and a['step'] > motions[-1]['step']
-                       and a.get('subgoal',memory.task.current_subgoal_index)==memory.task.current_subgoal_index
-                       for a in memory.actions):
-        continuous = False
     details['continuous_rgbd_motion_chain'] = continuous
     if motions and not continuous:
         missing.append('continuous_registered_entry_to_landing_chain')
