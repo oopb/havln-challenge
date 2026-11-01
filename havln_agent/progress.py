@@ -260,6 +260,12 @@ def _historical_stair_scene_anchor(memory, goal, observed, first_down_step):
             continue
         if obs['step'] > first_down_step:
             continue
+        # A forward action between seeing the stairs and measuring a later
+        # descent may have left the pictured location. TURN/LOOK actions do
+        # not translate the camera and are safe intervening evidence.
+        if any(a['action']=='MOVE_FORWARD' and obs['step'] <= a['step'] < first_down_step
+               for a in memory.actions):
+            continue
         names=[str(item.get('name','')) for item in scene.get('landmarks',[])]
         stair_names=[name for name in names if re.search(
             r'\b(?:stair(?:case|well|way|s)?|treads?|steps?)\b', name, re.I)]
@@ -272,6 +278,55 @@ def _historical_stair_scene_anchor(memory, goal, observed, first_down_step):
         source_kind='historical_vlm_scene_not_metric_grounding',
         landmark_label=label[:140],
         scope='semantic_attribution_only_no_entry_or_landing_proof')
+
+
+def stair_replay_hint(memory, subgoal=None):
+    """Compact, non-authoritative audit of stair evidence for model decisions.
+
+    Return observation IDs that can be cited at verification time; never
+    decide success, synthesize displacement, or authorize forward motion.
+    """
+    index=memory.task.current_subgoal_index if subgoal is None else subgoal
+    if not 0 <= index < len(memory.task.subgoals):
+        return None
+    goal=memory.task.subgoals[index]
+    direction=stair_motion_direction(goal)
+    if not direction:
+        return None
+    hist=registered_motion_history(memory,subgoal=index)
+    steps=hist['registered_down_steps' if direction=='DOWN' else 'registered_up_steps']
+    observed={o['observation_id']:o for o in memory.observations}
+    # The helper needs the target subgoal without altering the runtime state.
+    class _TaskView:
+        current_subgoal_index=index
+    class _MemoryView:
+        task=_TaskView()
+        actions=memory.actions
+        scene_history=getattr(memory,'scene_history',[])
+    scene=_historical_stair_scene_anchor(
+        _MemoryView(),goal,observed,min(steps) if steps else None)
+    grounded=[g['source']['observation_id'] for g in memory.groundings
+        if g['source'].get('subgoal')==index
+        and g.get('status') in ('LOCALIZED','PARTIAL')
+        and g.get('semantic',{}).get('confidence') not in (None,'low')
+        and g['source'].get('observation_id') in observed]
+    latest_vertical=max(steps) if steps else -1
+    captured_landings=[g['source']['observation_id'] for g in memory.groundings
+        if g['source'].get('subgoal')==index
+        and g.get('semantic',{}).get('landing_box') is not None
+        and (g.get('landing_geometry') or {}).get('status')=='SUPPORTED'
+        and _captured_landing_proof(g,observed,latest_vertical)]
+    return dict(subgoal=index,stair_direction=direction,
+        registered_vertical_steps=steps[-8:],
+        historical_motion_m_est=(hist['observed_downward_m_est'] if direction=='DOWN'
+                                 else hist['observed_upward_m_est']),
+        preceding_scene_observation_id=scene['observation_id'] if scene else None,
+        landmark_grounding_observation_ids=grounded[-3:],
+        captured_landing_observation_ids=captured_landings[-3:],
+        unknown_forward_steps=hist['unknown_forward_steps'][-8:],
+        proof_status='HISTORICAL_COMPONENTS_NOT_COMPLETION',
+        note='Cite relevant prior RGB-D evidence to verify_subgoal; a descent, '
+             'visual stair scene or current location alone is NOT arrival proof.')
 
 
 def _captured_landing_proof(grounding, observations, last_vertical_step):

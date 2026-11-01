@@ -2,7 +2,7 @@
 import math
 import time
 
-from .progress import turn_evidence, current_visual_evidence, registered_motion_history
+from .progress import turn_evidence, current_visual_evidence, registered_motion_history, stair_replay_hint
 from .memory_records import task_tokens
 from .local_exploration import last_block, local_coverage
 
@@ -182,9 +182,10 @@ def navigation_context(runtime):
         idx=transition['from_subgoal']
         if idx==index or any(x['subgoal_index']==idx for x in prior_motion_evidence):
             continue
-        prior_motion_evidence.append(dict(subgoal_index=idx,
-            **{k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
-               if k!='rows'}))
+        history={k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
+                 if k!='rows'}
+        prior_motion_evidence.append(dict(subgoal_index=idx,**history,
+            stair_replay=stair_replay_hint(memory,subgoal=idx)))
         if len(prior_motion_evidence)>=2:
             break
     result=dict(goal=runtime.active_subgoal,
@@ -199,6 +200,7 @@ def navigation_context(runtime):
             select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
+        stair_replay=stair_replay_hint(memory),
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             direct_segment_max_m=3.0),
