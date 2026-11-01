@@ -54,6 +54,25 @@ class TaskPlannerContractTests(unittest.TestCase):
             'final_arrival_visible', 'landmark_visible', 'registered_translation', 'target_nearby'
         ])
 
+    def test_one_sentence_three_planned_milestones_are_independent(self):
+        instruction='Descend the stairs, turn right at the landing and enter the foyer.'
+        raw=dict(subgoals=[
+            dict(action='Descend the stairs',landmark='stairs',
+                 target='landing',source_sentence_ids=[1]),
+            dict(action='In-place right turn',landmark='landing',
+                 target='foyer direction',source_sentence_ids=[1]),
+            dict(action='Enter the foyer',landmark='foyer',
+                 target='foyer',source_sentence_ids=[1]),
+        ],final_target='foyer',constraints=[])
+        plan=TaskPlanner.parse(FakeClient(raw),instruction)
+        self.assertEqual(plan['subgoals'][0]['success_criteria'],
+                         ['actual_descent_observed','entry_confirmed','target_nearby'])
+        self.assertEqual(plan['subgoals'][1]['success_criteria'],['orientation_completed'])
+        self.assertEqual(plan['subgoals'][2]['success_criteria'],
+                         ['final_arrival_visible','landmark_visible',
+                          'registered_translation','target_nearby'])
+        self.assertTrue(all(g['source_text']==instruction for g in plan['subgoals']))
+
     def test_missing_source_sentence_is_still_invalid(self):
         from havln_agent.api_client import APIError
         raw = dict(subgoals=[dict(action='Descent.',landmark='stairs',
