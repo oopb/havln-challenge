@@ -53,6 +53,13 @@ def waypoint_summary(path):
             'grounding_id', 'target', 'distance_before_m', 'distance_after_m',
             'bearing_error_degrees', 'direction_compatibility',
             'rejection_reasons', 'stair_direction_hypothesis'))
+    hints = path.get('tentative_goal_bearings') or []
+    if hints:
+        value['tentative_goal_bearings'] = [
+            fields(h,('target','bearing_deg','angular_error_deg','confidence',
+                      'source_observation_id','metric_distance_valid',
+                      'target_identity_verified','evidence'))
+            for h in hints[:2]]
     failures = path.get('failure_history') or []
     if failures:
         value['failed_approaches'] = [fields(item, ('reason', 'basis', 'confidence'))
