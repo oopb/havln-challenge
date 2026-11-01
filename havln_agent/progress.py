@@ -274,6 +274,26 @@ def _historical_stair_scene_anchor(memory, goal, observed, first_down_step):
         scope='semantic_attribution_only_no_entry_or_landing_proof')
 
 
+def _captured_landing_proof(grounding, observations, last_vertical_step):
+    """Replay historical RGB-D landing evidence captured while it was live.
+
+    A previously validated landing region does not stop having existed just
+    because the model later turns away. The stored source must match the exact
+    saved RGB, depth and pose from that time; historical keyframe analyses are
+    not acceptable as fresh depth-grounding evidence.
+    """
+    source=grounding.get('source') or {}
+    observed=observations.get(source.get('observation_id'))
+    if not observed or observed['step'] <= last_vertical_step:
+        return False
+    if source.get('image_scope','current') != 'current':
+        return False
+    if not all(source.get(k)==observed.get(k)
+               for k in ('rgb_hash','depth_hash','pose')):
+        return False
+    return True
+
+
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     down = stair_motion_direction(goal) == 'DOWN'
     direction, sign = ('down', -1) if down else ('up', 1)
@@ -430,13 +450,19 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         supported.append('multi_frame_level_landing_transition')
     else:
         missing.append('multi_frame_level_landing_transition')
-    landings = [g for g in groundings if current_visual_evidence(g['source'], memory, now, max_age)
-                and g['source']['observation_id'] in ids
+    landings = [g for g in groundings
+                if g['source']['observation_id'] in ids
+                and (_captured_landing_proof(g, observed, last_vertical)
+                     or (observed.get(g['source']['observation_id'],{})
+                         .get('step',-1) > last_vertical
+                         and current_visual_evidence(g['source'], memory, now, max_age)))
                 and (g.get('landing_geometry') or {}).get('status') == 'SUPPORTED'
                 and g['semantic'].get('landing_box') is not None
-                and g['semantic'].get('landing_visible', down and g['semantic']['lower_landing_visible'])]
+                and g['semantic'].get('landing_visible',
+                    down and g['semantic'].get('lower_landing_visible',False))]
     if landings:
-        supported.extend(['current_landing_visual_region', 'measured_near_landing_plane'])
+        supported.extend(['captured_landing_visual_region', 'measured_near_landing_plane'])
+        details['landing_evidence_scope']='registered_rgbd_at_capture_not_current_position'
         details['source_observation_ids'].append(landings[-1]['source']['observation_id'])
     else:
         missing.append('current_grounded_landing_with_depth_support')
@@ -455,7 +481,7 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     else:
         missing.append('registered_exit_from_initial_stair_entry_region')
     details['alternative_visual_spatial_evidence'] = [item for item in supported if item in (
-        'localized_nearby_stair_entry', 'current_landing_visual_region', 'measured_near_landing_plane',
+        'localized_nearby_stair_entry', 'captured_landing_visual_region', 'measured_near_landing_plane',
         'registered_movement_along_stair_direction', 'registered_exit_from_initial_stair_entry_region')]
     independent_transition = _verified_stair_transition(
         directed, landing_steps, landings, displacement, uncertainty,
