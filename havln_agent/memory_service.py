@@ -172,7 +172,7 @@ class MemoryService(MemoryRecords):
                    'UP' if policy == 'ASCEND_STAIRS' else 'LEVEL')
         successes = [item for item in motions if item['vertical_motion'] == desired]
         failures = []
-        evidence_obs={o['observation_id']:o for o in self.observations}
+        evidence_obs={o['observation_id']:o for o in getattr(self,'observations',[])}
         live_pose=(getattr(self,'current',None) or {}).get('pose') or {}
         for record in reversed(self.tool_ledger):
             call, result = record.get('call') or {}, record.get('result') or {}
