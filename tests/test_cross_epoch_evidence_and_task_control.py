@@ -88,6 +88,49 @@ class CrossEpochHistoryTests(unittest.TestCase):
         self.assertNotEqual(stage,'COMPLETED')
         self.assertIn('multi_frame_level_landing_transition',missing)
 
+    def test_earlier_vlm_stair_scene_links_motion_when_first_metric_grounding_is_late(self):
+        m=memory()
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        m.scene_history=[dict(scene=dict(landmarks=[
+            dict(name='Descending wooden staircase treads')]),
+            source=dict(observation_id='obs_0018',subgoal=0))]
+        stage,supported,missing,contradictions,detail=_stair_evidence(
+            m,m.task.subgoals[0],{'obs_0018','obs_0051'},0.,10.,1.25)
+        self.assertEqual(detail['anchor_source_kind'],
+                         'historical_vlm_scene_not_metric_grounding')
+        self.assertFalse(detail['source_is_metric_entry'])
+        self.assertEqual(detail['motion_steps'],[22,23,24,25])
+        self.assertEqual(detail['vertical_motion_steps'],[22,23,24,25])
+        self.assertIn('multi_frame_registered_down_motion',supported)
+        self.assertIn('historical_stair_scene_before_registered_motion',supported)
+        self.assertNotEqual(stage,'COMPLETED')
+        self.assertIn('multi_frame_level_landing_transition',missing)
+
+    def test_navigation_hint_provides_historical_scene_citation_but_no_completion(self):
+        from havln_agent.progress import stair_replay_hint
+        m=memory()
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        m.scene_history=[dict(scene=dict(landmarks=[
+            dict(name='Wooden staircase descending')]),
+            source=dict(observation_id='obs_0018',subgoal=0))]
+        h=stair_replay_hint(m)
+        self.assertEqual(h['registered_vertical_steps'],[22,23,24,25])
+        self.assertEqual(h['preceding_scene_observation_id'],'obs_0018')
+        self.assertEqual(h['proof_status'],'HISTORICAL_COMPONENTS_NOT_COMPLETION')
+        self.assertFalse(h['captured_landing_observation_ids'])
+
+    def test_unrelated_historical_scene_does_not_label_descent(self):
+        m=memory()
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        m.scene_history=[dict(scene=dict(landmarks=[
+            dict(name='Open doorway and wooden floor')]),
+            source=dict(observation_id='obs_0018',subgoal=0))]
+        _,supported,missing,_,detail=_stair_evidence(
+            m,m.task.subgoals[0],{'obs_0018','obs_0051'},0.,10.,1.25)
+        self.assertNotIn('historical_stair_scene_before_registered_motion',supported)
+        self.assertEqual(detail['motion_steps'],[])
+        self.assertIn('multi_frame_registered_down_motion',missing)
+
     def test_no_landing_receipts_means_not_verified_even_with_early_descent(self):
         m=memory()
         with patch('havln_agent.progress.current_visual_evidence',return_value=True):

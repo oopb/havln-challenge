@@ -2,7 +2,7 @@
 import math
 import time
 
-from .progress import turn_evidence, current_visual_evidence, registered_motion_history
+from .progress import turn_evidence, current_visual_evidence, registered_motion_history, stair_replay_hint
 from .memory_records import task_tokens
 from .local_exploration import last_block, local_coverage
 
@@ -129,6 +129,10 @@ def planner_context(runtime):
     task=runtime.memory.task
     index=task.current_subgoal_index
     return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','success_criteria')),
+        stair_replay=stair_replay_hint(runtime.memory),
+        registered_motion_evidence={key:value for key,value in
+            registered_motion_history(runtime.memory).items() if key!='rows'},
+        provisional_transitions=getattr(task,'provisional_transitions',[])[-3:],
         verified_milestones=[dict(subgoal=m['subgoal'],source_observation_ids=m.get('observation_ids',[])[-2:],
             executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported']) for m in task.completion_evidence[-3:]],
         new_evidence=runtime.memory.recall_observation(runtime.memory.current_place_id,
@@ -182,9 +186,10 @@ def navigation_context(runtime):
         idx=transition['from_subgoal']
         if idx==index or any(x['subgoal_index']==idx for x in prior_motion_evidence):
             continue
-        prior_motion_evidence.append(dict(subgoal_index=idx,
-            **{k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
-               if k!='rows'}))
+        history={k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
+                 if k!='rows'}
+        prior_motion_evidence.append(dict(subgoal_index=idx,**history,
+            stair_replay=stair_replay_hint(memory,subgoal=idx)))
         if len(prior_motion_evidence)>=2:
             break
     result=dict(goal=runtime.active_subgoal,
@@ -199,6 +204,7 @@ def navigation_context(runtime):
             select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
+        stair_replay=stair_replay_hint(memory),
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             direct_segment_max_m=3.0),

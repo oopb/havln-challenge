@@ -62,6 +62,24 @@ class MotionConsensusTests(unittest.TestCase):
         self.assertEqual(motion['consensus_mode'],'rejected')
         self.assertEqual(motion['reason'],'inconsistent_or_dynamic_correspondences')
 
+    def test_strong_static_matches_near_zero_motion_are_not_fake_displacement(self):
+        before=SimpleNamespace(rgb=np.zeros((4,4,3),np.uint8),
+            depth=np.zeros((4,4),np.float32),pitch_deg=0.,captured_at=10.)
+        after=SimpleNamespace(rgb=np.ones((4,4,3),np.uint8),
+            depth=np.ones((4,4),np.float32),pitch_deg=0.,captured_at=11.)
+        features=synthetic_features()
+        before_features=features[0]
+        static_after=(features[1][0],features[0][1].copy(),features[1][2])
+        with patch('havln_agent.motion._features',
+                   side_effect=[before_features,static_after]):
+            motion=estimate_translation(before,after,
+                SimpleNamespace(forward_step=.25,max_step_height=.2))
+        self.assertEqual(motion['status'],'UNKNOWN')
+        self.assertEqual(motion['reason'],'no_resolvable_forward_translation')
+        self.assertTrue(motion['stationary_image_hypothesis'])
+        self.assertEqual(motion['rejected_translation_hypothesis_m']['z_forward'],0)
+        self.assertNotIn('translation_m',motion)
+
     def test_absence_of_live_matches_fails_closed(self):
         before=SimpleNamespace(rgb=np.zeros((4,4,3),np.uint8),
             depth=np.zeros((4,4),np.float32),pitch_deg=0.,captured_at=10.)
