@@ -94,6 +94,31 @@ class ExplorationTests(unittest.TestCase):
             result=dict(status='TARGET_REACHED',executed_motion=['MOVE_FORWARD'])))
         self.assertIsNone(last_block(self.mem,pose(120)))
 
+    def test_direct_motion_block_is_retained_at_post_action_pose(self):
+        # Unlike old navigate_local, model-directed navigation can move
+        # without generating a waypoint first. Both need identical physical
+        # feedback in the navigation context.
+        for tool in ('navigate_relative','navigate_to_pixel'):
+            with self.subTest(tool=tool):
+                self.mem.tool_ledger=[dict(call_id='direct_block',
+                    call=dict(tool=tool),
+                    result=dict(status='PARTIAL',interrupted_status='BLOCKED',
+                        reason='occupied_next_step',executed_motion=['TURN_RIGHT'],
+                        end_observation_id='obs_at_end',
+                        safety=dict(path_state='OCCUPIED',clearance=.2)))]
+                block=last_block(self.mem,pose(120))
+                self.assertIsNotNone(block)
+                self.assertEqual(block['tool_call_id'],'direct_block')
+                self.assertEqual(block['absolute_heading_deg'],90)
+                self.assertEqual(block['status'],'BLOCKED')
+                self.assertIsNone(last_block(self.mem,pose(120,epoch=3)))
+
+    def test_new_direct_success_supersedes_previous_collision(self):
+        self.mem.tool_ledger.append(dict(call_id='direct_success',
+            call=dict(tool='navigate_relative'),
+            result=dict(status='TARGET_REACHED',executed_motion=['MOVE_FORWARD'])))
+        self.assertIsNone(last_block(self.mem,pose(120)))
+
     def test_absolute_coverage_detects_repeated_relative_sweep(self):
         state=local_coverage(self.mem,pose(120),15,24)
         self.assertIn(90,state['checked_absolute_headings_deg'])
