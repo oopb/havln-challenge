@@ -67,7 +67,8 @@ def turn_evidence(memory):
     task = memory.task
     goal = task.subgoals[task.current_subgoal_index] if task.current_subgoal_index < len(task.subgoals) else {}
     requirement = turn_requirement(goal)
-    actions = [a for a in memory.actions if a['step'] >= task.subgoal_started]
+    actions = [a for a in memory.actions if a['step'] >= task.subgoal_started
+               and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index]
     signed = sum((1 if a['action'] == 'TURN_LEFT' else -1 if a['action'] == 'TURN_RIGHT' else 0)
                  * memory.camera.turn_angle for a in actions)
     degrees = (signed + 180) % 360 - 180
@@ -381,6 +382,7 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
         estimates = [goal_estimate(g, memory, memory.current['pose'], now, max_age,
                                   static_max_age, human_max_age) for g in matches]
         actions = [a for a in memory.actions if a['step'] >= task.subgoal_started
+                   and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index
                    and a['result'].get('visual_change')]
         text = goal['action'].lower()
         stairs = stair_motion_direction(goal) is not None
@@ -448,6 +450,7 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
             phases=result.get('confirmed_phases',[])
             observed={o['observation_id']:o for o in memory.observations}
             registered=[a for a in memory.actions if a['step']>=task.subgoal_started
+                        and a.get('subgoal',task.current_subgoal_index)==task.current_subgoal_index
                         and a['action']=='MOVE_FORWARD' and registered_action(a,observed)]
             criteria=goal.get('success_criteria',[])
             arrived='ARRIVED_AT_LANDING' in phases
@@ -474,7 +477,8 @@ def verify_progress(memory, claim, evidence, observation_ids, max_age, arrival_d
                                                 executed_steps=result['evidence_details'].get('motion_steps', []),
                                                 verification=result.copy()))
             task.current_subgoal_index += 1
-            task.subgoal_started = len(memory.actions)
+            task.subgoal_start_steps.setdefault(str(task.current_subgoal_index),len(memory.actions))
+            task.subgoal_started = task.subgoal_start_steps[str(task.current_subgoal_index)]
         elif result['status'] == 'RECORDED':
             task.progress_claims.append(dict(claim=claim, evidence=evidence, observation_ids=observation_ids,
                                             subgoal=task.current_subgoal_index, step=len(memory.actions)))

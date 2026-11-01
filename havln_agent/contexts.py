@@ -171,6 +171,14 @@ def navigation_context(runtime):
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
     result=dict(goal=runtime.active_subgoal,
+        task_selection=dict(
+            current_subgoal_index=index,
+            total_subgoals=len(memory.task.subgoals),
+            verified_subgoals=list(memory.task.completed_subgoals),
+            provisional_transitions=memory.task.provisional_transitions[-3:],
+            unverified_subgoal_indices=[i for i in range(len(memory.task.subgoals))
+                if i not in memory.task.completed_subgoals],
+            select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,

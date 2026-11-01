@@ -662,9 +662,9 @@ class ToolExecutor:
         return result
 
     def _finish_navigation(self, outcome, evidence):
-        if outcome == 'success' and len(self.memory.task.completed_subgoals) != len(
+        if outcome == 'success' and set(self.memory.task.completed_subgoals) != set(range(len(
             self.memory.task.subgoals
-        ):
+        ))):
             return dict(status='INSUFFICIENT_EVIDENCE', reason='ordered_subgoals_not_verified')
         if outcome == 'success':
             self.refresh()

@@ -56,6 +56,8 @@ class TaskMemory:
     completion_evidence: list = field(default_factory=list)
     progress_claims: list = field(default_factory=list)
     subgoal_started: int = 0
+    subgoal_start_steps: dict = field(default_factory=dict)
+    provisional_transitions: list = field(default_factory=list)
 
 
 class MemoryRecords:
@@ -84,6 +86,7 @@ class MemoryRecords:
 
     def set_plan(self, plan):
         self.task.subgoals = plan['subgoals']
+        self.task.subgoal_start_steps = {'0':len(self.actions)}
         self.task.final_target = plan.get('final_target', '')
         self.task.constraints = plan.get('constraints', [])
 
