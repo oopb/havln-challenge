@@ -624,22 +624,21 @@ class ToolExecutor:
                 if attempt:
                     attempt['forward_actions'] += 1
                 alert = result['feedback'].get('motion_alert') or {}
-                if alert and alert.get('reason') != 'motion_estimate_unknown':
-                    # A byte-identical post-step camera view cannot justify a
-                    # blind second forward. Yield to NavigationAgent instead
-                    # of exhausting the same relative-forward horizon.
-                    self.executable_segment = None
-                    return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                        alert['reason'], motion_alert=alert)
                 if not result['feedback']['translation_supported']:
+                    # Register uncertainty BEFORE any early interruption.
+                    # _navigation_feedback reads unknown_motion_seen to avoid
+                    # showing a fabricated remaining distance / valid endpoint.
                     if attempt:
                         attempt['unknown_motion_seen'] = True
                         attempt['unknown_observation_ids'].append(
                             self.memory.current['observation_id'])
-                    # No hidden ground-truth pose and no assumed 0.25m update.
-                    # The NEXT action, if any, gets a new live RGB-D safety
-                    # validation, and the fixed horizon caps total forwards.
                     self.executable_segment = None
+                if alert and alert.get('reason') != 'motion_estimate_unknown':
+                    # A byte-identical post-step camera view cannot justify a
+                    # blind second forward. Yield to NavigationAgent instead
+                    # of exhausting the same relative-forward horizon.
+                    return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
+                        alert['reason'], motion_alert=alert)
             if self.done:
                 return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
         attempt = self.memory.active_attempt

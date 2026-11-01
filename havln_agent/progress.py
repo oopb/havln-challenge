@@ -105,30 +105,72 @@ def current_visual_evidence(source, memory, now, max_age):
 
 
 def _passed_landmark(memory, matches, motions):
-    """Require a tracked landmark to cross behind the registered route direction."""
-    observations = {o['observation_id']: o for o in memory.observations}
+    """Prove a landmark crossing only inside ONE uninterrupted local frame.
+
+    Reanchoring keeps historical movement receipts, but it invalidates
+    projecting older target coordinates into new coordinate epochs. Every
+    forward action between the anchor and the current grounding must have
+    a matching RGB-D measurement (not merely an executed command).
+    """
+    observations = {o['observation_id']:o for o in memory.observations}
+    action_ids = {a['step'] for a in motions}
+    goal_index = memory.task.current_subgoal_index
     for current in matches:
         if current['position']['status'] != 'LOCALIZED':
             continue
+        current_source = current['source']
+        end = observations.get(current_source['observation_id'])
+        if end is None:
+            continue
         for origin in memory.groundings:
-            if origin['status'] != 'LOCALIZED' or origin['position']['status'] != 'LOCALIZED' \
-                    or origin['target'].lower() != current['target'].lower() \
-                    or origin['source']['subgoal'] != memory.task.current_subgoal_index:
+            if (origin['status'] != 'LOCALIZED'
+                    or origin['position']['status'] != 'LOCALIZED'
+                    or origin['target'].lower() != current['target'].lower()
+                    or origin['source']['subgoal'] != goal_index):
                 continue
-            start = observations[origin['source']['observation_id']]['step']
-            heading = origin['source']['pose']['heading'] + math.radians(origin['position']['bearing_degrees'])
+            start_observation = observations.get(origin['source']['observation_id'])
+            if start_observation is None:
+                continue
+            start = start_observation['step']
+            epoch = origin['source']['pose'].get('motion_epoch',0)
+            if (end['step'] <= start
+                    or current_source['pose'].get('motion_epoch',0) != epoch
+                    or start_observation['pose'].get('motion_epoch',0) != epoch
+                    or end['pose'].get('motion_epoch',0) != epoch):
+                continue
+            crossing_moves = [a for a in memory.actions
+                if start <= a['step'] < end['step']
+                and a['action']=='MOVE_FORWARD'
+                and a.get('subgoal',goal_index)==goal_index]
+            if not crossing_moves:
+                continue
+            # One failed registration invalidates the original target-to-robot
+            # coordinate chain, regardless of later successful local deltas.
+            if any(
+                a['step'] not in action_ids
+                or a['pose'].get('motion_epoch',0) != epoch
+                or not registered_action(a,observations)
+                or (observations.get(a['result'].get('observation_before')) or {})
+                    .get('pose',{}).get('motion_epoch',0) != epoch
+                or (observations.get(a['result'].get('observation_after')) or {})
+                    .get('pose',{}).get('motion_epoch',0) != epoch
+                for a in crossing_moves):
+                continue
+            heading = origin['source']['pose']['heading'] + math.radians(
+                origin['position']['bearing_degrees'])
             travel, uncertainty = 0.0, 0.0
-            for action in motions:
-                if action['step'] < start:
-                    continue
-                delta = angle_delta(action['pose']['heading'], heading)
+            for action in crossing_moves:
+                delta = angle_delta(action['pose']['heading'],heading)
                 measurement = action['result']['rgbd_motion']
                 translation = measurement['translation_m']
-                travel += translation['z_forward'] * math.cos(delta) - translation['x_right'] * math.sin(delta)
+                travel += (translation['z_forward'] * math.cos(delta)
+                           - translation['x_right'] * math.sin(delta))
                 uncertainty += measurement['uncertainty_m']
-            distance = math.hypot(origin['position']['x_right'], origin['position']['z_forward'])
-            bearing = current['source']['pose']['heading'] + math.radians(current['position']['bearing_degrees'])
-            behind = math.cos(angle_delta(bearing, heading)) < -0.2
+            distance = math.hypot(
+                origin['position']['x_right'],origin['position']['z_forward'])
+            bearing = current_source['pose']['heading'] + math.radians(
+                current['position']['bearing_degrees'])
+            behind = math.cos(angle_delta(bearing,heading)) < -0.2
             if behind and travel > distance + uncertainty + memory.camera.robot_radius:
                 return True
     return False

@@ -123,7 +123,8 @@ def last_block(memory, pose, *, max_recent_actions=150):
     """
     records = {o['observation_id']:o for o in getattr(memory,'observations',())}
     for item in reversed(getattr(memory,'tool_ledger',())):
-        if (item.get('call') or {}).get('tool') != 'navigate_local':
+        if (item.get('call') or {}).get('tool') not in (
+                'navigate_local','navigate_relative','navigate_to_pixel'):
             continue
         result = item.get('result') or {}
         if result.get('status') == 'TARGET_REACHED':
