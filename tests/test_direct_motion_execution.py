@@ -119,6 +119,25 @@ class DirectMovementExecutionTests(unittest.TestCase):
                             for e in r.memory.events))
         self.assertEqual(r.motion_controller.z,0.)
 
+    def test_strong_static_correspondences_interrupt_movement_without_fake_pose(self):
+        r=runtime()
+        def changed_frame():
+            image=frame()
+            image.rgb[:]=100
+            return image,False
+        r.step_callback=Mock(side_effect=lambda action:changed_frame())
+        unknown=dict(status='UNKNOWN',reason='no_resolvable_forward_translation',
+            rejected_translation_hypothesis_m=dict(x_right=0.,y_up=0.,z_forward=0.))
+        with patch('havln_agent.tools.estimate_translation',return_value=unknown):
+            result=r._navigate_relative(0,.75,3)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],'no_resolvable_forward_translation')
+        self.assertEqual(len(r.memory.actions),1)
+        self.assertFalse(result['endpoint_estimate_valid'])
+        self.assertIsNone(result['remaining_distance'])
+        self.assertFalse(result['motion_alert']['collision_proven'])
+        self.assertEqual(r.motion_controller.motion_epoch,1)
+
     def test_direct_route_starts_unverified_before_first_live_probe(self):
         r=runtime()
         r._navigate_local=Mock(return_value=dict(status='PARTIAL'))

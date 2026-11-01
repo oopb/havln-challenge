@@ -59,6 +59,24 @@ class FullTransitionRegression(unittest.TestCase):
         self.assertEqual(details['source_observation_ids'][0],'o0')
         self.assertIn('sensor_verified_stair_to_landing_transition',supported)
 
+    def test_captured_landing_survives_later_camera_turn(self):
+        from havln_agent.progress import _captured_landing_proof
+        source=dict(observation_id='o4',image_scope='current',rgb_hash='r4',
+                    depth_hash='d4',pose=dict(motion_epoch=0,heading=0.))
+        original=dict(observation_id='o4',step=4,rgb_hash='r4',
+                    depth_hash='d4',pose=dict(motion_epoch=0,heading=0.))
+        self.assertTrue(_captured_landing_proof(
+            dict(source=source),{'o4':original},1))
+        self.assertFalse(_captured_landing_proof(
+            dict(source=source),{'o4':original},4))
+        original['depth_hash']='different'
+        self.assertFalse(_captured_landing_proof(
+            dict(source=source),{'o4':original},1))
+        original['depth_hash']='d4'
+        source['image_scope']='historical_keyframe'
+        self.assertFalse(_captured_landing_proof(
+            dict(source=source),{'o4':original},1))
+
     def test_partial_entry_and_later_landing_still_preserve_initial_motion(self):
         memory=SimpleNamespace(
             camera=SimpleNamespace(forward_step=.25),
