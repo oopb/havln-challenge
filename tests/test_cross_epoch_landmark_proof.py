@@ -13,13 +13,13 @@ from havln_agent.progress import _passed_landmark
 
 def observation(index,epoch):
     return dict(observation_id='obs_%04d'%index,step=index,
-        pose=dict(x=0.,y=0.,z=index*.75,heading=0.,motion_epoch=epoch),
+        pose=dict(x=0.,y=0.,z=index*.25,heading=0.,motion_epoch=epoch),
         rgb_hash='rgb%d'%index,depth_hash='depth%d'%index)
 
 
 def action(index,epoch,valid=True):
     m=(dict(status='ESTIMATED',uncertainty_m=.02,
-            translation_m=dict(x_right=0.,y_up=0.,z_forward=.75),
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
             observation_pair=dict(before_rgb_hash='rgb%d'%index,
               before_depth_hash='depth%d'%index,
               after_rgb_hash='rgb%d'%(index+1),
@@ -34,7 +34,7 @@ def action(index,epoch,valid=True):
 
 def grounding(index,epoch,heading,bearing=0.):
     return dict(status='LOCALIZED',target='doorway',
-        position=dict(status='LOCALIZED',x_right=0.,z_forward=.5,
+        position=dict(status='LOCALIZED',x_right=0.,z_forward=.2,
                       bearing_degrees=bearing),
         source=dict(observation_id='obs_%04d'%index,subgoal=0,
             pose=dict(heading=heading,motion_epoch=epoch)))
