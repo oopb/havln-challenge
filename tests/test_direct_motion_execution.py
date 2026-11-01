@@ -111,6 +111,9 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertEqual(result['reason'],
                          'no_observed_frame_change_after_forward')
         self.assertFalse(result['target_reached'])
+        self.assertFalse(result['endpoint_estimate_valid'])
+        self.assertIsNone(result['remaining_distance'])
+        self.assertFalse(result['remaining_path']['endpoint_estimate_valid'])
         self.assertEqual(r.motion_controller.motion_epoch,1)
         self.assertTrue(any(e['event']=='no_observed_forward_motion'
                             for e in r.memory.events))
