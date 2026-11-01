@@ -174,10 +174,10 @@ def navigation_context(runtime):
         task_selection=dict(
             current_subgoal_index=index,
             total_subgoals=len(memory.task.subgoals),
-            verified_subgoals=list(memory.task.completed_subgoals),
-            provisional_transitions=memory.task.provisional_transitions[-3:],
+            verified_subgoals=list(getattr(memory.task,'completed_subgoals',[])),
+            provisional_transitions=getattr(memory.task,'provisional_transitions',[])[-3:],
             unverified_subgoal_indices=[i for i in range(len(memory.task.subgoals))
-                if i not in memory.task.completed_subgoals],
+                if i not in getattr(memory.task,'completed_subgoals',[])],
             select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
