@@ -43,7 +43,7 @@ class PureTurnVerificationTests(unittest.TestCase):
             ['obs_after'],15.,1.25)
         self.assertEqual(result['status'],'INSUFFICIENT_EVIDENCE')
         self.assertFalse(result['completion_confirmed'])
-        self.assertIn('final_arrival_visible',result['missing'])
+        self.assertIn('final_arrival_visual_evidence',result['missing'])
         self.assertEqual(m.task.current_subgoal_index,0)
 
     def test_command_without_turn_receipt_never_verifies(self):
