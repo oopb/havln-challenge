@@ -31,6 +31,7 @@ def runtime():
     r.memory.reset('unit-test','go down the hall')
     r.memory.task.subgoals=[dict(action='proceed',landmark='hall',target='hall')]
     r.observation=None
+    r.paths={}
     r.owner=threading.get_ident()
     r.started=time.monotonic()
     r.event_callback=None
