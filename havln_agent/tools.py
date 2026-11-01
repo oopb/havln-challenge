@@ -389,6 +389,7 @@ class ToolExecutor:
         geometry, diagnostics = self.geometry(), []
         source = self.source()
         groundings, excluded = [], []
+        tentative_bearings = []
         for original in self.memory.groundings:
             if original['source']['subgoal'] != self.memory.task.current_subgoal_index or not (
                 target is None or target == original['grounding_id'] or
@@ -400,6 +401,30 @@ class ToolExecutor:
             estimate = self.estimate_goal(original)
             if estimate['requires_reconfirmation']:
                 excluded.append(dict(grounding_id=original['grounding_id'], reasons=estimate['reasons']))
+                # A current *partial* visual box can suggest which direction a
+                # safe geometric candidate faces, even if its depth spread is
+                # too large to yield metric distance or a confirmed target.
+                # Never carry this hint across a changed view, pose or epoch.
+                position = original.get('position') or {}
+                semantic = original.get('semantic') or {}
+                linked = original['source']
+                if (position.get('status') == 'PARTIAL'
+                    and isinstance(position.get('bearing_degrees'),(int,float))
+                    and math.isfinite(position['bearing_degrees'])
+                    and semantic.get('confidence') in ('medium','high')
+                    and original.get('semantic_presence') == 'VISIBLE'
+                    and linked.get('rgb_hash') == source['rgb_hash']
+                    and linked.get('pose') == source['pose']
+                    and linked.get('subgoal') == self.memory.task.current_subgoal_index):
+                    tentative_bearings.append(dict(
+                        grounding_id=original['grounding_id'],
+                        target=original['target'][:120],
+                        bearing_deg=round(position['bearing_degrees'],2),
+                        source_observation_id=linked['observation_id'],
+                        confidence=semantic['confidence'],
+                        evidence='same_view_partial_visual_direction_only',
+                        metric_distance_valid=False,
+                        target_identity_verified=False))
             else:
                 groundings.append(dict(original, current_estimate=estimate))
         angles = None
@@ -476,6 +501,17 @@ class ToolExecutor:
                 execution_requirements=['reconfirm_uncertain_goal', 'current_rgbd', 'live_human_safety'],
             )
             self.paths[identifier] = path
+            # These hints deliberately do NOT populate goal_association and
+            # do NOT upgrade an exploration path to a GOAL_WAYPOINT.
+            # They inform model choice only; live depth remains authoritative.
+            path['tentative_goal_bearings'] = sorted([
+                dict(hint, angular_error_deg=round(
+                    abs((math.degrees(candidate['angle'])-hint['bearing_deg']+180)%360-180),2))
+                for hint in tentative_bearings
+                if abs((math.degrees(candidate['angle'])-hint['bearing_deg']+180)%360-180)
+                    <= self.camera.turn_angle
+            ],key=lambda h:h['angular_error_deg'])[:2]
+            self.paths[identifier]['tentative_goal_bearings'] = path['tentative_goal_bearings']
             paths.append(copy.deepcopy(path))
         return dict(
             status='OK' if paths else 'NEEDS_VIEW',
