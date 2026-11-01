@@ -550,7 +550,7 @@ class AgentRuntime(ToolExecutor):
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
-    def _navigate_relative(self, turn_deg, distance_m, max_atomic_steps):
+    def _navigate_relative(self, turn_deg, distance_m, max_atomic_steps, _source=None):
         """Direct model intent, without a preselected semantic candidate.
 
         The bearing is relative to the current heading, not a global pose or
@@ -568,12 +568,20 @@ class AgentRuntime(ToolExecutor):
         actual_turn = round(turn_deg / stride) * stride
         actual_distance = max(1, round(distance_m / step)) * step
         actual_distance = min(actual_distance, math.floor(3.0 / step) * step)
-        self.refresh()
-        source = self.source()
+        if _source is None:
+            self.refresh()
+            source = self.source()
+        else:
+            # The pixel and its derived bearing must refer to the *same*
+            # RGB-D observation. validate() and _step() independently refresh
+            # the depth frame before authorizing any physical forward step.
+            source = _source
         angle = math.radians(actual_turn)
         heading = source['pose']['heading'] + angle
         path_id = 'direct_%04d' % len(self.memory.tool_ledger)
         path = dict(id=path_id, type='EXPLORATION_WAYPOINT', angle=angle,
+            source_observation_id=source['observation_id'],
+            bearing_deg=actual_turn,range_m=actual_distance,
             distance=actual_distance, source=source, goal_association=[],
             first_step='EXECUTABLE', execution_status='PROPOSED',
             objective=dict(purpose='model_directed_motion', completes_language_goal=False),
@@ -585,6 +593,10 @@ class AgentRuntime(ToolExecutor):
         # No invented collision permission: _execute_waypoint + _step will run
         # current live checks at the actual heading immediately before motion.
         self.paths[path_id] = path
+        # Direct routes were absent from spatial memory because they skip
+        # get_waypoint_candidates. Register the proposal, not a clearance
+        # certificate. Live checks still establish execution status.
+        self.memory.note_candidates([path])
         result = self._navigate_local(path_id, max_atomic_steps)
         return dict(result, waypoint_id=path_id,
                     requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
@@ -617,8 +629,11 @@ class AgentRuntime(ToolExecutor):
         turn_deg = round(measured_bearing/self.camera.turn_angle)*self.camera.turn_angle
         if abs(turn_deg) > 180:
             return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
-        result = self._navigate_relative(turn_deg,distance_m,max_atomic_steps)
+        pixel_source = self.source()
+        result = self._navigate_relative(turn_deg,distance_m,max_atomic_steps,
+                                         _source=pixel_source)
         return dict(result, pixel_target=dict(u=u,v=v,
+            source_observation_id=pixel_source['observation_id'],
             measured_depth_m=round(float(np.median(geometry.depth[y0:y1,x0:x1][valid])),3),
             measured_bearing_deg=round(measured_bearing,2),
             selected_turn_deg=turn_deg,

@@ -187,13 +187,20 @@ class ObservationController:
         def checkpoint():
             source = r.source()
             observation = r.memory.current
-            reused = self._existing_result(target_types, objective)
+            reused = None if force_recheck else self._existing_result(target_types, objective)
             if reused:
                 visual, previous_id = reused
                 origin = 'reused_static_visual_hypothesis'
             else:
-                visual = r.visual_perception.search_view(
-                    r.observation, source, objective, target_types)
+                # Explicit fresh observation bypasses both the saved-view
+                # semantic lookup AND the visual model's image/question cache.
+                if force_recheck:
+                    visual = r.visual_perception.search_view(
+                        r.observation, source, objective, target_types,
+                        force_recheck=True)
+                else:
+                    visual = r.visual_perception.search_view(
+                        r.observation, source, objective, target_types)
                 previous_id = None
                 origin = 'vlm_current_frame'
             # Current RGB-D is a *measurement*; VLM box/identity is a hypothesis.
