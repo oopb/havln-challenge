@@ -168,6 +168,15 @@ class ProvisionalTaskControlTests(unittest.TestCase):
         self.assertEqual(r.memory.task.current_subgoal_index,0)
         self.assertFalse(r.memory.task.provisional_transitions)
 
+    def test_prior_subgoal_history_is_not_cut_off_by_new_active_start(self):
+        m=memory()
+        m.task.subgoal_start_steps={'0':0,'1':60}
+        m.task.current_subgoal_index=1
+        m.task.subgoal_started=60
+        history=registered_motion_history(m,subgoal=0)
+        self.assertEqual(history['registered_down_steps'],[22,23,24,25])
+        self.assertEqual(registered_motion_history(m)['registered_down_steps'],[])
+
     def test_verified_subgoal_cannot_be_provisionally_reactivated(self):
         r=self.runtime()
         r._select_subgoal(1,'continue',['o0'])

@@ -163,7 +163,8 @@ def registered_motion_history(memory, subgoal=None):
     """
     index = memory.task.current_subgoal_index if subgoal is None else subgoal
     observed = {o['observation_id']:o for o in getattr(memory,'observations',[])}
-    start = getattr(memory.task,'subgoal_started',0)
+    start = getattr(memory.task,'subgoal_start_steps',{}).get(
+        str(index),getattr(memory.task,'subgoal_started',0))
     rows = []
     for action in memory.actions:
         if (action.get('step', -1) < start or action.get('action') != 'MOVE_FORWARD'
@@ -266,8 +267,13 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     continuous=bool(motions) and [a['step'] for a in forward_window]==[a['step'] for a in motions]
     # TURN/LOOK and same-position RGB-D refreshes may lie between registered
     # steps. They change observations, never supply translation evidence.
+    # Continuity is a *proof* constraint, not a history-retention policy.
+    # Never compare absolute coordinates across different reanchor epochs.
     continuous=continuous and all(
-        observed[left['result']['observation_after']]['pose']['x']==observed[right['result']['observation_before']]['pose']['x']
+        left['pose'].get('motion_epoch',0)==right['pose'].get('motion_epoch',0)
+        and observed[left['result']['observation_after']]['pose'].get('motion_epoch',0)
+            == observed[right['result']['observation_before']]['pose'].get('motion_epoch',0)
+        and observed[left['result']['observation_after']]['pose']['x']==observed[right['result']['observation_before']]['pose']['x']
         and observed[left['result']['observation_after']]['pose']['z']==observed[right['result']['observation_before']]['pose']['z']
         for left,right in zip(motions,motions[1:]))
     if motions and any(a['action'] == 'MOVE_FORWARD' and a['step'] > motions[-1]['step']
@@ -320,10 +326,12 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     travel = sum(a['result']['rgbd_motion']['translation_m']['z_forward'] *
                  math.cos(angle_delta(a['pose']['heading'], heading)) for a in motions)
     travel_error = sum(a['result']['rgbd_motion']['uncertainty_m'] for a in motions)
-    entry_for_distance = (entry if near_entry else near[0]['entry'] if near else {})
+    entry_for_distance = entry if near_entry else {}
     entry_distance = math.hypot(entry_for_distance.get('x_right', 0),
                                 entry_for_distance.get('z_forward', 0))
-    left_entry = bool(near_entry or near) and continuous and (
+    # A later localized entrance from another epoch can support semantic
+    # recognition, NEVER prove metric travel away from the earlier entry.
+    left_entry = bool(near_entry) and continuous and (
         travel - travel_error > max(memory.camera.forward_step, entry_distance))
     if left_entry and len(landing_steps) >= 2:
         supported.append('registered_exit_from_initial_stair_entry_region')

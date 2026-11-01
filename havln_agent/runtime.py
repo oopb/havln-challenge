@@ -724,6 +724,9 @@ class AgentRuntime(ToolExecutor):
         task.current_subgoal_index = subgoal_index
         task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
         task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
+        self.memory.progress_stage = 'PROVISIONAL_UNVERIFIED'
+        # Preserve older verifier feedback in history; do not mislabel its
+        # result as proof about the newly selected task.
         self.task_review_requested = False
         self.review_reason = 'model_selected_semantic_milestone'
         self.set_semantic_goal()

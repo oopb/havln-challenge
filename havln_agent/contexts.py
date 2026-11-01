@@ -170,7 +170,18 @@ def navigation_context(runtime):
                 and item['source'].get('depth_hash') == memory.current.get('depth_hash')
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
+    prior_motion_evidence=[]
+    for transition in reversed(getattr(memory.task,'provisional_transitions',[])):
+        idx=transition['from_subgoal']
+        if idx==index or any(x['subgoal_index']==idx for x in prior_motion_evidence):
+            continue
+        prior_motion_evidence.append(dict(subgoal_index=idx,
+            **{k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
+               if k!='rows'}))
+        if len(prior_motion_evidence)>=2:
+            break
     result=dict(goal=runtime.active_subgoal,
+        prior_subgoal_motion_evidence=prior_motion_evidence,
         task_selection=dict(
             current_subgoal_index=index,
             total_subgoals=len(memory.task.subgoals),
