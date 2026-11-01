@@ -240,6 +240,40 @@ def registered_motion_history(memory, subgoal=None):
         caveat='historical_registered_local_motion_not_global_pose_or_landing_proof')
 
 
+def _historical_stair_scene_anchor(memory, goal, observed, first_down_step):
+    """Old VLM scene evidence may label earlier RGB-D movement, not prove arrival.
+
+    The model may describe a visible staircase long before it can ground a
+    metrically reliable entry point. Link the nearest earlier task-scoped scene
+    to an independently registered vertical motion sequence. This is a
+    *semantic attribution hypothesis* and cannot fabricate movement, global
+    coordinates, entry distance, level landing, or verified completion.
+    """
+    if first_down_step is None:
+        return None
+    candidates=[]
+    for record in getattr(memory,'scene_history',[]):
+        scene,source=record.get('scene') or {},record.get('source') or {}
+        ident=source.get('observation_id')
+        obs=observed.get(ident)
+        if not obs or source.get('subgoal') != memory.task.current_subgoal_index:
+            continue
+        if obs['step'] > first_down_step:
+            continue
+        names=[str(item.get('name','')) for item in scene.get('landmarks',[])]
+        stair_names=[name for name in names if re.search(
+            r'\\b(?:stair(?:case|well|way|s)?|treads?|steps?)\\b', name, re.I)]
+        if stair_names:
+            candidates.append((obs['step'],ident,stair_names[0]))
+    if not candidates:
+        return None
+    step,ident,label=max(candidates)
+    return dict(observation_id=ident,step=step,
+        source_kind='historical_vlm_scene_not_metric_grounding',
+        landmark_label=label[:140],
+        scope='semantic_attribution_only_no_entry_or_landing_proof')
+
+
 def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     down = stair_motion_direction(goal) == 'DOWN'
     direction, sign = ('down', -1) if down else ('up', 1)
@@ -271,14 +305,42 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
         and a['action'] == 'MOVE_FORWARD' and a['result'].get('rgbd_motion')
         and a['result']['rgbd_motion']['status'] == 'UNKNOWN'
     })
+    historical_steps = details['historical_motion_evidence'][
+        'registered_'+direction+'_steps']
+    earliest_anchor = (observed[origins[0]['source']['observation_id']]['step']
+                       if origins else None)
+    # Prefer a real early grounding. Only when it is absent or later than the
+    # measured descent, consider an earlier task-scoped scene landmark.
+    scene_anchor = _historical_stair_scene_anchor(
+        memory,goal,observed,min(historical_steps) if historical_steps else None)
+    use_scene_anchor=bool(scene_anchor and (
+        earliest_anchor is None or scene_anchor['step'] < earliest_anchor))
+    details['historical_scene_anchor'] = scene_anchor
+    if use_scene_anchor:
+        down_actions=[a for a in memory.actions if a['step'] in historical_steps]
+        first_motion=min(down_actions,key=lambda a:a['step'])
+        scene_obs=observed[scene_anchor['observation_id']]
+        # No entry pixel or distance is invented. The motion's measured
+        # heading is a local travel axis, NOT the semantic landmark bearing.
+        scene_source=dict(observation_id=scene_anchor['observation_id'],
+            subgoal=memory.task.current_subgoal_index,
+            pose=dict(scene_obs['pose'],heading=first_motion['pose']['heading']))
+        origin=dict(source=scene_source,status='PARTIAL',
+            entry=dict(status='UNKNOWN'),
+            position=dict(status='PARTIAL',bearing_degrees=0),
+            stair_evidence={},semantic=dict(target_visible=True))
+        origins=[origin]+origins
+        supported.append('historical_stair_scene_before_registered_motion')
+        details['anchor_source_kind']=scene_anchor['source_kind']
+        details['anchor_heading_basis']='first_registered_vertical_motion'
+        details['source_is_metric_entry']=False
+    elif origins:
+        details['anchor_source_kind']='ground_landmark'
+        details['source_is_metric_entry']=origins[0]['entry']['status']=='LOCALIZED'
     if not origins:
-        # Metric movement can be historical fact even without a *semantic*
-        # landmark anchor. Mark it unattributed, never completed or false.
-        observed_motion = bool(details['historical_motion_evidence'][
-            'registered_'+direction+'_steps'])
-        if observed_motion:
+        if historical_steps:
             supported.append('unattributed_registered_vertical_motion')
-        return ('IN_PROGRESS' if observed_motion else 'NOT_STARTED'), supported, [
+        return ('IN_PROGRESS' if historical_steps else 'NOT_STARTED'), supported, [
             'localized_staircase_and_direction'], contradictions, details
     if 'staircase_observed' not in supported:
         supported.append('staircase_observed')
@@ -348,7 +410,11 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
     details.update(relative_vertical_estimate_m=displacement, uncertainty_bound_m=uncertainty,
                    motion_steps=[a['step'] for a in motions],
                    vertical_motion_steps=[a['step'] for a in directed], absolute_height_available=False)
-    descent = bool(visible) and len(directed) >= 2 and displacement >= max(0.12, 2 * uncertainty)
+    # A historical scene anchor counts only as early semantic context.
+    # Actual vertical motion must still be independently registered and the
+    # final landing must still be established by measured depth/visual facts.
+    descent = bool(visible or use_scene_anchor) and len(directed) >= 2 and (
+        displacement >= max(0.12, 2 * uncertainty))
     if descent:
         supported.append('multi_frame_registered_' + direction + '_motion')
         if not contradictions:
@@ -414,8 +480,8 @@ def _stair_evidence(memory, goal, ids, now, max_age, arrival_distance):
                                                   for g in origins if g['source']['observation_id'] in ids]
     if not cited_grounding:
         missing.append('cite_stair_observation')
-    stage = ('IN_PROGRESS' if motions and near_entry
-             or details['anchor_after_measured_motion'] else 'APPROACHING')
+    stage = ('IN_PROGRESS' if (motions or details['anchor_after_measured_motion'])
+             else 'APPROACHING')
     if descent and landings:
         stage = 'POSSIBLY_COMPLETED'
     if not missing and not contradictions:
