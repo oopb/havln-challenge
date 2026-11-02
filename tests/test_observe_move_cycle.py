@@ -19,7 +19,8 @@ class ObserveMoveTests(unittest.TestCase):
         r.registry={'navigate_local': {'permission':'NAVIGATION'}}
         r.memory=SimpleNamespace(
             current=dict(observation_id='obs_0001'),
-            observations=[dict(observation_id='obs_0001',pose=pose)])
+            observations=[dict(observation_id='obs_0001',pose=pose)],
+            actions=[])
         r.motion_controller=SimpleNamespace(pose=lambda:pose)
         r.plan_revision=1
         r.active_subgoal_id='sg_0'
@@ -208,7 +209,8 @@ class ObserveMoveTests(unittest.TestCase):
         r.phase='NAVIGATING'
         r.registry={'navigate_local':{'permission':'NAVIGATION'}}
         r.memory=SimpleNamespace(current=dict(observation_id='obs_0001'),
-                                 observations=[dict(observation_id='obs_0001',pose=pose)])
+                                 observations=[dict(observation_id='obs_0001',pose=pose)],
+                                 actions=[])
         r.motion_controller=SimpleNamespace(pose=lambda:pose)
         r.plan_revision=1
         r.active_subgoal_id='sg_0'
