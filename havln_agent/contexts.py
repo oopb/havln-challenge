@@ -429,7 +429,11 @@ def navigation_context(runtime):
         actions_remaining=runtime.config['max_steps']-len(memory.actions))
     orientation=turn_evidence(memory)
     if orientation['requirement']:
-        result['orientation']=fields(orientation,('requirement','remaining_deg','allowed_directions','completed'))
+        result['orientation']=fields(orientation,(
+            'requirement','remaining_deg','allowed_directions','completed',
+            'ever_completed','first_completed_step',
+            'remaining_deg_is_current_heading_error_not_unexecuted_task',
+            'caveat'))
     # Make actionable candidates survive the next LLM call. A prior tool's
     # waypoints otherwise disappear from last_tool after a single scan/query,
     # driving repeated sensing rather than the chosen local movement.
