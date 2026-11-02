@@ -55,7 +55,7 @@ class FakeClient:
         self.calls=[]
     def complete(self,*args,**kwargs):
         self.calls.append((args,kwargs))
-        return self.queue.pop(0)
+        return dict(message=self.queue.pop(0))
 
 
 def fake_runtime(replies,actions=None,observations=None):
@@ -63,7 +63,7 @@ def fake_runtime(replies,actions=None,observations=None):
     observations=list(observations if observations is not None else [obs(0),obs(1)])
     task=SimpleNamespace(instruction='Walk through the doorway.',
         subgoals=[dict(action='Go through the doorway',landmark='doorway',
-                       target='other side',success_criteria=['landmark_visible'])],
+                       target='other side')],
         final_target='other side',constraints=[],current_subgoal_index=0,
         subgoal_started=0,subgoal_start_steps={'0':0},
         completed_subgoals=[],completion_evidence=[],progress_claims=[],
@@ -96,9 +96,10 @@ class VerificationAgentTests(unittest.TestCase):
     def test_compact_disjoint_verifier_schema_accepts_only_relevant_fields(self):
         for operation in ('inspect_history','inspect_frames','inspect_records','verdict'):
             self.assertFalse(list(Draft7Validator(VERIFICATION_SCHEMA).iter_errors(
-                reply(operation=operation))))
-        invalid=dict(reply(),extraneous_legacy_predicates=['target_nearby'])
+                dict(message=reply(operation=operation)))))
+        invalid=dict(message=dict(reply(),extraneous_legacy_predicates=['target_nearby']))
         self.assertTrue(list(Draft7Validator(VERIFICATION_SCHEMA).iter_errors(invalid)))
+        self.assertEqual(VERIFICATION_SCHEMA['type'],'object')
 
     def test_visual_state_can_be_certified_without_moving(self):
         answer=reply(steps=[],ids=['o0','o1'],proof_basis='VISUAL_STATE')
