@@ -128,14 +128,20 @@ class VerificationAgentTests(unittest.TestCase):
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertIn('move_observation_pair_crosses_motion_epoch:0',result['missing'])
 
-    def test_odometry_pair_must_share_motion_epoch(self):
-        rt=fake_runtime([reply()],observations=[obs(0),obs(1,epoch=1)])
-        result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
-        self.assertIn('move_observation_pair_crosses_motion_epoch:0',result['missing'])
-
     def test_unknown_interior_forward_breaks_composed_displacement(self):
         rt=fake_runtime([reply(steps=[0,2],ids=['o0','o3'],terminal='o3')],
             actions=[action(0),action(1,'UNKNOWN'),action(2)],
+            observations=[obs(i) for i in range(4)])
+        result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
+        self.assertIn('unknown_motion_between_cited_steps',result['missing'])
+
+    def test_unknown_from_provisional_other_subgoal_breaks_metric_proof(self):
+        # A provisional navigation switch cannot hide an UNKNOWN translation
+        # from the physically continuous interval.
+        uncertain=action(1,'UNKNOWN')
+        uncertain['subgoal']=1
+        rt=fake_runtime([reply(steps=[0,2],ids=['o0','o3'],terminal='o3')],
+            actions=[action(0),uncertain,action(2)],
             observations=[obs(i) for i in range(4)])
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertIn('unknown_motion_between_cited_steps',result['missing'])
