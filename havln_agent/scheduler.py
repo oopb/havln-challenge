@@ -82,7 +82,8 @@ def run(runtime,append):
     runtime.set_semantic_goal()
     liveness=EvidenceLivenessGuard(runtime)
     while not runtime.done:
-        if runtime.decisions >= liveness.max_decisions:
+        if (runtime.decisions >= liveness.max_decisions
+                and getattr(runtime,'navigation_mode','OBSERVE')!='CRUISE'):
             diagnostic=liveness.diagnostic(runtime)
             runtime.navigation_liveness=diagnostic
             runtime.event('navigation_inference_budget_exhausted',
@@ -92,7 +93,8 @@ def run(runtime,append):
         if len(runtime.memory.actions)>=runtime.config['max_steps']-1:
             runtime.terminate('action_budget_exhausted')
             break
-        if runtime.client.availability()!='available':
+        if (getattr(runtime,'navigation_mode','OBSERVE')!='CRUISE'
+                and runtime.client.availability()!='available'):
             runtime.terminate('api_budget_exhausted')
             break
         try:
