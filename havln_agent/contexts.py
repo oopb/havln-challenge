@@ -90,6 +90,8 @@ def tool_summary(result):
     if 'memory' in result:value['memory']=result['memory']
     if 'waypoint_id' in result:value['waypoint_id']=result['waypoint_id']
     if 'requested_motion' in result:value['requested_motion']=result['requested_motion']
+    if (result.get('request_context') or {}).get('decision_reason'):
+        value['agent_decision_reason']=result['request_context']['decision_reason']
     if 'movement_intent_feedback' in result:
         value['movement_intent_feedback']=fields(result['movement_intent_feedback'],(
             'turn_actions_executed','forward_actions_executed',
@@ -256,9 +258,13 @@ def navigation_context(runtime):
         recent_static_low_gain_calls=visual_low_gain,
         last_action=(memory.actions[-1]['action'] if memory.actions else None),
         latest_tool_status=last_execution.get('status'),
+        last_agent_decision_reason=(last_execution.get('request_context') or {}).get(
+            'decision_reason','')[:300],
         latest_tool_motion=fields(last_execution,(
             'executed_motion','requested_actions','executed_actions')),
-        new_static_view_ids_last_scan=last_visual.get('new_information_ids',[])[-4:],
+        new_static_view_ids_last_scan=(
+            last_visual.get('new_information_ids') or
+            last_execution.get('new_information_ids') or [])[-4:],
         latest_movement=fields(latest_movement_summary or {},(
             'tool','status','reason','executed_motion','movement_intent_feedback',
             'remaining_path','waypoint_id','interrupted_status')),
