@@ -27,6 +27,7 @@ VERIFICATION_SCHEMA = dict(oneOf=[
     object_schema(dict(
         operation=dict(const='verdict'),
         verdict=dict(enum=['COMPLETED','IN_PROGRESS','UNKNOWN','CONTRADICTED']),
+        proof_basis=dict(enum=['ACTION_TRANSITION','VISUAL_STATE']),
         supported=dict(type='array',maxItems=12,items=TEXT),
         missing=dict(type='array',maxItems=12,items=TEXT),
         contradictions=dict(type='array',maxItems=8,items=TEXT),
@@ -69,7 +70,12 @@ PROMPT = (
     'IN_PROGRESS or UNKNOWN and identify a concrete missing observation. '
     'You MUST finish with operation=verdict, include source observation IDs '
     'and accepted atomic action step IDs directly supporting the proposed '
-    'COMPLETED claim. For COMPLETED, set terminal_observation_id to the '
+    'COMPLETED claim. Choose proof_basis=ACTION_TRANSITION when asserting '
+    'physical action or movement, and proof_basis=VISUAL_STATE for a purely '
+    'visual/time-dependent goal that truly requires no physical action. '
+    'VISUAL_STATE needs two independent authenticated, VLM-reviewed views '
+    'at different capture times and cannot certify a physical crossing. '
+    'For COMPLETED, set terminal_observation_id to the '
     'real captured frame showing the result of the cited motion; for incomplete '
     'verdicts use the string none. You MUST have actual VLM semantic evidence '
     'for that terminal frame, either from previously logged analysis or by '
@@ -242,7 +248,8 @@ class VerificationAgent:
         image_ids=decision['cited_observation_ids']
         steps=decision['cited_action_steps']
         errors=[]
-        if not image_ids or not steps:
+        basis=decision['proof_basis']
+        if not image_ids or (basis=='ACTION_TRANSITION' and not steps):
             errors.append('requires_cited_sensor_observation_and_executed_action')
         # Citing genuine records is necessary but not sufficient: at least one
         # cited image must refer to the current milestone's own evidence.
@@ -263,10 +270,28 @@ class VerificationAgent:
             src=entry.get('source') or {}
             frame=observed.get(src.get('observation_id'))
             if (frame and src.get('rgb_hash')==frame.get('rgb_hash')
-                    and src.get('depth_hash')==frame.get('depth_hash')):
+                    and src.get('depth_hash')==frame.get('depth_hash')
+                    and src.get('pose')==frame.get('pose')):
                 reviewed.add(src['observation_id'])
         if terminal not in reviewed:
             errors.append('terminal_visual_semantics_not_reviewed')
+        if basis=='VISUAL_STATE':
+            cited_views=[observed[i] for i in image_ids if i in observed]
+            earlier=[v for v in cited_views if endpoint
+                and v['step']<=endpoint['step'] and v['observation_id']!=terminal
+                and v.get('captured_at')!=endpoint.get('captured_at')
+                and v['observation_id'] in reviewed]
+            if len(cited_views)<2 or not earlier:
+                errors.append('visual_state_requires_two_reviewed_distinct_times')
+            if steps:
+                errors.append('visual_state_must_not_cite_actions_as_visual_proof')
+            if endpoint and earlier:
+                earliest=min(v['step'] for v in earlier)
+                if any(a['action']=='MOVE_FORWARD'
+                    and earliest<=a['step']<endpoint['step']
+                    and not registered_action(a,observed)
+                    for a in memory.actions):
+                    errors.append('unknown_motion_between_visual_state_views')
         registered=[]
         for step in steps:
             action=by_step.get(step)
@@ -294,6 +319,11 @@ class VerificationAgent:
                 errors.append('nonprogress_action_step:'+str(step))
         if steps and not registered:
             errors.append('no_authenticated_motion_or_turn')
+        if basis=='ACTION_TRANSITION' and registered:
+            origin_step=min(a['step'] for a in registered)
+            if not any(i!=terminal and i in observed
+                and observed[i]['step']<=origin_step for i in image_ids):
+                errors.append('action_transition_missing_before_view')
         # Never bridge an UNKNOWN movement or motion epoch reset to claim one
         # continuous displacement chain. Non-metric TURN citations may coexist.
         moves=[a for a in registered if a['action']=='MOVE_FORWARD']
@@ -305,16 +335,12 @@ class VerificationAgent:
                 errors.append('terminal_observation_outside_cited_motion_epoch')
             if len(epochs)>1:
                 errors.append('cross_epoch_displacement_chain')
-            for action in memory.actions:
-                if (min(a['step'] for a in moves) < action['step']
-                        < (endpoint['step'] if endpoint else max(a['step'] for a in moves))
-                        and action['action']=='MOVE_FORWARD'
-                        # Any unregistered forward, including one recorded
-                        # during a provisional different subgoal, breaks the
-                        # local metric chain toward the cited terminal view.
-                        and not registered_action(action,observed)):
-                    errors.append('unknown_motion_between_cited_steps')
-                    break
+        if basis=='ACTION_TRANSITION' and registered:
+            first=min(a['step'] for a in registered)
+            end=endpoint['step'] if endpoint else max(a['step'] for a in registered)+1
+            if any(first<=a['step']<end and a['action']=='MOVE_FORWARD'
+                   and not registered_action(a,observed) for a in memory.actions):
+                errors.append('unknown_motion_between_cited_steps')
         return sorted(set(errors))
 
     def verify(self, claim, evidence, observation_ids):
@@ -401,6 +427,7 @@ class VerificationAgent:
             evidence_details=dict(
                 verifier='model_led_sensor_guarded',
                 model_verdict=decision['verdict'],
+                proof_basis=decision['proof_basis'],
                 reasoning=decision['reasoning'],
                 cited_observation_ids=decision['cited_observation_ids'],
                 cited_action_steps=decision['cited_action_steps'],
