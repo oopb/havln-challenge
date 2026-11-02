@@ -163,7 +163,8 @@ class ExplorationTests(unittest.TestCase):
         self.mem.actions=[
             dict(step=0,action='TURN_LEFT'),
             dict(step=1,action='LOOK_UP'),
-            dict(step=2,action='MOVE_FORWARD',evidence_state='motion_verified'),
+            dict(step=2,action='MOVE_FORWARD',evidence_state='motion_verified',
+                 pose=pose(120),result=dict(rgbd_motion=dict(status='UNKNOWN'))),
             dict(step=3,action='LOOK_DOWN'),
             dict(step=4,action='TURN_RIGHT')]
         self.mem.tool_ledger=[
