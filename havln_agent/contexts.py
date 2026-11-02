@@ -110,6 +110,10 @@ def tool_summary(result):
             ('status','reason','direction','initial_height_m','end_height_m','max_step_height_m','scope'))
     if 'directions' in result:
         value['directions']=result['directions']
+    if 'inspection_reference' in result:
+        value['inspection_reference']=fields(result['inspection_reference'],(
+            'observation_id','heading_deg','pitch_deg','motion_epoch',
+            'scope','live_forward_probe_still_required'))
     if 'outcome' in result and result.get('tool')=='observe_for_goal':
         value['observation_task']=dict(
             outcome=result['outcome'],
