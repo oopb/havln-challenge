@@ -87,7 +87,16 @@ class ObservationController:
 
         start = r.motion_controller.pose()
         start_view=r.memory.current
-        if last_block(r.memory,start) and not force_recheck:
+        # Previously a historical camera view or an identical recent scan
+        # would cancel the agent's actual observation subtask. Those are
+        # useful warnings, not physical safety facts: people or occluders can
+        # move, and the agent can intentionally reacquire a known viewpoint.
+        # Keep the sensed-state redundancy visible; every legal model choice
+        # executes and consumes the ordinary action/API budgets.
+        observation_advisory=dict(
+            decision_authority='navigation_agent',
+            previous_static_view_does_not_prove_current_dynamic_scene=True)
+        if last_block(r.memory,start):
             look_pitch = (start['pitch_deg'] + (
                 r.camera.tilt_angle if look=='up' else -r.camera.tilt_angle)
                 if look!='none' else start['pitch_deg'])
@@ -98,22 +107,12 @@ class ObservationController:
             initial_view=(covered_view(r.memory.observations,start,
                 r.memory.task.current_subgoal_index,bearing_from_pose(start),
                 look_pitch,r.camera.turn_angle) if look!='none' else True)
-            if not planned['new_view_expected'] and initial_view:
-                return dict(status='NO_NEW_INFORMATION',
-                    outcome='REPEATED_SEARCH_NO_NEW_VIEW',
-                    reason='all_scan_camera_headings_previously_observed_since_block',
-                    covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
-                    checkpoints=[],best_candidate=None,
-                    new_information_ids=[],revisited_view_ids=[],
-                    usable_for_live_safety=False,
-                    exploration=local_coverage(r.memory,start,r.camera.turn_angle,
-                        round(360/r.camera.turn_angle)),
-                    next_step='change_absolute_heading_or_strategy_not_repeat_scan')
+            observation_advisory['already_covered_since_block']=bool(
+                not planned['new_view_expected'] and initial_view)
+            observation_advisory['prior_observation_ids']=[
+                item['observation_id'] for item in planned['already_visited']]
         now=time.monotonic()
-        # Exact duplicate observation task from the same pose and frame is
-        # idempotent. No repeated TURN sweep for a previously covered static
-        # sector. This expires quickly and never authorizes live human safety.
-        for previous in ([] if force_recheck else reversed(r.memory.observation_searches)):
+        for previous in reversed(r.memory.observation_searches):
             if (previous['outcome'] not in (
                     'SEARCH_REGION_COVERED_NO_MATCH','TARGET_CANDIDATE_FOUND')
                     or previous.get('subgoal')!=r.memory.task.current_subgoal_index
@@ -128,15 +127,12 @@ class ObservationController:
                     or previous.get('start_depth_hash')!=start_view.get('depth_hash')
                     or now-previous.get('started_monotonic',-1e9)>20):
                 continue
-            return dict(status='NO_NEW_INFORMATION',outcome='REPEATED_SEARCH_NO_NEW_VIEW',
-                reason='identical_static_scan_recently_completed',
-                covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
+            observation_advisory['identical_recent_scan']=dict(
                 previous_outcome=previous['outcome'],
-                best_candidate=copy.deepcopy(previous.get('candidate')),
                 previous_end_observation_id=previous.get('end_observation_id'),
-                checkpoints=[],new_information_ids=[],revisited_view_ids=[],
-                usable_for_live_safety=False,
-                next_step='choose_a_new_search_sector_or_local_geometry_not_same_scan')
+                previous_candidate=copy.deepcopy(previous.get('candidate')),
+                seconds_since_previous=round(now-previous['started_monotonic'],2))
+            break
         record = dict(objective=objective, target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
             start_observation_id=start_view['observation_id'],
@@ -146,7 +142,8 @@ class ObservationController:
             started_monotonic=now,look=look,
             checkpoint_degrees=checkpoint_degrees,
             direction=direction, planned_sweep_deg=sweep_degrees,
-            checkpoints=[], actions=[], outcome='IN_PROGRESS')
+            checkpoints=[], actions=[], outcome='IN_PROGRESS',
+            observation_advisory=observation_advisory)
         r.memory.observation_searches.append(record)
 
         def finish(outcome, status='OK', reason=None, candidate=None):
@@ -171,7 +168,8 @@ class ObservationController:
                     if not p.get('new_static_information')],
                 next_step='navigation_agent_review_evidence_not_motion_authorization',
                 paused_waypoint_preserved=bool(r.motion_controller.target is not None),
-                usable_for_live_safety=False)
+                usable_for_live_safety=False,
+                observation_advisory=copy.deepcopy(observation_advisory))
             r.event('observation_task_finished', source='observation_controller',
                 outcome=outcome, covered_turn_deg=record['covered_turn_deg'],
                 checkpoint_count=len(record['checkpoints']))
