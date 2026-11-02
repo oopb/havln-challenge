@@ -197,7 +197,11 @@ class ToolExecutor:
                     result.get('remaining_path') or {}).get('path_id'),
                 was_forward_attempted=forwards>0,
                 registered_translation_known=(
-                    'unknown' if forwards else 'no_forward_attempt'),
+                    'all_registered' if forwards and all(
+                        row.get('evidence_state')=='motion_verified'
+                        for row in self.memory.actions[before:]
+                        if row['action']=='MOVE_FORWARD') else
+                    'some_unregistered' if forwards else 'no_forward_attempt'),
                 interpretation=(
                     'turn_only_not_a_failed_forward_attempt'
                     if turns>0 and forwards==0 else
