@@ -116,6 +116,31 @@ class ObserveMoveTests(unittest.TestCase):
                 self.assertEqual(r.navigation_mode,'OBSERVE')
                 self.assertIsNone(r.cruise_intent)
 
+    def test_cruise_detects_same_stance_turn_cycle_across_batches(self):
+        r=self.cruise_runtime()
+        r.camera=SimpleNamespace(turn_angle=15)
+        p=r.motion_controller.pose()
+        r.navigation_mode='CRUISE'
+        r.cruise_intent=dict(waypoint_id='wp_0',max_atomic_steps=4,
+            plan_revision=1,subgoal_id='sg_0',
+            decision_reason='Original task-directed route',
+            checkpoint_poses=[dict(p)])
+        def turn_only(call,decision):
+            r.memory.actions.extend([dict(action='TURN_LEFT'),
+                                     dict(action='TURN_LEFT')])
+            return dict(status='PARTIAL',reason='tool_action_limit')
+        with patch('havln_agent.runtime.ToolExecutor.dispatch',
+                   side_effect=turn_only):
+            response=r.dispatch(dict(tool='navigate_local',
+                args=dict(waypoint_id='wp_0',max_atomic_steps=4)),
+                dict(plan_revision=1,subgoal_id='sg_0',
+                     observation_id='obs_0001',actor='cruise_executor'))
+        self.assertEqual(response['status'],'PARTIAL')
+        self.assertEqual(r.navigation_mode,'OBSERVE')
+        self.assertIsNone(r.cruise_intent)
+        self.assertIn('cruise_steering_cycle_detected',
+            [call.args[0] for call in r.event.call_args_list])
+
     def test_cruise_rejects_forged_waypoint_or_changed_task(self):
         r=self.cruise_runtime()
         r.navigation_mode='CRUISE'
