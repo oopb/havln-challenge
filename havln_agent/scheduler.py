@@ -112,6 +112,11 @@ def run(runtime,append):
                 if not intent:
                     runtime.set_navigation_mode('OBSERVE','missing_cruise_intent')
                     continue
+                remaining=runtime.config['max_steps']-1-len(runtime.memory.actions)
+                # The execution schema shrinks near the mandatory STOP reserve.
+                # Never replay an original six-action request into a registry
+                # that currently accepts only 1..remaining actions.
+                batch_steps=min(intent['max_atomic_steps'],remaining)
                 binding=dict(plan_revision=intent['plan_revision'],
                     subgoal_id=intent['subgoal_id'],
                     observation_id=runtime.memory.current['observation_id'],
@@ -120,10 +125,22 @@ def run(runtime,append):
                 runtime.event('cruise_batch_requested',source='scheduler',
                     waypoint_id=intent['waypoint_id'],
                     authorizing_decision_reason=intent['decision_reason'],
-                    max_atomic_steps=intent['max_atomic_steps'])
+                    max_atomic_steps=batch_steps)
+                before=len(runtime.memory.actions)
                 result=runtime.execute(dict(tool='navigate_local',args=dict(
                     waypoint_id=intent['waypoint_id'],
-                    max_atomic_steps=intent['max_atomic_steps'])),binding)
+                    max_atomic_steps=batch_steps)),binding)
+                if (getattr(runtime,'navigation_mode','OBSERVE')=='CRUISE'
+                        and (len(runtime.memory.actions)==before
+                             or result.get('status') in (
+                                 'INVALID_ARGUMENTS','STALE_TARGET',
+                                 'STALE_OBSERVATION','TOOL_ERROR','API_ERROR'))):
+                    # Invalid requests must not spin in CRUISE forever while
+                    # bypassing the model-decision watchdog.
+                    runtime.cruise_intent=None
+                    runtime.set_navigation_mode('OBSERVE',
+                        'cruise_failed_without_valid_execution',
+                        tool_status=result.get('status'))
                 append('navigation_agent',dict(event='cruise_execution_feedback',
                     tool_call_id=result['tool_call_id'],
                     source_agent_decision_id=runtime.current_decision_id,
