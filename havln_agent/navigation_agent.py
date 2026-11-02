@@ -114,6 +114,41 @@ OBSERVE_PROMPT = (
     'After each MOVE, choose the next short segment using the new observation '
     'and retained memory; continue the same subgoal. '
 )
+# Model-owned decisional emphasis after documented low-information scanning.
+# This is not a turn quota, forced forward action, automatic STOP or bypass of
+# live depth/terrain/human checks.
+ROUTE_REASSESSMENT_PROMPT = (
+    'EXECUTION-FOCUS REVIEW: This episode has spent many actions observing '
+    'without making registered forward progress. Do not restart the same '
+    'room scan or repeat an unchanged verification claim. First consider '
+    'whether the saved current geometry, local_navigation or candidate '
+    'waypoints support a short, genuinely task-useful movement. '
+    'You can choose navigate_relative directly without a waypoint ID and '
+    'the executor will validate fresh public RGB-D and human safety before '
+    'each step. Do NOT wait for perfect full-room semantic localization when '
+    'a short safe viewpoint change or task-directed detour is reasonable. '
+    'If every relevant movement is actually blocked or the goal identity is '
+    'contradictory, choose ONE specific information-producing tool instead: '
+    'compare_views for the target_identity_review observation IDs, '
+    'ground_landmark for a genuinely new viewpoint, or inspect_geometry '
+    'for a new measured obstruction. Explain the change of viewpoint in '
+    'memory_delta when appropriate. Do not claim a forbidden move is safe. '
+    'When verification_followup indicates no new evidence since a prior '
+    'INSUFFICIENT_EVIDENCE decision, move or observe for that missing evidence '
+    'instead of immediately calling verify_subgoal again. '
+)
+TARGET_IDENTITY_PROMPT = (
+    'TARGET CONTINUITY: target_identity_review contains competing historical '
+    'VLM landmark hypotheses. Grounding a generic bright opening is not proof '
+    'that it is the SAME doorway/landmark named by the instruction. If newer '
+    'visual evidence may be a different object, use compare_views on saved '
+    'reference and new frame rather than silently replacing the target. '
+    'Maintain the original goal identity across camera rotation; bearings '
+    'recorded at different headings cannot be compared directly without '
+    'the historical pose. Navigation remains model-directed and safe geometry '
+    'is still independently required.'
+)
+
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
     'LocalMotionController checks fresh RGB-D for each forward action, '
@@ -138,9 +173,15 @@ class NavigationAgent:
                                category='structured_field')
         context = dict(navigation_context(runtime),
                        **({'format_feedback': format_feedback} if format_feedback else {}))
+        focus = context.get('exploration_feedback') or {}
+        system_prompt = COMMON_PROMPT + OBSERVE_PROMPT
+        if focus.get('scan_dominated_without_translation'):
+            system_prompt += ROUTE_REASSESSMENT_PROMPT
+        if (context.get('target_identity_review') or {}).get('candidates'):
+            system_prompt += TARGET_IDENTITY_PROMPT
         return runtime.client.complete(
             'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT,
+            system_prompt,
             context, navigation_schema(runtime.registry), validate=validate,
             format_retry=int(bool(format_feedback)), retry_safe=True,
             protocol=compact_navigation_protocol(runtime.registry),
