@@ -150,7 +150,7 @@ class VerificationAgentTests(unittest.TestCase):
         self.assertIn('Need a view after the doorway threshold',result['missing'])
 
     def test_query_limit_never_autoverifies(self):
-        rt=fake_runtime([reply(operation='inspect_history') for _ in range(5)])
+        rt=fake_runtime([reply(operation='inspect_history') for _ in range(7)])
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertEqual(result['reason'],'verification_inspection_limit')
         self.assertFalse(result['completion_confirmed'])
