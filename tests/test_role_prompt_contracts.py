@@ -44,7 +44,7 @@ class PromptContractTests(unittest.TestCase):
             "Verify milestones", "Never request_finish(success)"):
             self.assertIn(phrase.lower(), client.system.lower(), phrase)
         self.assertIn('tool_action_limit',client.system)
-        self.assertIn('different pitch alone',client.system.lower())
+        self.assertIn('different pitch alone', ' '.join(client.system.lower().split()))
         self.assertIn('same doorway',client.system)
         self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
         self.assertNotIn('MODE: OBSERVE',client.system)
