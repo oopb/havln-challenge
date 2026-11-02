@@ -27,6 +27,26 @@ class TaskPlannerContractTests(unittest.TestCase):
     def test_goal_schema_does_not_contain_success_predicates(self):
         self.assertNotIn('success_criteria',GOAL_SCHEMA['properties'])
 
+    def test_turn_with_descriptive_chandelier_is_one_required_action(self):
+        instruction=('Turn to your left, where you will see a chandelier '
+                     'hanging above a green table.')
+        raw=dict(subgoals=[
+            dict(action='Turn left to face the described area',
+                 landmark='chandelier above green table',
+                 target='leftward orientation',source_sentence_ids=[1])],
+            final_target='leftward orientation',constraints=[])
+        class InspectingClient(FakeClient):
+            def complete(self,*args,**kwargs):
+                self.system=args[2]
+                return super().complete(*args,**kwargs)
+        client=InspectingClient(raw)
+        result=TaskPlanner.parse(client,instruction)
+        self.assertEqual(len(result['subgoals']),1)
+        self.assertIn('NOT automatically require a second physical action',
+                      client.system)
+        self.assertIn('leftward orientation',client.system)
+        self.assertEqual(result['subgoals'][0]['source_text'],instruction)
+
     def test_three_milestones_from_one_sentence_preserve_semantic_source(self):
         instruction='Descend the stairs, turn right at the landing and enter the foyer.'
         raw=dict(subgoals=[
