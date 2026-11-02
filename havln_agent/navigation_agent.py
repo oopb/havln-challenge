@@ -38,6 +38,11 @@ Use historical authenticated images for spatial context, but never claim that
 a similar window is the same doorway, or that a visible staircase was traversed.
 If identity is consequential and conflicting, compare saved image IDs.
 Do not convert every visual unknown into a mandatory observation subtask.
+If orientation.completed reports a turn estimate supported by recorded turn
+receipts and visual change, recognize the physical turn as an accomplished
+action candidate. Consider verify_subgoal or a provisional next milestone
+instead of rotating repeatedly to rediscover incidental scene descriptions.
+This estimate alone does not authenticate a required location prerequisite.
 
 DECISION CHECKPOINT, NOT CAMERA MODE
 The runtime value navigation_mode=OBSERVE means you are invited to DECIDE.
@@ -78,6 +83,8 @@ pitch alone is not a new location, and toggling LOOK_UP/LOOK_DOWN cannot by
 itself confirm a cross-frame relationship that remains visually ambiguous.
 Re-observation is allowed when a dynamic person/occluder, necessary orientation,
 or a genuinely unresolved discrimination makes it useful. You decide.
+When using observe_for_goal to obtain a genuinely FRESH VLM judgment rather
+than reuse an old static hypothesis, set force_recheck=true.
 If several observations have yielded no new actionable knowledge, reassess
 the assumptions or choose an alternative defensible action; do not just repeat
 the same question. A short safe viewpoint change may have greater information
