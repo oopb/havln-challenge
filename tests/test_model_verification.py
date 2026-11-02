@@ -60,7 +60,10 @@ def fake_runtime(replies,actions=None,observations=None):
         completed_subgoals=[],completion_evidence=[],progress_claims=[],
         provisional_transitions=[])
     mem=SimpleNamespace(task=task,actions=actions,observations=observations,
-        groundings=[],scene_history=[],tool_ledger=[],current=observations[-1],
+        groundings=[],scene_history=[dict(source=dict(observation_id='o1',
+            rgb_hash='rgb1',depth_hash='depth1'),
+            scene=dict(description='Door opening is now behind the robot'))],
+        tool_ledger=[],current=observations[-1],
         camera=SimpleNamespace(forward_step=.25),progress_feedback=None,
         progress_stage='IN_PROGRESS',event=Mock())
     rt=SimpleNamespace(memory=mem,client=FakeClient(replies))
@@ -93,6 +96,12 @@ class VerificationAgentTests(unittest.TestCase):
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertIn('unknown_cited_observation_id:invented',result['missing'])
         self.assertFalse(result['completion_confirmed'])
+
+    def test_completion_requires_semantic_review_of_terminal_frame(self):
+        rt=fake_runtime([reply()])
+        rt.memory.scene_history=[]
+        result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
+        self.assertIn('terminal_visual_semantics_not_reviewed',result['missing'])
 
     def test_historical_lookup_returns_exact_indexed_action_receipts(self):
         read=reply(operation='inspect_history')
