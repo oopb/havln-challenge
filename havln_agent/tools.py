@@ -185,7 +185,7 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
-        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel'):
+        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel','start_cruise','resume_cruise'):
             turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
             forwards=actions.count('MOVE_FORWARD')
             pending=bool(result.get('pending_target') is not None or
