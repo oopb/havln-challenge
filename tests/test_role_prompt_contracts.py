@@ -50,19 +50,18 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("LOOK_DOWN and assess/ground the entrance", client.system)
         self.assertTrue(client.kwargs["retry_safe"])
 
-    def test_task_review_never_asks_model_to_generate_predicates(self):
-        client = CapturingClient(dict(intent="continue", subgoal="Descend stairs"))
-        goal = dict(action="Descent to the bottom of the stairs", target="landing",
-                    landmark="stairs", success_criteria=["target_nearby"])
-        task = SimpleNamespace(current_subgoal_index=0, subgoals=[goal])
-        runtime = SimpleNamespace(client=client, memory=SimpleNamespace(task=task))
-        with patch("havln_agent.task_planner.planner_context", return_value={}):
-            value = TaskPlanner(runtime).review()
-        self.assertIn("Do not generate success_criteria", client.system)
-        self.assertIn("current semantic milestone", client.system.lower())
-        self.assertEqual(value["success_criteria"], [
-            "actual_descent_observed", "entry_confirmed", "final_arrival_visible",
-            "target_nearby"])
+    def test_task_review_only_updates_semantic_description(self):
+        client=CapturingClient(dict(intent='continue',subgoal='Descend stairs'))
+        goal=dict(action='Descend to the bottom of the stairs',
+                  target='landing',landmark='stairs',source_text='Go downstairs.')
+        task=SimpleNamespace(current_subgoal_index=0,subgoals=[goal])
+        runtime=SimpleNamespace(client=client,memory=SimpleNamespace(task=task))
+        with patch('havln_agent.task_planner.planner_context',return_value={}):
+            value=TaskPlanner(runtime).review()
+        self.assertIn('Do not generate success criteria',client.system)
+        self.assertIn('current semantic milestone',client.system.lower())
+        self.assertNotIn('success_criteria',value)
+        self.assertNotIn('required_success_criteria',client.context)
 
     def test_scene_prompt_treats_stairs_as_approach_cues_not_authorization(self):
         scene = dict(description="Visible stair entry", landmarks=[],
