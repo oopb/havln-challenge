@@ -223,6 +223,10 @@ class VerificationAgent:
         errors=[]
         if not image_ids or not steps:
             errors.append('requires_cited_sensor_observation_and_executed_action')
+        # Citing genuine records is necessary but not sufficient: at least one
+        # cited image must refer to the current milestone's own evidence.
+        if not any(observed.get(i,{}).get('subgoal')==index for i in image_ids):
+            errors.append('no_observation_from_claimed_milestone')
         for ident in image_ids:
             if ident not in observed:
                 errors.append('unknown_cited_observation_id:'+ident)
@@ -253,7 +257,7 @@ class VerificationAgent:
         # Never bridge an UNKNOWN movement or motion epoch reset to claim one
         # continuous displacement chain. Non-metric TURN citations may coexist.
         moves=[a for a in registered if a['action']=='MOVE_FORWARD']
-        if endpoint and registered and endpoint['step'] < max(a['step'] for a in registered):
+        if endpoint and registered and endpoint['step'] <= max(a['step'] for a in registered):
             errors.append('terminal_observation_precedes_claimed_actions')
         if moves:
             epochs={(a.get('pose') or {}).get('motion_epoch',0) for a in moves}
