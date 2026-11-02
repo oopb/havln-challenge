@@ -92,7 +92,8 @@ def registered_motion_history(memory,subgoal=None):
     observed={o['observation_id']:o for o in getattr(memory,'observations',[])}
     rows=[]
     for action in memory.actions:
-        if action.get('action')!='MOVE_FORWARD' or action.get('subgoal',index)!=index:
+        if (action.get('action')!='MOVE_FORWARD' or action.get('subgoal',index)!=index
+                or not isinstance(action.get('step'),int)):
             continue
         result=action.get('result') or {}
         motion=result.get('rgbd_motion') or {}
