@@ -18,7 +18,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v7-model-evidence-verifier'
+PROMPT_VERSION = 'havln-agent-v8-semantic-evidence-only'
 ROLES = ('task_planner', 'navigation_agent', 'visual_perception')
 
 
