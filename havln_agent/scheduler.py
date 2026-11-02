@@ -101,6 +101,36 @@ def run(runtime,append):
                 runtime.decisions+=1
                 runtime.set_semantic_goal(value)
                 append('task_planner',dict(event='task_review',decision=value))
+            if getattr(runtime,'navigation_mode','OBSERVE')=='CRUISE':
+                # Continue ONLY the still-valid finite segment already selected
+                # by NavigationAgent. No new LLM/VLM decision is made here.
+                # Agent retakes control as soon as physical execution reaches
+                # the destination or returns blocked/unknown/invalid evidence.
+                intent=getattr(runtime,'cruise_intent',None)
+                if not intent:
+                    runtime.set_navigation_mode('OBSERVE','missing_cruise_intent')
+                    continue
+                binding=dict(plan_revision=intent['plan_revision'],
+                    subgoal_id=intent['subgoal_id'],
+                    observation_id=runtime.memory.current['observation_id'],
+                    actor='cruise_executor',
+                    decision_reason=intent['decision_reason'])
+                runtime.event('cruise_batch_requested',source='scheduler',
+                    waypoint_id=intent['waypoint_id'],
+                    authorizing_decision_reason=intent['decision_reason'],
+                    max_atomic_steps=intent['max_atomic_steps'])
+                result=runtime.execute(dict(tool='navigate_local',args=dict(
+                    waypoint_id=intent['waypoint_id'],
+                    max_atomic_steps=intent['max_atomic_steps'])),binding)
+                append('navigation_agent',dict(event='cruise_execution_feedback',
+                    tool_call_id=result['tool_call_id'],
+                    source_agent_decision_id=runtime.current_decision_id,
+                    waypoint_id=intent['waypoint_id'],feedback=result))
+                runtime.assess(result)
+                runtime.navigation_liveness=liveness.diagnostic(runtime)
+                # The current cruise can only use the original waypoint;
+                # no automatic semantic advancement or camera scan is allowed.
+                continue
             binding={}
             def decide(feedback):
                 binding.update(plan_revision=runtime.plan_revision,subgoal_id=runtime.active_subgoal_id,
