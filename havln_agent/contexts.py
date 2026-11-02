@@ -122,6 +122,11 @@ def tool_summary(result):
         value['exploration']=result['exploration']
     if result.get('no_new_information_reason'):
         value['no_new_information_reason']=result['no_new_information_reason']
+    if isinstance(result.get('evidence_details'),dict):
+        details=result['evidence_details']
+        value['verification_guidance']=fields(details,('verifier','model_verdict',
+            'reasoning','next_evidence_action','terminal_observation_id','proof_guard_errors',
+            'cited_action_steps','cited_observation_ids'))
     return value
 
 
@@ -181,6 +186,46 @@ def navigation_context(runtime):
                 and item['source'].get('depth_hash') == memory.current.get('depth_hash')
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
+    # Make repeated observations and silent forward starvation explicit to the
+    # decision maker. This is evidence, NOT a fixed scan/movement policy.
+    last_forward=max((a.get('step', i) for i,a in enumerate(memory.actions)
+        if a.get('action')=='MOVE_FORWARD'),default=-1)
+    recent_tools=list(memory.tool_ledger[-30:])
+    unproductive=[v for v in recent_tools if (
+        (v.get('result') or {}).get('status')=='NO_NEW_INFORMATION'
+        or (v.get('result') or {}).get('reason') in (
+            'scan_completed_without_new_static_view','repeated_camera_sector_after_measured_block',
+            'REPEATED_SEARCH_NO_NEW_VIEW'))]
+    exploration_feedback=dict(
+        actions_since_last_forward=len(memory.actions)-last_forward-1,
+        last_forward_step=last_forward,
+        recent_tool_count=len(recent_tools),
+        repeated_low_information_calls=len(unproductive),
+        repeated_call_types=[(v.get('call') or {}).get('tool') for v in unproductive[-6:]],
+        model_may_change_goal_or_detour=True,
+        no_automatic_motion_or_stop_policy=True)
+    # Preserve historical semantic target identities across camera turns and
+    # reanchors. Old bearings are NOT reliable coordinates or motion consent.
+    semantic_targets=[]
+    wanted=task_tokens(language.get('landmark','')+' '+language.get('target',''))
+    for item in reversed(memory.scene_history):
+        src=item.get('source') or {}
+        scene_record=item.get('scene') or {}
+        for landmark in scene_record.get('landmarks',[]):
+            name=str(landmark.get('name',''))
+            if not (wanted & task_tokens(name)):
+                continue
+            if any(entry['name'].lower()==name.lower() for entry in semantic_targets):
+                continue
+            semantic_targets.append(dict(name=name[:140],
+                observation_id=src.get('observation_id'),
+                subgoal=src.get('subgoal'),
+                direction_at_capture=landmark.get('direction'),
+                status='historical_semantic_hypothesis',
+                metric_bearing_currently_valid=False,
+                needs_current_view_before_route=True))
+            if len(semantic_targets)>=6:break
+        if len(semantic_targets)>=6:break
     prior_motion_evidence=[]
     for transition in reversed(getattr(memory.task,'provisional_transitions',[])):
         idx=transition['from_subgoal']
@@ -211,6 +256,8 @@ def navigation_context(runtime):
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
+        exploration_feedback=exploration_feedback,
+        persistent_semantic_targets=semantic_targets,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
             pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
             height_y_m_est=pose['y'],
