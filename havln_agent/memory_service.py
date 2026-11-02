@@ -279,7 +279,7 @@ class MemoryService(MemoryRecords):
             verified_subgoal_indices=list(task.completed_subgoals),
             unverified_subgoal_indices=[i for i in range(len(task.subgoals))
                 if i not in task.completed_subgoals],
-            goal=fields(task.subgoals[index],('action','target','landmark','success_criteria')) if index<len(task.subgoals) else None,
+            goal=fields(task.subgoals[index],('action','target','landmark','source_text')) if index<len(task.subgoals) else None,
             goal_evidence_state='intent',verified_milestones=[milestone_summary(m) for m in milestones[-4:]],
             missing_evidence=feedback.get('missing',[]) if feedback.get('subgoal')==index else ['fresh_task_verification'],
             hypotheses=copy.deepcopy(self.notes[-2:]))
