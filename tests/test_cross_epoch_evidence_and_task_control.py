@@ -1,11 +1,18 @@
-"""Historical sensor receipts and provisional task transitions remain separate."""
+"""Replay the reported failure pattern without episode-specific hardcoded policy.
+
+The model can move on provisionally, but history must retain measured descent;
+no unverified subgoal can counterfeit final success.
+"""
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import unittest
 
-from havln_agent.progress import registered_motion_history,stair_replay_hint
+from havln_agent.progress import (_stair_evidence, registered_motion_history,
+                                  verify_progress, turn_requirement)
+from havln_agent.task_planner import required_conditions, normalize_conditions
 from havln_agent.runtime import AgentRuntime
 from havln_agent.memory_records import TaskMemory
+
 
 def observation(i, epoch):
     return dict(observation_id=f'obs_{i:04d}',step=i,
@@ -63,32 +70,89 @@ def memory():
         event=Mock())
 
 
-
 class CrossEpochHistoryTests(unittest.TestCase):
-    def test_local_measurements_survive_reanchoring_without_global_pose(self):
+    def test_registered_descent_survives_many_reanchors(self):
         m=memory()
         history=registered_motion_history(m)
         self.assertEqual(history['registered_down_steps'],[22,23,24,25])
         self.assertEqual(history['unknown_forward_steps'],[28])
         self.assertAlmostEqual(history['observed_downward_m_est'],.44)
         self.assertEqual(history['registered_forward_steps'],4)
-        self.assertIn('not_verified_route',history['caveat'])
+        self.assertIn(4,history['motion_epochs'])
+        stage,supported,missing,contradictions,detail=_stair_evidence(
+            m,m.task.subgoals[0],{'obs_0018','obs_0051'},0.,10.,1.25)
+        self.assertEqual(detail['source_observation_ids'][0],'obs_0018')
+        self.assertEqual(detail['vertical_motion_steps'],[22,23,24,25])
+        self.assertIn('multi_frame_registered_down_motion',supported)
+        self.assertEqual(detail['historical_motion_evidence']['registered_down_steps'],[22,23,24,25])
+        self.assertNotEqual(stage,'COMPLETED')
+        self.assertIn('multi_frame_level_landing_transition',missing)
 
-    def test_prior_milestone_receipts_survive_selection_and_revisit(self):
+    def test_no_landing_receipts_means_not_verified_even_with_early_descent(self):
         m=memory()
-        m.task.subgoal_start_steps={'0':40,'1':60}
-        m.task.current_subgoal_index=1
-        m.task.subgoal_started=60
-        previous=registered_motion_history(m,subgoal=0)
-        self.assertEqual(previous['registered_down_steps'],[22,23,24,25])
-        self.assertFalse(registered_motion_history(m)['rows'])
+        with patch('havln_agent.progress.current_visual_evidence',return_value=True):
+            result=verify_progress(m,'subgoal_completed','I think I reached bottom',
+                ['obs_0018','obs_0051'],10.,1.25)
+        self.assertFalse(result['completion_confirmed'])
+        self.assertEqual(result['status'],'INSUFFICIENT_EVIDENCE')
+        self.assertIn('multi_frame_registered_down_motion',result['supported'])
+        self.assertEqual(m.task.current_subgoal_index,0)
+        self.assertFalse(m.task.completed_subgoals)
 
-    def test_stair_hint_is_explicitly_not_a_completion_proof(self):
+    def test_late_grounding_does_not_erase_unattributed_earlier_motion(self):
         m=memory()
-        m.scene_history=[]
-        hint=stair_replay_hint(m)
-        self.assertEqual(hint['proof_status'],'HISTORICAL_COMPONENTS_NOT_COMPLETION')
-        self.assertEqual(hint['registered_vertical_steps'],[22,23,24,25])
+        m.groundings=[grounding(51,5,'LOCALIZED')]
+        stage,supported,missing,contradictions,detail=_stair_evidence(
+            m,m.task.subgoals[0],{'obs_0051'},0.,10.,1.25)
+        self.assertEqual(stage,'IN_PROGRESS')
+        self.assertTrue(detail['anchor_after_measured_motion'])
+        self.assertEqual(detail['historical_motion_evidence']['registered_down_steps'],
+                         [22,23,24,25])
+        self.assertIn('historical_vertical_motion_before_semantic_anchor',supported)
+        self.assertNotIn('multi_frame_registered_down_motion',supported)
+        self.assertIn('multi_frame_registered_down_motion',missing)
+
+    def test_unverified_commands_do_not_create_descent_evidence(self):
+        m=memory()
+        for a in m.actions:
+            a['result']['rgbd_motion']['observation_pair']={}
+        h=registered_motion_history(m)
+        self.assertFalse(h['registered_down_steps'])
+        stage,supported,_,_,d=_stair_evidence(m,m.task.subgoals[0],
+            {'obs_0018'},0.,10.,1.25)
+        self.assertNotIn('multi_frame_registered_down_motion',supported)
+        self.assertFalse(d['vertical_motion_steps'])
+
+    def test_pure_turn_and_foyer_translation_require_correct_evidence(self):
+        turn=dict(action='In-place rightward reorientation at the bottom of the stairs',
+            source_text='Upon reaching the bottom, make a right turn.',
+            landmark='Bottom of the stairs',target='Right-facing orientation before proceeding')
+        entry=dict(action='Entry into the foyer following the right turn',
+            source_text='As you proceed, you enter an entryway or foyer area where an individual is practicing dance moves.',
+            landmark='Foyer',target='Inside the foyer')
+        self.assertEqual(turn_requirement(turn)['direction'],'right')
+        self.assertEqual(required_conditions(turn),{'orientation_completed'})
+        self.assertIsNone(turn_requirement(entry))
+        self.assertIn('registered_translation',required_conditions(entry))
+        self.assertNotIn('orientation_completed',required_conditions(entry))
+        self.assertNotIn('landmark_passed',required_conditions(entry))
+        self.assertEqual(normalize_conditions(turn),['orientation_completed'])
+
+    def test_multiple_milestones_share_one_source_sentence(self):
+        instruction='Descend the stairs, turn right at the bottom and enter the foyer.'
+        descend=dict(action='Descend the stairs',source_text=instruction,
+                     landmark='stairs',target='lower landing')
+        turn=dict(action='In-place right turn at the lower landing',
+                  source_text=instruction,landmark='landing',target='foyer direction')
+        foyer=dict(action='Enter the foyer',source_text=instruction,
+                   landmark='foyer',target='foyer')
+        from havln_agent.progress import stair_motion_direction
+        self.assertEqual(stair_motion_direction(descend),'DOWN')
+        self.assertIsNone(stair_motion_direction(turn))
+        self.assertIsNone(stair_motion_direction(foyer))
+        self.assertEqual(required_conditions(turn),{'orientation_completed'})
+        self.assertIn('registered_translation',required_conditions(foyer))
+        self.assertNotIn('orientation_completed',required_conditions(foyer))
 
 
 class ProvisionalTaskControlTests(unittest.TestCase):
@@ -126,22 +190,12 @@ class ProvisionalTaskControlTests(unittest.TestCase):
         self.assertEqual(len(r.memory.task.provisional_transitions),2)
         self.assertFalse(r.memory.task.completed_subgoals)
 
-    def test_model_can_jump_provisionally_but_cannot_fabricate_proof(self):
+    def test_model_cannot_skip_unknown_tasks_or_use_fake_citations(self):
         r=self.runtime()
-        result=r._select_subgoal(2,'Observed the later corridor first',['o0'])
-        self.assertEqual(result['status'],'OK')
-        self.assertEqual(result['selection'],'PROVISIONAL_UNVERIFIED')
-        self.assertEqual(result['bypassed_unverified_subgoal_indices'],[1])
-        self.assertEqual(r.memory.task.current_subgoal_index,2)
-        self.assertEqual(r.memory.task.completed_subgoals,[])
-        self.assertEqual(r.memory.task.provisional_transitions[-1]
-                         ['bypassed_unverified_subgoal_indices'],[1])
-        self.assertEqual(r._select_subgoal(1,'fake',['missing'])['status'],
-                         'INVALID_ARGUMENTS')
-        self.assertEqual(r.memory.task.current_subgoal_index,2)
-        self.assertEqual(r._select_subgoal(1,'Revisit unverified milestone',['o0'])
-                         ['status'],'OK')
-        self.assertFalse(r.memory.task.completed_subgoals)
+        self.assertEqual(r._select_subgoal(2,'skip',['o0'])['status'],'INVALID_ARGUMENTS')
+        self.assertEqual(r._select_subgoal(1,'fake',['missing'])['status'],'INVALID_ARGUMENTS')
+        self.assertEqual(r.memory.task.current_subgoal_index,0)
+        self.assertFalse(r.memory.task.provisional_transitions)
 
     def test_prior_subgoal_history_is_not_cut_off_by_new_active_start(self):
         m=memory()

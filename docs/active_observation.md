@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Previously, `turn_and_observe` returned to Navigation Agent after every short
+Previously, `turn_and_observe` returned to Navigation Agent after every 1–3
 atomic turns or looks. On the stair episode this caused repeated scans of the
 same camera positions and dozens of high-latency navigation LLM decisions before
 the first forward step.
@@ -11,12 +11,13 @@ the first forward step.
 Navigation Agent chooses the objective, static target types, left/right direction
 and sweep area. ObservationController executes legal Habitat TURN actions and
 collects every RGB-D frame. VLM only checks keyframes after 30 or 45 degrees,
-but any VLM-suggested LOOK is returned to NavigationAgent as advice, not executed automatically. A medium/high-confidence
+with at most one VLM-suggested LOOK refinement per task. A medium/high-confidence
 visible target with a bounding box and concrete evidence ends the task early.
 
 No single VLM call can certify human safety, ground support or traversability.
 Navigation Agent must use fresh Geometry/Terrain and local-waypoint checks before
-any `MOVE_FORWARD`. An in-progress local navigation goal can remain pending during a scan; scanning does not silently erase the route. The model decides whether to resume or cancel it.
+any `MOVE_FORWARD`. An in-progress local navigation goal must be explicitly
+cancelled before starting a wide scan; scanning does not silently undo alignment.
 
 ## Request
 
@@ -38,9 +39,8 @@ The two optional parameters default to `checkpoint_degrees=30`, `look=none`.
 Allowed sweep sizes are 30, 60, 90 and 120 degrees (two to eight atomic
 TURN actions on the current 15-degree camera calibration). Every TURN/LOOK
 still counts toward `max_steps`; the underlying actuator reserves one STOP.
-The regular `tool_max_actions=6` is an upper bound on agent-selected short
-movement or TURN tool batches. This bounded scan has its own calibrated sweep
-bounds; a VLM checkpoint never adds unrequested LOOK actions.
+The regular `tool_max_actions=3` continues to constrain existing short
+action tools; this macro has its own angle and refinement bounds.
 
 ## Response and lifecycle
 
@@ -70,7 +70,7 @@ historical and never authorizes movement.
 - ObservationController: TURN/LOOK batching, coverage, novelty and VLM
   checkpoint timing. Never moves forward.
 - Visual Perception: one frame → typed visual candidate and evidence,
-  optional next-view suggestion, without automatic camera execution.
+  optional one-time pitch refinement request.
 - Local Motion Controller and runtime safety: local target execution and
   **fresh** Depth / support / person checks before every forward step.
 - Memory Service: view-history reuse and already-covered directions.

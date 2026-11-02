@@ -2,7 +2,7 @@
 import math
 import time
 
-from .progress import turn_evidence, current_visual_evidence, registered_motion_history, stair_replay_hint
+from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
 from .local_exploration import last_block, local_coverage
 
@@ -53,13 +53,6 @@ def waypoint_summary(path):
             'grounding_id', 'target', 'distance_before_m', 'distance_after_m',
             'bearing_error_degrees', 'direction_compatibility',
             'rejection_reasons', 'stair_direction_hypothesis'))
-    hints = path.get('tentative_goal_bearings') or []
-    if hints:
-        value['tentative_goal_bearings'] = [
-            fields(h,('target','bearing_deg','angular_error_deg','confidence',
-                      'source_observation_id','metric_distance_valid',
-                      'target_identity_verified','evidence'))
-            for h in hints[:2]]
     failures = path.get('failure_history') or []
     if failures:
         value['failed_approaches'] = [fields(item, ('reason', 'basis', 'confidence'))
@@ -90,19 +83,6 @@ def tool_summary(result):
     if 'memory' in result:value['memory']=result['memory']
     if 'waypoint_id' in result:value['waypoint_id']=result['waypoint_id']
     if 'requested_motion' in result:value['requested_motion']=result['requested_motion']
-    if (result.get('request_context') or {}).get('decision_reason'):
-        value['agent_decision_reason']=result['request_context']['decision_reason']
-    if 'movement_intent_feedback' in result:
-        value['movement_intent_feedback']=fields(result['movement_intent_feedback'],(
-            'turn_actions_executed','forward_actions_executed',
-            'only_turns_executed','desired_forward_motion_not_yet_attempted',
-            'waypoint_pending','waypoint_id','was_forward_attempted',
-            'registered_translation_known','interpretation'))
-    if 'remaining_path' in result:
-        value['remaining_path']=fields(result['remaining_path'],(
-            'path_id','status','completed','endpoint_estimate_valid'))
-    if result.get('pending_target') is not None:
-        value['pending_route_exists']=True
     if 'pixel_target' in result:value['pixel_target']=result['pixel_target']
     if 'geometry' in result:
         value['geometry']=fields(result['geometry']['front'],('motion_state','depth_state','clearance',
@@ -112,10 +92,6 @@ def tool_summary(result):
             ('status','reason','direction','initial_height_m','end_height_m','max_step_height_m','scope'))
     if 'directions' in result:
         value['directions']=result['directions']
-    if 'inspection_reference' in result:
-        value['inspection_reference']=fields(result['inspection_reference'],(
-            'observation_id','heading_deg','pitch_deg','motion_epoch',
-            'scope','live_forward_probe_still_required'))
     if 'outcome' in result and result.get('tool')=='observe_for_goal':
         value['observation_task']=dict(
             outcome=result['outcome'],
@@ -139,29 +115,13 @@ def tool_summary(result):
         value['exploration']=result['exploration']
     if result.get('no_new_information_reason'):
         value['no_new_information_reason']=result['no_new_information_reason']
-    if isinstance(result.get('observation_advisory'),dict):
-        value['observation_advisory']=fields(result['observation_advisory'],(
-            'decision_authority','previously_observed_static_sector',
-            'new_static_view_expected','prior_observation_ids',
-            'already_covered_since_block','identical_recent_scan',
-            'previous_static_view_does_not_prove_current_dynamic_scene',
-            'may_still_be_useful_for_orientation_or_dynamic_recheck'))
-    if isinstance(result.get('evidence_details'),dict):
-        details=result['evidence_details']
-        value['verification_guidance']=fields(details,('verifier','model_verdict',
-            'reasoning','next_evidence_action','terminal_observation_id','proof_guard_errors',
-            'cited_action_steps','cited_observation_ids'))
     return value
 
 
 def planner_context(runtime):
     task=runtime.memory.task
     index=task.current_subgoal_index
-    return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','source_text')),
-        stair_replay=stair_replay_hint(runtime.memory),
-        registered_motion_evidence={key:value for key,value in
-            registered_motion_history(runtime.memory).items() if key!='rows'},
-        provisional_transitions=getattr(task,'provisional_transitions',[])[-3:],
+    return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','success_criteria')),
         verified_milestones=[dict(subgoal=m['subgoal'],source_observation_ids=m.get('observation_ids',[])[-2:],
             executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported']) for m in task.completion_evidence[-3:]],
         new_evidence=runtime.memory.recall_observation(runtime.memory.current_place_id,
@@ -210,169 +170,14 @@ def navigation_context(runtime):
                 and item['source'].get('depth_hash') == memory.current.get('depth_hash')
                 and item['source'].get('pose') == pose),
             interpretation='visual_location_hypothesis_not_motion_permission'))
-    # Make repeated observations and silent forward starvation explicit to the
-    # decision maker. This is evidence, NOT a fixed scan/movement policy.
-    last_forward=max((a.get('step', i) for i,a in enumerate(memory.actions)
-        if a.get('action')=='MOVE_FORWARD'),default=-1)
-    recent_tools=list(memory.tool_ledger[-30:])
-    unproductive=[v for v in recent_tools if (
-        (v.get('result') or {}).get('status')=='NO_NEW_INFORMATION'
-        or (v.get('result') or {}).get('reason') in (
-            'scan_completed_without_new_static_view','repeated_camera_sector_after_measured_block',
-            'REPEATED_SEARCH_NO_NEW_VIEW'))]
-    # Explicit sensor-registered progress versus mere camera rotation.
-    # No hidden simulator pose or guessed displacement is used here.
-    accepted_forward=[a for a in memory.actions
-        if a.get('action')=='MOVE_FORWARD'
-        and a.get('evidence_state')=='motion_verified']
-    last_registered=max((a.get('step',i)
-        for i,a in enumerate(memory.actions)
-        if a.get('action')=='MOVE_FORWARD'
-        and a.get('evidence_state')=='motion_verified'), default=-1)
-    movement_calls=[entry for entry in reversed(memory.tool_ledger)
-        if (entry.get('call') or {}).get('tool') in
-            ('navigate_local','navigate_relative','navigate_to_pixel','start_cruise','resume_cruise')]
-    latest_movement=(movement_calls[0]['result'] if movement_calls else {})
-    latest_movement_summary=tool_summary(latest_movement) if latest_movement else None
-    movement_outcome=(latest_movement.get('movement_intent_feedback') or {})
-    last_execution=memory.tool_ledger[-1]['result'] if memory.tool_ledger else {}
-    last_visual=(last_execution.get('scan') or {})
-    recent_scene_calls=[x for x in recent_tools
-        if (x.get('call') or {}).get('tool') in (
-            'analyze_scene','compare_views','ground_landmark','observe_for_goal',
-            'turn_and_observe')]
-    visual_low_gain=sum(
-        (x.get('result') or {}).get('status')=='NO_NEW_INFORMATION'
-        or (x.get('result') or {}).get('reason')=='scan_completed_without_new_static_view'
-        or (x.get('result') or {}).get('outcome')=='REPEATED_SEARCH_NO_NEW_VIEW'
-        for x in recent_scene_calls)
-    decision_feedback=dict(
-        evidence_basis='public_RGBD_and_authenticated_action_receipts_not_gt_pose',
-        action_count=len(memory.actions),
-        last_registered_forward_step=last_registered,
-        actions_since_registered_forward=len(memory.actions)-last_registered-1,
-        registered_forward_count=len(accepted_forward),
-        recorded_forward_count=sum(a.get('action')=='MOVE_FORWARD'
-            for a in memory.actions),
-        recent_static_visual_calls=len(recent_scene_calls),
-        recent_static_low_gain_calls=visual_low_gain,
-        last_action=(memory.actions[-1]['action'] if memory.actions else None),
-        latest_tool_status=last_execution.get('status'),
-        last_agent_decision_reason=(last_execution.get('request_context') or {}).get(
-            'decision_reason','')[:300],
-        latest_tool_motion=fields(last_execution,(
-            'executed_motion','requested_actions','executed_actions')),
-        new_static_view_ids_last_scan=(
-            last_visual.get('new_information_ids') or
-            last_execution.get('new_information_ids') or [])[-4:],
-        latest_movement=fields(latest_movement_summary or {},(
-            'tool','status','reason','executed_motion','movement_intent_feedback',
-            'remaining_path','waypoint_id','interrupted_status')),
-        turn_only_move_does_not_count_as_forward=bool(
-            movement_outcome.get('only_turns_executed')),
-        incomplete_movement_may_resume_same_waypoint=bool(
-            movement_outcome.get('waypoint_pending')),
-        decision_authority='navigation_agent',
-        note='camera rotations and novel images are not physical translation; '
-             'no forced action, hard scan quota or automatic goal switch')
-    exploration_feedback=dict(
-        actions_since_last_forward=len(memory.actions)-last_forward-1,
-        last_forward_step=last_forward,
-        recent_tool_count=len(recent_tools),
-        repeated_low_information_calls=len(unproductive),
-        repeated_call_types=[(v.get('call') or {}).get('tool') for v in unproductive[-6:]],
-        model_may_change_goal_or_detour=True,
-        no_automatic_motion_or_stop_policy=True)
-    # Keep an unsuccessful verification verdict available after unrelated
-    # tools, so the LLM does not repeatedly ask for the same proof with no new
-    # motion or visual evidence. This is a planning hint, never a hard veto.
-    last_check=next((event for event in reversed(getattr(memory,'events',[]))
-        if event.get('event')=='progress_checked'),None)
-    verification_state=None
-    if last_check:
-        outcome=last_check.get('result') or {}
-        check_step=last_check.get('step',-1)
-        verification_state=dict(
-            checked_step=check_step,actions_since_check=max(0,len(memory.actions)-check_step),
-            status=outcome.get('status'),model_verdict=(
-                (outcome.get('evidence_details') or {}).get('model_verdict')),
-            missing=outcome.get('missing',[])[:5],
-            next_evidence_action=(
-                (outcome.get('evidence_details') or {}).get('next_evidence_action')),
-            new_forward_since_check=any(a.get('action')=='MOVE_FORWARD'
-                and a.get('step',-1)>=check_step for a in memory.actions),
-            insufficient_verification_is_not_a_new_navigation_obstacle=True)
-    # Repeated scans are not progress. Tell the navigation model explicitly
-    # when it has been spending substantial time revisiting old views.
-    scan_dominated=(exploration_feedback['repeated_low_information_calls']>=3
-        and exploration_feedback['actions_since_last_forward']>=6)
-    exploration_feedback['scan_dominated_without_translation']=scan_dominated
-    exploration_feedback['decision_authority']='navigation_agent'
-    exploration_feedback['scan_stagnation_is_advisory_not_an_action_gate']=True
-    # Preserve multiple candidate identities across VLM calls: a later
-    # single-frame grounding is a hypothesis, not a replacement for the
-    # historically observed goal. The model can call compare_views on IDs.
-    target_identity_history=[]
-    for item in reversed(memory.groundings):
-        if item.get('source',{}).get('subgoal')!=index:continue
-        if len(target_identity_history)>=5:break
-        s=item.get('semantic') or {}
-        src=item.get('source') or {}
-        target_identity_history.append(dict(
-            target=item.get('target','')[:140],
-            observation_id=src.get('observation_id'),
-            evidence=str(s.get('evidence',''))[:230],
-            uncertainty=str(s.get('uncertainty',''))[:170],
-            semantic_confidence=s.get('confidence'),
-            localized=(item.get('position') or {}).get('status'),
-            image_bearing_deg=(item.get('position') or {}).get('bearing_degrees'),
-            motion_epoch=(src.get('pose') or {}).get('motion_epoch'),
-            identity_match_to_earlier_candidates='NOT_ESTABLISHED_BY_SINGLE_FRAME'))
-    identity_reference_ids=list(dict.fromkeys(
-        item['observation_id'] for item in reversed(target_identity_history)
-        if item.get('observation_id')))
-    target_identity_review=dict(
-        candidates=target_identity_history,
-        historical_observation_ids=identity_reference_ids[-4:],
-        newest_observation_id=(memory.current or {}).get('observation_id'),
-        consistency='UNVERIFIED_UNLESS_CROSS_VIEW_IDENTITY_EVIDENCE',
-        compare_views_question='Is the target in the later camera view the SAME '
-          'physical landmark seen in the earlier frame, or a distinct opening, '
-          'window, wall recess, or object? Describe unambiguous differences. '
-          'Do not treat camera rotation as target movement.',
-        caution='A later PARTIAL grounding is not permission to rename the '
-                'original task target or to claim the destination changed.')
-    # Preserve historical semantic target identities across camera turns and
-    # reanchors. Old bearings are NOT reliable coordinates or motion consent.
-    semantic_targets=[]
-    wanted=task_tokens(language.get('landmark','')+' '+language.get('target',''))
-    for item in reversed(memory.scene_history):
-        src=item.get('source') or {}
-        scene_record=item.get('scene') or {}
-        for landmark in scene_record.get('landmarks',[]):
-            name=str(landmark.get('name',''))
-            if not (wanted & task_tokens(name)):
-                continue
-            if any(entry['name'].lower()==name.lower() for entry in semantic_targets):
-                continue
-            semantic_targets.append(dict(name=name[:140],
-                observation_id=src.get('observation_id'),
-                subgoal=src.get('subgoal'),
-                direction_at_capture=landmark.get('direction'),
-                status='historical_semantic_hypothesis',
-                metric_bearing_currently_valid=False,
-                needs_current_view_before_route=True))
-            if len(semantic_targets)>=6:break
-        if len(semantic_targets)>=6:break
     prior_motion_evidence=[]
     for transition in reversed(getattr(memory.task,'provisional_transitions',[])):
         idx=transition['from_subgoal']
         if idx==index or any(x['subgoal_index']==idx for x in prior_motion_evidence):
             continue
-        history={k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
-                 if k!='rows'}
-        prior_motion_evidence.append(dict(subgoal_index=idx,**history,
-            stair_replay=stair_replay_hint(memory,subgoal=idx)))
+        prior_motion_evidence.append(dict(subgoal_index=idx,
+            **{k:v for k,v in registered_motion_history(memory,subgoal=idx).items()
+               if k!='rows'}))
         if len(prior_motion_evidence)>=2:
             break
     result=dict(goal=runtime.active_subgoal,
@@ -384,31 +189,15 @@ def navigation_context(runtime):
             provisional_transitions=getattr(memory.task,'provisional_transitions',[])[-3:],
             unverified_subgoal_indices=[i for i in range(len(memory.task.subgoals))
                 if i not in getattr(memory.task,'completed_subgoals',[])],
-            select_subgoal_is_navigation_decision_not_verified_completion=True,
-            may_select_any_unverified_subgoal_provisionally=True,
-            original_milestone_order_preserved_for_final_verification=True),
+            select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
-        stair_replay=stair_replay_hint(memory),
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             direct_segment_max_m=3.0),
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
-        cruise_state=dict(
-            active=getattr(runtime,'navigation_mode','OBSERVE')=='CRUISE',
-            intent=fields(getattr(runtime,'cruise_intent',None) or {},(
-                'waypoint_id','max_atomic_steps','decision_reason',
-                'authorized_at_step','subgoal_id','initial_tool')),
-            mode_switch_authority='navigation_agent_explicit_start_or_resume',
-            continuation_scope='same_finite_waypoint_only_live_RGBD_safety',
-            return_to_observe_on='target_reached_or_blocked_or_unknown_or_interrupted'),
         navigation_memory=navigation_memory,
-        decision_feedback=decision_feedback,
-        exploration_feedback=exploration_feedback,
-        verification_followup=verification_state,
-        target_identity_review=target_identity_review,
-        persistent_semantic_targets=semantic_targets,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
             pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
             height_y_m_est=pose['y'],
@@ -429,11 +218,7 @@ def navigation_context(runtime):
         actions_remaining=runtime.config['max_steps']-len(memory.actions))
     orientation=turn_evidence(memory)
     if orientation['requirement']:
-        result['orientation']=fields(orientation,(
-            'requirement','remaining_deg','allowed_directions','completed',
-            'ever_completed','first_completed_step',
-            'remaining_deg_is_current_heading_error_not_unexecuted_task',
-            'caveat'))
+        result['orientation']=fields(orientation,('requirement','remaining_deg','allowed_directions','completed'))
     # Make actionable candidates survive the next LLM call. A prior tool's
     # waypoints otherwise disappear from last_tool after a single scan/query,
     # driving repeated sensing rather than the chosen local movement.
@@ -506,7 +291,6 @@ def navigation_context(runtime):
         result['latest_observation_task']=dict(
             objective=recent_search['objective'],outcome=recent_search['outcome'],
             direction=recent_search['direction'],
-            observation_advisory=recent_search.get('observation_advisory'),
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])

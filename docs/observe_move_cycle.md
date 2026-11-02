@@ -1,33 +1,12 @@
-# Persistent OBSERVE ⇄ CRUISE navigation
+# OBSERVE → MOVE navigation
 
-Two distinct strategies are supported. `OBSERVE` is a NavigationAgent
-planning/observation checkpoint, **not** an obligation to turn or call VLM.
-`CRUISE` is a persistent, explicitly authorized **finite local waypoint**,
-not a second LLM planner. Only NavigationAgent creates the route:
-
-- `start_cruise(turn_deg, distance_m, max_atomic_steps)`: choose a new
-  calibrated relative turn plus 0.25–3.0 m segment.
-- `resume_cruise(waypoint_id, max_atomic_steps)`: explicitly authorize
-  continuous execution of an existing still-valid waypoint.
-- Regular `navigate_relative`, `navigate_to_pixel`, and `navigate_local`
-  remain single bounded batches and return to OBSERVE.
-
-Once CRUISE is active, scheduler executes `navigate_local` on **the exact same
-waypoint**, in repeated batches limited to the Agent-selected 1–6 atomic
-actions. There are **no extra NavigationAgent or VisualPerception requests**
-between batches. Each actual MOVE_FORWARD still gets independent live RGB-D,
-body-depth, people and terrain validity checks. There is no automatic route
-selection, target extension, goal verification, or subgoal change.
-
-CRUISE yields to OBSERVE when the finite waypoint completes, physical
-collision or missing view blocks it, odometry becomes uncertain, execution is
-interrupted, task authorization changes, or a batch produces a net-zero
-turn-only steering cycle. It never assumes an UNKNOWN displacement was 0.25 m.
-
-The model decides when to **enter** CRUISE and which bounded route it means.
-The physical executor decides only whether it remains safe/legal to honor
-that previously authorized route. On any interruption the Agent may inspect
-the new evidence, create a detour, resume a valid route, or change subgoals.
+Keep TaskPlanner's ordered semantic subgoals. NavigationAgent runs **only in OBSERVE**:
+it examines the latest RGB-D geometry, current or remembered VLM target evidence,
+and a concise navigation history, then chooses exactly one tool. Visual/geometry
+tools may refine the next short move; a `navigate_local` call performs **MOVE**
+of up to three atomic actions using the existing LocalMotionController. The
+runtime then returns to OBSERVE for the next local decision. There is no separate
+route-level planner, route ID, or new navigation tool.
 
 ## Execution
 
@@ -41,11 +20,10 @@ the new evidence, create a detour, resume a valid route, or change subgoals.
 4. Repeat until the independent progress verifier confirms the current
    semantic subgoal. TaskPlanner `continue` reviews do not cancel the waypoint.
 
-The `navigation_mode` and `cruise_intent` fields and
-`navigation_mode_changed`, `cruise_progress`, and `cruise_batch_requested`
-events appear in state/trace logs. One authorizing model decision may execute
-multiple physically validated batches. Normal one-batch MOVE remains supported
-for brief exploratory attempts.
+The `navigation_mode` field and `navigation_mode_changed` events appear in
+state/trace logs. OBSERVE may perform in-place TURN/LOOK actions to obtain a
+missing view; this does not mean navigating a new global route. MOVE does not
+make an extra NavigationAgent model request.
 
 ## Memory
 
@@ -122,12 +100,9 @@ For a grounded semantic target, the five candidate slots prioritize greater
 estimated target-distance reduction; ungrounded exploratory previews still
 prefer short turns. This only sorts offered options, not an autonomous planner.
 
-Revisited or identical static views are reported as factual
-`observation_advisory` and `NO_NEW_INFORMATION` when no new static detail was
-observed. They do **not** veto the agent's legal observations, including
-dynamic rechecks. NavigationAgent must weigh the information value itself.
-The active-observation VLM may suggest a pitch change but never executes
-it automatically; new views after translation remain available.
+Identical recently completed active scans now return `NO_NEW_INFORMATION`
+rather than `OK`, so the agent sees that replaying an identical observation
+has no information value. New views after translation remain available.
 
 ## Model-controlled movement decisions
 
@@ -167,9 +142,8 @@ entrance region is not precisely localized, the verifier now also accepts an
 independent *sensor-derived* transition proof: multiple depth-registered downward
 translations, multiple distinct registered level landing steps, current
 RGB-D-supported landing observation, net horizontal/vertical displacement,
-continuous registration and no contradictions. The current completion
-authority is the independent model-led VerificationAgent plus Python evidence
-authentication: legacy typed task-success predicates have been removed.
+continuous registration and no contradictions. Completion still requires
+authentic cited observations and the runtime's typed success predicates.
 This avoids requiring one exact `entry_box` path through the scene while
 retaining independent evidence to resist false completion.
 

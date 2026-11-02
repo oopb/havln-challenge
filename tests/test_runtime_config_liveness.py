@@ -45,7 +45,6 @@ class ConfigLivenessTests(unittest.TestCase):
         runtime=config['runtime']
         self.assertEqual(runtime['max_unchanged_evidence_decisions'],8)
         self.assertEqual(runtime['max_steps'],500)
-        self.assertEqual(runtime['tool_max_actions'],6)
 
     def test_legacy_runtime_config_has_backward_compatible_defaults(self):
         config=self.read()
@@ -80,16 +79,6 @@ class ConfigLivenessTests(unittest.TestCase):
             bad['runtime']['max_unchanged_evidence_decisions']=value
             with self.subTest(value=value),self.assertRaisesRegex(
                     ValueError,'runtime.max_unchanged_evidence_decisions'):
-                self.read(bad)
-
-    def test_agent_may_choose_six_actions_but_invalid_horizons_are_rejected(self):
-        config=self.read()
-        self.assertEqual(config['runtime']['tool_max_actions'],6)
-        for value in (0,7,10,True,'6'):
-            bad=copy.deepcopy(config)
-            bad['runtime']['tool_max_actions']=value
-            with self.subTest(value=value),self.assertRaisesRegex(
-                    ValueError,'runtime.tool_max_actions'):
                 self.read(bad)
 
     def test_unknown_and_missing_runtime_keys_still_rejected(self):

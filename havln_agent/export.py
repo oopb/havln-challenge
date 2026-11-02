@@ -98,7 +98,7 @@ def load_config(path):
             raise ValueError('Invalid runtime.%s=%r: expected a finite number' % (name,limits[name]))
     checks = (
         ('max_steps', limits['max_steps'] <= 500, 'an integer in [1, 500]'),
-        ('tool_max_actions', limits['tool_max_actions'] <= 6, 'an integer in [1, 6]'),
+        ('tool_max_actions', limits['tool_max_actions'] <= 3, 'an integer in [1, 3]'),
         ('waypoint_distance', 0 < limits['waypoint_distance'] <= 1.5, '0 < value <= 1.5'),
         ('safety_margin', 0 <= limits['safety_margin'] <= 1, '0 <= value <= 1'),
         ('max_depth_age_seconds', 0 < limits['max_depth_age_seconds'] <= 1, '0 < value <= 1'),

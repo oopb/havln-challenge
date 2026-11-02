@@ -72,7 +72,7 @@ def _features(observation, camera, excluded=None):
     return np.asarray(descriptors), np.asarray(xyz), np.asarray(pixels)
 
 
-def _estimate_patch_translation(before, after, camera, excluded_before=None):
+def estimate_translation(before, after, camera, excluded_before=None):
     result = dict(status='UNKNOWN', source='mutual_rgb_patches_and_measured_depth',
                   frame='previous_robot_camera', position_verified=False,
                   vertical_motion='UNKNOWN', reason='insufficient_static_correspondences')
@@ -134,56 +134,15 @@ def _estimate_patch_translation(before, after, camera, excluded_before=None):
     x, y, z = map(float, translation)
     pitch = np.radians(before.pitch_deg)
     y, z = y*np.cos(pitch)+z*np.sin(pitch), z*np.cos(pitch)-y*np.sin(pitch)
-    result['rejected_translation_hypothesis_m'] = dict(
-        x_right=x,y_up=y,z_forward=z)
     if abs(x) > camera.forward_step * 0.4 or not 0.02 < z < camera.forward_step * 1.6 \
             or abs(y) > camera.forward_step+camera.max_step_height:
-        # Strong, broadly distributed stationary matches are distinguishable
-        # from a generic matching failure. Never treat commanded movement as
-        # ground truth, and never call this a certified collision.
-        stationary = (abs(x) <= .03 and abs(y) <= .035 and abs(z) <= .025
-            and count >= 12 and float(coverage.min()) >= .4 and
-            len(tiles) >= 6 and depth_span >= .3)
-        result['reason'] = ('no_resolvable_forward_translation'
-                            if stationary else 'inconsistent_with_forward_camera_motion')
-        result['stationary_image_hypothesis'] = bool(stationary)
+        result['reason'] = 'inconsistent_with_forward_camera_motion'
         return result
     result.update(status='ESTIMATED', reason=None, translation_m=dict(x_right=x, y_up=y, z_forward=z),
                   uncertainty_m=3 * sigma, spatial_tiles=len(tiles),
                   uncertainty_kind='registration_residual_not_calibrated_ground_truth',
                   vertical_motion='UP' if y > 3 * sigma else 'DOWN' if y < -3 * sigma else 'LEVEL')
     return result
-
-
-
-def estimate_translation(before, after, camera, excluded_before=None):
-    """Two independent RGB-D estimators, with fail-closed evidence precedence.
-
-    Existing patch matching remains primary and authoritative when accepted.
-    ORB is attempted only for an UNKNOWN result, never to override a strong
-    stationary result, nonchronological pair or actual observed odometry.
-    Missing OpenCV leaves behavior identical to the former patch estimator.
-    """
-    primary = _estimate_patch_translation(before,after,camera,excluded_before)
-    if primary['status']=='ESTIMATED' or primary.get('reason') in (
-            'no_resolvable_forward_translation','non_chronological_rgbd_pair'):
-        return primary
-    from .motion_fallback import estimate_orb_translation
-    secondary = estimate_orb_translation(before,after,camera,excluded_before)
-    if secondary is None:
-        return primary
-    primary['secondary_odometry'] = {k:secondary.get(k) for k in (
-        'status','reason','matches','inliers','inlier_fraction','spatial_coverage',
-        'spatial_tiles','depth_span_m','residual_rms_m','measured_hypothesis_m')
-        if k in secondary}
-    if secondary['status'] != 'ESTIMATED':
-        return primary
-    # A candidate does not displace public RGB-D pairing or manufacture an
-    # odometry bridge: both estimators were run on this identical frame pair.
-    secondary['observation_pair'] = primary['observation_pair']
-    secondary['primary_estimator_failure_reason'] = primary.get('reason')
-    secondary['position_verified'] = False
-    return secondary
 
 
 def landing_support(geometry, box=None):

@@ -1,7 +1,14 @@
 """Current semantic plans, one-tool decisions and trusted execution feedback."""
 from .api_client import TEXT, object_schema
 
+PREDICATES = ('landmark_visible', 'entry_confirmed', 'actual_descent_observed',
+    'actual_ascent_observed', 'registered_translation', 'orientation_completed',
+    'landmark_passed', 'target_nearby', 'final_arrival_visible')
+CONDITIONS = dict(type='array', minItems=1, maxItems=len(PREDICATES), uniqueItems=True,
+                  items=dict(enum=list(PREDICATES)))
 TASK_REVIEW = object_schema(dict(intent=dict(enum=['continue', 'revise']), subgoal=TEXT))
+# Backward compatible with legacy model output, but no longer required or trusted.
+TASK_REVIEW['properties']['success_criteria'] = CONDITIONS
 HYPOTHESIS = object_schema(dict(finding=TEXT, source_observation_ids=dict(type='array',
     minItems=1, maxItems=4, uniqueItems=True, items=TEXT)))
 
@@ -22,7 +29,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             purpose=dict(enum=['explore','dynamic_recheck','intentional_recheck']))),
             required=['relative_turn_deg','look']))
     specs = {
-        'turn_and_observe': ('Execute up to the configured atomic action limit in calibrated TURN/LOOK steps. Previously seen static views are reported as an advisory; the Agent may intentionally observe them again. Prior views never authorize current motion.', dict(oneOf=turn)),
+        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. Duplicates are reported; purpose=intentional_recheck explicitly allows re-observation. Prior views never authorize current motion.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
@@ -56,26 +63,20 @@ def registry(camera, max_actions, pitch_deg=0.):
                 v=dict(type='number',minimum=0,maximum=1),
                 distance_m=dict(type='number',minimum=0.25,maximum=3.0),
                 max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
-        'navigate_local': ('Execute or resume a waypoint for the agent-selected number of atomic actions up to the configured limit. Revalidate fresh RGB-D, terrain and people before every forward.',
+        'navigate_local': ('Execute or resume a returned waypoint ID in up to 3 atomic actions, revalidating fresh RGB-D and people before each forward step.',
             object_schema(dict(waypoint_id=text, max_atomic_steps=dict(type='integer', minimum=1, maximum=max_actions)))),
-        'start_cruise': ('Agent explicitly authorizes a finite local route (relative bearing and 0.25-3m). Execute up to max_atomic_steps now, then AUTOMATICALLY continue the SAME waypoint in bounded batches without new LLM/VLM requests while fresh per-step safety and registered motion remain valid. Return control to Agent when target reached, blocked, localization uncertain, budget exhausted, or route invalid. This never invents a new destination.',
-            object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
-                distance_m=dict(type='number',minimum=.25,maximum=3.0),
-                max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
-        'resume_cruise': ('Agent explicitly converts one existing still-valid waypoint into a finite persistent CRUISE intent. The executor only follows that SAME waypoint, rechecking live depth/people before each forward; it never creates a new route or requests extra visual observations.',
-            object_schema(dict(waypoint_id=text, max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
         'cancel_local_navigation': ('Cancel a pending local waypoint without changing the semantic task.', object_schema(dict(reason=text))),
         'recall_observation': ('Retrieve up to four short keyframe summaries by place, heading or landmark.',
             dict(object_schema(dict(place_id=text, heading_deg=dict(type='number'), landmark=text, top_k=top)), required=['place_id'])),
         'query_spatial_memory': ('Retrieve up to four relevant landmark, route or recent/expired-person summaries.',
             dict(object_schema(dict(place_id=text, target=text, top_k=top)), required=['place_id'])),
-        'query_task_memory': ('Retrieve current semantic objective, missing evidence, provisional choices and independently verified milestones.',
+        'query_task_memory': ('Retrieve current task, typed conditions, missing evidence and short verified milestones.',
             dict(object_schema(dict(subgoal_id=text)), required=[])),
         'read_memory_record': ('Open one explicitly requested observation/tool/grounding/task record from local history.', object_schema(dict(record_id=text))),
         'verify_subgoal': ('Propose evidence for independent task verification; text alone never completes a task.',
             object_schema(dict(claim=dict(enum=['landmark_found','entered','bottom_visible','subgoal_completed']),
                 evidence=text, observation_ids=ids))),
-        'select_subgoal': ('Choose ANY unverified semantic milestone as the active provisional navigation objective, forward or backward, based on observed evidence and a concrete reason. This does not mark skipped goals completed or change the original ordered instruction. Final success still requires independently VERIFIED evidence for ALL milestones. Supply real observation IDs.',
+        'select_subgoal': ('Select the next ordered semantic milestone provisionally, or revisit an earlier UNVERIFIED milestone. Navigation strategy belongs to the model; this NEVER certifies completion and final success still requires independent proof for ALL milestones. Supply real observation IDs and a concrete reason. No skipping multiple unseen milestones.',
             object_schema(dict(subgoal_index=dict(type='integer',minimum=0),
                 reason=text,observation_ids=ids))),
         'request_task_review': ('Request a semantic review for a specific task change or major new evidence.', object_schema(dict(reason=text))),
@@ -83,7 +84,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','start_cruise','resume_cruise','observe_for_goal') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 
@@ -92,7 +93,6 @@ def navigation_schema(tools):
     branches=[]
     for name,spec in tools.items():
         branch=object_schema(dict(tool=dict(const=name), args=spec['parameters'],
-            decision_reason=dict(type='string',maxLength=300),
             memory_delta=dict(type='array', maxItems=4, items=HYPOTHESIS)))
         branch['required']=['tool','args']
         branch['description']=spec['description']
@@ -103,7 +103,6 @@ def navigation_schema(tools):
 def navigation_envelope(tools):
     """Malformed messages are API errors; valid calls get runtime argument feedback."""
     value=object_schema(dict(tool=dict(enum=list(tools)),args=dict(type='object'),
-        decision_reason=dict(type='string',maxLength=300),
         memory_delta=dict(type='array',maxItems=4,items=HYPOTHESIS)))
     value['required']=['tool','args']
     return value
@@ -129,9 +128,7 @@ def compact_navigation_protocol(tools):
         required=schema.get('required',[])
         return '('+', '.join(name+('' if name in required else '?')+':'+kind(value)
             for name,value in schema.get('properties',{}).items())+')'
-    return ('Return exactly {"tool":"name","args":{...}}. You may add a brief '
-        'decision_reason explaining WHY this observation, movement or milestone is useful. '
-        'Optional memory_delta is at most 4 '
+    return ('Return exactly {"tool":"name","args":{...}}. Optional memory_delta is at most 4 '
         'objects {"finding":"text","source_observation_ids":["existing ID"]}; hypotheses only. '
         'Use only listed tools/args. ? means optional; all text <=1000 characters, IDs nonempty, '
         'arrays unique. Tool signatures and purpose:\n'+'\n'.join(

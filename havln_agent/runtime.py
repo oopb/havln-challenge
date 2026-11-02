@@ -22,9 +22,8 @@ from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
-from .task_planner import TaskPlanner
+from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
-from .verification_agent import VerificationAgent
 
 
 class AgentRuntime(ToolExecutor):
@@ -38,7 +37,6 @@ class AgentRuntime(ToolExecutor):
         self.plan_revision, self.active_subgoal_id, self.active_subgoal = 0, None, None
         self.active_waypoint_id = None
         self.navigation_mode = 'OBSERVE'
-        self.cruise_intent = None  # Explicit, finite NavigationAgent-authorized local route
         self.task_review_requested, self.review_reason = True, 'initial_task'
         self.api_failure = None
         self.navigation_liveness = None
@@ -46,7 +44,6 @@ class AgentRuntime(ToolExecutor):
         self.task_planner = TaskPlanner(self)
         self.navigation_agent = NavigationAgent(self)
         self.visual_perception = VisualPerception(self)
-        self.verification_agent = VerificationAgent(self)
         self.observation_controller = ObservationController(self)
         self._authorized_action = False
         # Pitch changes only after a successful public environment receipt.
@@ -124,7 +121,7 @@ class AgentRuntime(ToolExecutor):
                     semantic_source_observation_id=bound['semantic_source_observation_id'])
 
     def set_navigation_mode(self, mode, reason, **detail):
-        if mode not in ('OBSERVE', 'CRUISE'):
+        if mode not in ('OBSERVE', 'MOVE'):
             raise ValueError('unknown_navigation_mode')
         previous = self.navigation_mode
         if previous != mode:
@@ -135,8 +132,7 @@ class AgentRuntime(ToolExecutor):
     def state_view(self):
         self.assert_owner()
         scene = self.memory.scene_memory
-        return dict(architecture='observe_cruise_v2', navigation_mode=self.navigation_mode,
-            cruise_intent=copy.deepcopy(getattr(self,'cruise_intent',None)),
+        return dict(architecture='observe_move_v1', navigation_mode=self.navigation_mode,
             episode_id=self.memory.episode_id,
             observation_id=(self.memory.current or {}).get('observation_id'), plan_revision=self.plan_revision,
             active_subgoal=self.active_subgoal, pose=self.motion_controller.pose(), action_budget=self.config['max_steps'],
@@ -162,19 +158,19 @@ class AgentRuntime(ToolExecutor):
             self.task_review_requested = False
             return
         goal = task.subgoals[i]
+        criteria = list(value['success_criteria'] if value else goal['success_criteria'])
+        validate_conditions(goal, criteria, i == len(task.subgoals)-1)
         self.plan_revision += 1
         self.active_subgoal_id = 'sg_%d' % i
         description = value['subgoal'] if value else goal['action']+' '+goal['target']
-        goal['semantic_description'] = description
+        goal.update(success_criteria=criteria, semantic_description=description)
         self.active_subgoal = dict(id=self.active_subgoal_id, description=description,
-            action=goal['action'], landmark=goal['landmark'], target=goal['target'],
-            source_text=goal.get('source_text'))
+            landmark=goal['landmark'], success_criteria=criteria)
         action = goal['action']
         stair_direction = stair_motion_direction(goal)
         self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else
             'ASCEND_STAIRS' if stair_direction == 'UP' else 'LEVEL_ONLY')
         self.semantic_motion_policy = self.motion_policy
-        self.cruise_intent = None
         self._cancel_local_navigation('semantic_task_revision')
         self.active_waypoint_id = None
         self.set_navigation_mode('OBSERVE', 'semantic_subgoal_changed')
@@ -184,53 +180,12 @@ class AgentRuntime(ToolExecutor):
 
     def execute(self, call, decision=None):
         self.assert_owner()
-        self.context_version = 'observe_cruise_v2:%d:%s:%d' % (self.plan_revision,
+        self.context_version = 'observe_move_v1:%d:%s:%d' % (self.plan_revision,
             self.memory.current['observation_id'], len(self.memory.actions))
         self.event('tool_call', source='registry', tool=call.get('tool'), args=call.get('args'))
         value = super().execute(call, decision)
         self.event('tool_result', source='registry', result=value)
         return value
-
-    def _start_cruise(self, turn_deg, distance_m, max_atomic_steps):
-        """One model-selected finite segment; NEVER select another endpoint here."""
-        return self._navigate_relative(turn_deg, distance_m, max_atomic_steps)
-
-    def _resume_cruise(self, waypoint_id, max_atomic_steps):
-        """Convert a previously selected local waypoint into a cruise intent."""
-        attempt=getattr(self.memory,'active_attempt',None) or {}
-        if (self.active_waypoint_id==waypoint_id
-                and attempt.get('unknown_motion_seen')):
-            return dict(status='REQUIRES_ATTENTION',
-                reason='cannot_cruise_on_unregistered_translation',
-                suggestion='select_a_new_local_route_from_current_rgbd')
-        return self._navigate_local(waypoint_id, max_atomic_steps)
-
-    def _cruise_continuable(self, result, executed_since=None):
-        """No hidden routing: only a live, still-pending agent-chosen waypoint.
-
-        UNKNOWN motion, any physical interruption or a task change immediately
-        returns control to the NavigationAgent. A completed segment is finite.
-        """
-        attempt=getattr(self.memory,'active_attempt',None) or {}
-        if not (result and result.get('status')=='PARTIAL'
-                and result.get('reason')=='tool_action_limit'
-                and not result.get('interrupted_status')
-                and self.active_waypoint_id
-                and self.motion_controller.target is not None
-                and not attempt.get('unknown_motion_seen')
-                and not self.done):
-            return False
-        if executed_since is not None:
-            segment=self.memory.actions[executed_since:]
-            if not segment:
-                return False
-            # A net-zero steering cycle is not meaningful cruise progress:
-            # never continue rotating in place without model reassessment.
-            if all(a['action'] in ('TURN_LEFT','TURN_RIGHT') for a in segment):
-                net=sum(1 if a['action']=='TURN_LEFT' else -1 for a in segment)
-                if net==0:
-                    return False
-        return True
 
     def dispatch(self, call, decision):
         if self.done:
@@ -240,105 +195,31 @@ class AgentRuntime(ToolExecutor):
             return dict(status='STALE_TARGET', reason='task_revision_mismatch')
         if decision.get('observation_id') != self.memory.current['observation_id']:
             return dict(status='STALE_OBSERVATION', reason='decision_observation_mismatch')
-        kind=call['tool']
-        auto=(kind=='navigate_local' and decision.get('actor')=='cruise_executor')
-        requested_cruise=kind in ('start_cruise','resume_cruise')
-        if auto:
-            intent=getattr(self,'cruise_intent',None)
-            if (self.navigation_mode!='CRUISE' or not intent
-                    or intent['waypoint_id']!=call['args'].get('waypoint_id')
-                    or intent['plan_revision']!=self.plan_revision
-                    or intent['subgoal_id']!=self.active_subgoal_id
-                    or not (1<=call['args'].get('max_atomic_steps',0)
-                            <=intent['max_atomic_steps'])):
-                return dict(status='STALE_TARGET',reason='cruise_authorization_invalid')
-        elif self.navigation_mode=='CRUISE':
-            return dict(status='STALE_TARGET',reason='cruise_requires_authorized_continuation')
-        if self.registry[kind]['permission'] == 'NAVIGATION':
+        if self.registry[call['tool']]['permission'] == 'NAVIGATION':
             decided = next((o for o in self.memory.observations
                 if o['observation_id'] == decision['observation_id']), None)
             self.refresh()
             if not decided or decided['pose'] != self.motion_controller.pose():
                 return dict(status='STALE_TARGET', reason='decision_pose_changed')
-            # A sensor refresh does not confer clearance: each forward step
-            # performs a new body/depth/people/terrain check.
-        moving=kind in ('navigate_local','navigate_relative','navigate_to_pixel',
-                        'start_cruise','resume_cruise')
-        if requested_cruise or auto:
-            self.set_navigation_mode('CRUISE',
-                'agent_authorized_finite_route' if requested_cruise else 'cruise_batch_continuation',
-                waypoint_id=call['args'].get('waypoint_id'))
-        elif moving:
-            # One-batch movement is a tool execution during OBSERVE strategy,
-            # not a third persistent mode. Runtime phase=EXECUTE describes
-            # motor activity without changing the Agent's planning state.
-            self.event('bounded_motion_batch_started',source='runtime',
-                waypoint_id=call['args'].get('waypoint_id'))
-        self.phase='EXECUTE'
-        self._authorized_action=True
-        before=len(self.memory.actions)
-        result=None
+            # New sensor data invalidates geometry authorization, not the semantic
+            # intent. Motion tools independently recheck current Depth per step.
+        moving = call['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
+        if moving:
+            self.set_navigation_mode('MOVE', 'model_selected_motion',
+                                     waypoint_id=call['args'].get('waypoint_id'))
+        self.phase = 'EXECUTE'
+        self._authorized_action = True
+        result = None
         try:
-            result=super().dispatch(call,decision)
+            result = super().dispatch(call, decision)
             return result
         finally:
-            self._authorized_action=False
+            self._authorized_action = False
             if not self.done:
-                self.phase='NAVIGATING'
-            if requested_cruise or auto:
-                continuable=self._cruise_continuable(result,executed_since=before)
-                pose_now=self.motion_controller.pose()
-                segment=self.memory.actions[before:]
-                previous=(self.cruise_intent or {}).get('checkpoint_poses',[])
-                if continuable and auto and segment and all(
-                        row['action'] in ('TURN_LEFT','TURN_RIGHT')
-                        for row in segment):
-                    # Detect a physical orientation cycle across *batches*
-                    # at the same measured stance, rather than a scan count.
-                    # Keep the model in charge of choosing a new route.
-                    for seen in previous:
-                        same_position=(math.hypot(
-                            seen['x']-pose_now['x'],
-                            seen['z']-pose_now['z']) < .08)
-                        same_heading=abs((seen['heading']-pose_now['heading']
-                            +math.pi)%(2*math.pi)-math.pi) < math.radians(
-                                self.camera.turn_angle/2)
-                        same_epoch=(seen.get('motion_epoch',0)==pose_now.get(
-                            'motion_epoch',0))
-                        if same_position and same_heading and same_epoch:
-                            continuable=False
-                            self.event('cruise_steering_cycle_detected',
-                                source='runtime',
-                                waypoint_id=self.active_waypoint_id,
-                                evidence='repeated_same_stance_and_heading_without_forward')
-                            break
-                if continuable:
-                    if requested_cruise:
-                        self.cruise_intent=dict(
-                            waypoint_id=self.active_waypoint_id,
-                            max_atomic_steps=call['args']['max_atomic_steps'],
-                            plan_revision=self.plan_revision,
-                            subgoal_id=self.active_subgoal_id,
-                            decision_reason=str(decision.get('decision_reason',''))[:300],
-                            authorized_at_step=before,
-                            initial_tool=kind,
-                            checkpoint_poses=[dict(pose_now)])
-                    elif self.cruise_intent is not None:
-                        self.cruise_intent.setdefault('checkpoint_poses',[]).append(
-                            dict(pose_now))
-                    self.event('cruise_progress',source='runtime',
-                        waypoint_id=self.active_waypoint_id,
-                        executed_batch_actions=len(self.memory.actions)-before,
-                        pending=True)
-                else:
-                    self.cruise_intent=None
-                    self.set_navigation_mode('OBSERVE','cruise_reached_or_interrupted',
-                        status=(result or {}).get('status','INTERRUPTED'),
-                        interruption_reason=(result or {}).get('reason'))
-            elif moving:
-                self.cruise_intent=None
-                self.event('bounded_motion_batch_finished',source='runtime',
-                    status=(result or {}).get('status','INTERRUPTED'))
+                self.phase = 'NAVIGATING'
+            if moving:
+                self.set_navigation_mode('OBSERVE', 'motion_batch_finished',
+                                         status=result.get('status') if result else 'INTERRUPTED')
 
     def finalize_result(self, value, before, observation_before, call):
         moves = [a['result'].get('rgbd_motion') for a in self.memory.actions[before:]
@@ -394,37 +275,51 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS', reason='choose_a_turn_or_look_runtime_already_refreshes')
         # Reserve room for the requested pitch action so LOOK is never silently dropped.
         if len(actions) > self.config['tool_max_actions']:
-            return dict(status='INVALID_ARGUMENTS', reason='requested_turn_look_exceeds_current_tool_atomic_action_limit',
-                        requested_atomic_actions=len(actions),
-                        allowed_atomic_actions=self.config['tool_max_actions'])
+            return dict(status='INVALID_ARGUMENTS', reason='choose_1_to_3_actions_then_reconsider_new_views')
         final_pitch=self.pitch_deg+(self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle if look=='down' else 0)
         if abs(final_pitch)>60:
             return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
         if len(actions)>self.config['max_steps']-1-len(self.memory.actions):
             return dict(status='BUDGET_LIMIT',reason='whole_batch_exceeds_remaining_action_budget')
-        # A static EXPLORE camera sweep is redundant when ALL its absolute
-        # RGB-D viewpoints are already documented at this stance. This applies
-        # even without a previous BLOCKED route: batch4-2/3 spent dozens of
-        # TURN actions re-visiting old views. A model-directed dynamic recheck
-        # or an intentional physical turn is still allowed without a timer.
-        # Movement to a previously observed heading should instead use
-        # navigate_relative/navigate_local with new per-step depth validation.
-        # Observation is a model-owned physical choice. Previously this
-        # duplicate-view prediction cancelled valid TURN/LOOK requests before
-        # execution, even when the agent intended to reacquire a dynamic view
-        # or deliberately face a known direction. Preserve the warning as
-        # telemetry, but do not substitute a runtime strategy decision.
-        planned=predicted_scan(self.memory,self.motion_controller.pose(),
-            relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
-        already_seen=bool(planned['already_visited']) and not planned['new_view_expected']
-        observation_advisory=dict(
-            previously_observed_static_sector=already_seen,
-            prior_observation_ids=[v['observation_id']
-                for v in planned['already_visited']],
-            new_static_view_expected=planned['new_view_expected'],
-            decision_authority='navigation_agent',
-            may_still_be_useful_for_orientation_or_dynamic_recheck=True,
-            prior_views_are_not_live_human_or_collision_evidence=True)
+        # Post-collision, do not spend action budget replaying the same
+        # absolute camera orientations with no new RGB-D evidence.
+        if last_block(self.memory,self.motion_controller.pose()):
+            planned=predicted_scan(self.memory,self.motion_controller.pose(),
+                relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
+            if not planned['new_view_expected']:
+                exploration=local_coverage(self.memory,self.motion_controller.pose(),
+                    self.camera.turn_angle,round(360/self.camera.turn_angle))
+                # Turning to a formerly executable heading can still be useful
+                # for a NEW live revalidation, even if that view is old.
+                endpoint=planned['already_visited'][-1] if planned['already_visited'] else {}
+                previous=covered_view(self.memory.observations,self.motion_controller.pose(),
+                    self.memory.task.current_subgoal_index,
+                    endpoint.get('heading_deg',0),endpoint.get('pitch_deg',0),
+                    self.camera.turn_angle)
+                previously_free=any(d.get('angle_degrees')==0 and
+                    d.get('motion_state')=='EXECUTABLE'
+                    for d in (previous or {}).get('directions',[]))
+                dynamic_allowed=False
+                if purpose=='dynamic_recheck':
+                    # Explicit model-directed dynamic rechecks should not be
+                    # blocked by a fixed wall-clock timer.
+                    target_heading=endpoint.get('heading_deg',0)
+                    target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
+                    now=time.monotonic()
+                    previous_checks=[
+                        e for e in self.memory.events if e.get('event')=='dynamic_sector_rechecked'
+                        and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
+                        and abs(e.get('target_pitch_deg',0)-target_pitch)<1
+                        and same_stance(e.get('pose'),self.motion_controller.pose())]
+                    dynamic_allowed=True
+                if not previously_free and not dynamic_allowed and purpose != 'intentional_recheck':
+                    return dict(status='NO_NEW_INFORMATION',
+                        reason='repeated_camera_sector_after_measured_block',
+                        no_new_information_reason='all_requested_absolute_views_already_recorded',
+                        scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
+                            v['observation_id'] for v in planned['already_visited']]),
+                        exploration=exploration,
+                        suggestion='choose_unseen_absolute_heading_or_wait_for_dynamic_change_or_route_review')
         frames = []
         novel, revisited = [], []
         for action in actions:
@@ -451,12 +346,10 @@ class AgentRuntime(ToolExecutor):
             source=self.source(), scan=dict(frames=frames,
             new_information_ids=novel, revisited_view_ids=revisited),
             exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None,
-            observation_advisory=observation_advisory)
+                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None)
 
     def _inspect_geometry(self):
         self.refresh()
-        source=self.source()
         geometry=self.geometry()
         check=geometry.assess_step()
         directions=[]
@@ -469,22 +362,15 @@ class AgentRuntime(ToolExecutor):
         value=dict(status=check['state'],reason=check['reason'],
             geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
                 terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
-            alternatives=alternatives,
-            inspection_reference=dict(
-                observation_id=source['observation_id'],
-                heading_deg=round(math.degrees(source['pose']['heading']),2),
-                pitch_deg=self.pitch_deg,
-                motion_epoch=source['pose'].get('motion_epoch',0),
-                checked_relative_bearings_deg=[d['bearing_deg'] for d in directions],
-                scope='this_observation_and_heading_not_post_turn_clearance',
-                live_forward_probe_still_required=True),
-            information_options=['get_waypoint_candidates','turn_and_observe'])
+            alternatives=alternatives,information_options=['get_waypoint_candidates','turn_and_observe'])
         value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
             self.camera.turn_angle,round(360/self.camera.turn_angle))
-        value['navigation_note'] = (
-            'Measured candidates are informational: NavigationAgent chooses '
-            'a route; a TURN or changed RGB-D frame requires NEW live forward '
-            'safety checks before physical motion.')
+        if alternatives:
+            value['suggestion']='request_waypoints_then_choose_a_measured_clear_approach_direction'
+        elif value['exploration']['unexplored_directions']:
+            value['suggestion']='inspect_a_new_absolute_heading_from_exploration; do_not_revisit_blocked_views'
+        else:
+            value['suggestion']='local_coverage_exhausted_request_route_or_semantic_review'
         return value
 
     def _compare_views(self, observation_ids, question):
@@ -796,16 +682,6 @@ class AgentRuntime(ToolExecutor):
     def _query_task_memory(self, **args):
         return dict(status='OK', memory=self.memory.query_task_memory(**args))
 
-    def _update_progress(self, claim, evidence, observation_ids):
-        # Semantic completion is decided by a separate read-only model that
-        # retrieves historical evidence. Runtime authenticates references and
-        # remains the only writer of VERIFIED milestones.
-        self.refresh()
-        result = self.verification_agent.verify(claim, evidence, observation_ids)
-        if result['completion_confirmed']:
-            self._cancel_local_navigation('verified_language_goal_completed')
-        return result
-
     def _verify_subgoal(self, claim, evidence, observation_ids):
         value = self._update_progress(claim, evidence, observation_ids)
         if value['completion_confirmed']:
@@ -829,15 +705,10 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='already_active_subgoal')
         if subgoal_index in task.completed_subgoals:
             return dict(status='INVALID_ARGUMENTS',reason='cannot_revisit_verified_subgoal')
-        # Navigation strategy is model-owned: it may pursue ANY unverified
-        # milestone when environmental evidence warrants a detour, even if
-        # earlier goals have not been visited yet. This does not change the
-        # original milestone list, ordering requirements or the final proof:
-        # request_finish(success) still requires independent VERIFIED evidence
-        # for every original goal.
         prior_seen = {int(k) for k in task.subgoal_start_steps}
-        bypassed=[i for i in range(subgoal_index)
-            if i not in task.completed_subgoals and i not in prior_seen]
+        if subgoal_index not in prior_seen and subgoal_index != previous + 1:
+            return dict(status='INVALID_ARGUMENTS',
+                        reason='cannot_skip_unvisited_ordered_milestones')
         known = {o['observation_id'] for o in self.memory.observations}
         if not set(observation_ids) <= known:
             return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
@@ -849,9 +720,7 @@ class AgentRuntime(ToolExecutor):
         task.provisional_transitions.append(dict(from_subgoal=previous,
             to_subgoal=subgoal_index,reason=reason,observation_ids=observation_ids,
             step=len(self.memory.actions),verified=False,
-            evidence_scope='navigation_strategy_not_completion_certification',
-            bypassed_unverified_subgoal_indices=bypassed,
-            original_task_order_unchanged=True))
+            evidence_scope='navigation_strategy_not_completion_certification'))
         task.current_subgoal_index = subgoal_index
         task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
         task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
@@ -868,8 +737,6 @@ class AgentRuntime(ToolExecutor):
         return dict(status='OK',current_subgoal_index=subgoal_index,
             previous_subgoal_index=previous,
             selection='PROVISIONAL_UNVERIFIED',
-            bypassed_unverified_subgoal_indices=bypassed,
-            original_task_order_unchanged=True,
             unverified_subgoals=[i for i in range(count)
                 if i not in task.completed_subgoals],
             reason=reason,
@@ -895,9 +762,6 @@ class AgentRuntime(ToolExecutor):
 
     def terminate(self, reason, model_requested=False):
         self.assert_owner()
-        self.cruise_intent=None
-        if self.navigation_mode=='CRUISE':
-            self.set_navigation_mode('OBSERVE','episode_terminated')
         self.finish_reason = ('goal_completed' if reason == 'goal_completed' else
             'action_budget_exhausted' if reason == 'action_budget_exhausted' else
             'navigation_no_new_evidence' if reason == 'navigation_no_new_evidence' else

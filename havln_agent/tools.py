@@ -13,6 +13,7 @@ from .memory_service import MemoryService
 from .local_motion_controller import LocalMotionController
 from .observation import array_hash, frame_info
 from .perception import Geometry, Observation
+from .progress import verify_progress, current_visual_evidence
 from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
 from .motion import estimate_translation, landing_support
@@ -145,9 +146,7 @@ class ToolExecutor:
         self.client.trace_context=dict(decision_id=self.current_decision_id,subgoal_id=self.active_subgoal_id,tool_call_id=self.tool_id)
         context=dict(context_version=self.context_version,observation_id=observation_before,
             pose=self.motion_controller.pose(),requested_at=started,subgoal_id=self.active_subgoal_id,
-            actor=(decision or {}).get('actor','navigation_agent'),
-            decision_id=self.current_decision_id,
-            decision_reason=str((decision or {}).get('decision_reason',''))[:300])
+            actor=(decision or {}).get('actor','navigation_agent'),decision_id=self.current_decision_id)
         try:
             self.registry=self.make_registry()
             if set(call)!={'tool','args'} or call['tool'] not in self.registry:
@@ -174,10 +173,9 @@ class ToolExecutor:
         if call.get('tool')=='turn_and_observe':
             requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='observe_for_goal':
-            # The VLM may suggest a new view but cannot execute additional
-            # LOOK actions. Only the agent's requested sweep and initial LOOK
-            # consume atomic actions in this observation tool.
-            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+int(args.get('look','none')!='none')
+            # Upper bound: sweep TURN actions, optional initial LOOK and at
+            # most one VLM-guided pitch refinement, all counted atomically.
+            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+1+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
@@ -185,33 +183,6 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
-        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel','start_cruise','resume_cruise'):
-            turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
-            forwards=actions.count('MOVE_FORWARD')
-            pending=bool(result.get('pending_target') is not None or
-                         (result.get('remaining_path') or {}).get('status')=='IN_PROGRESS')
-            result['movement_intent_feedback']=dict(
-                turn_actions_executed=turns,forward_actions_executed=forwards,
-                only_turns_executed=turns>0 and forwards==0,
-                desired_forward_motion_not_yet_attempted=(
-                    turns>0 and forwards==0 and pending),
-                waypoint_pending=pending,
-                waypoint_id=result.get('waypoint_id') or (
-                    result.get('remaining_path') or {}).get('path_id'),
-                was_forward_attempted=forwards>0,
-                registered_translation_known=(
-                    'all_registered' if forwards and all(
-                        row.get('evidence_state')=='motion_verified'
-                        for row in self.memory.actions[before:]
-                        if row['action']=='MOVE_FORWARD') else
-                    'some_unregistered' if forwards else 'no_forward_attempt'),
-                interpretation=(
-                    'turn_only_not_a_failed_forward_attempt'
-                    if turns>0 and forwards==0 else
-                    'forward_action_requires_sensor_receipts'
-                    if forwards else 'no_atomic_motion'),
-                note='Return to the agent without canceling a valid pending route; '
-                     'every subsequent MOVE still requires fresh sensor checks')
         result=self.finalize_result(result,before,observation_before,call)
         try:
             Draft7Validator(tool_result_schema()).validate(result)
@@ -321,21 +292,14 @@ class ToolExecutor:
             alert_reason=(
                 'no_observed_frame_change_after_forward'
                 if motion['status'] != 'ESTIMATED' and not changed_rgb and not changed_depth
-                else 'no_resolvable_forward_translation'
-                if motion['status'] != 'ESTIMATED'
-                and motion.get('reason') == 'no_resolvable_forward_translation'
                 else 'motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
                     measurement=motion, displacement_verified=False)
                 feedback['motion_alert'] = alert
-                if alert_reason in ('no_observed_frame_change_after_forward',
-                                    'no_resolvable_forward_translation'):
-                    alert['movement_evidence'] = (
-                        'identical_rgb_and_depth_hashes_after_executed_forward'
-                        if alert_reason == 'no_observed_frame_change_after_forward'
-                        else 'well_distributed_static_rgbd_matches_near_zero_displacement')
+                if alert_reason == 'no_observed_frame_change_after_forward':
+                    alert['movement_evidence'] = 'identical_rgb_and_depth_hashes_after_executed_forward'
                     alert['collision_proven'] = False
                     self.memory.event('no_observed_forward_motion',
                         action_step=alert['action_step'],
@@ -425,7 +389,6 @@ class ToolExecutor:
         geometry, diagnostics = self.geometry(), []
         source = self.source()
         groundings, excluded = [], []
-        tentative_bearings = []
         for original in self.memory.groundings:
             if original['source']['subgoal'] != self.memory.task.current_subgoal_index or not (
                 target is None or target == original['grounding_id'] or
@@ -437,30 +400,6 @@ class ToolExecutor:
             estimate = self.estimate_goal(original)
             if estimate['requires_reconfirmation']:
                 excluded.append(dict(grounding_id=original['grounding_id'], reasons=estimate['reasons']))
-                # A current *partial* visual box can suggest which direction a
-                # safe geometric candidate faces, even if its depth spread is
-                # too large to yield metric distance or a confirmed target.
-                # Never carry this hint across a changed view, pose or epoch.
-                position = original.get('position') or {}
-                semantic = original.get('semantic') or {}
-                linked = original['source']
-                if (position.get('status') == 'PARTIAL'
-                    and isinstance(position.get('bearing_degrees'),(int,float))
-                    and math.isfinite(position['bearing_degrees'])
-                    and semantic.get('confidence') in ('medium','high')
-                    and original.get('semantic_presence') == 'VISIBLE'
-                    and linked.get('rgb_hash') == source['rgb_hash']
-                    and linked.get('pose') == source['pose']
-                    and linked.get('subgoal') == self.memory.task.current_subgoal_index):
-                    tentative_bearings.append(dict(
-                        grounding_id=original['grounding_id'],
-                        target=original['target'][:120],
-                        bearing_deg=round(position['bearing_degrees'],2),
-                        source_observation_id=linked['observation_id'],
-                        confidence=semantic['confidence'],
-                        evidence='same_view_partial_visual_direction_only',
-                        metric_distance_valid=False,
-                        target_identity_verified=False))
             else:
                 groundings.append(dict(original, current_estimate=estimate))
         angles = None
@@ -537,17 +476,6 @@ class ToolExecutor:
                 execution_requirements=['reconfirm_uncertain_goal', 'current_rgbd', 'live_human_safety'],
             )
             self.paths[identifier] = path
-            # These hints deliberately do NOT populate goal_association and
-            # do NOT upgrade an exploration path to a GOAL_WAYPOINT.
-            # They inform model choice only; live depth remains authoritative.
-            path['tentative_goal_bearings'] = sorted([
-                dict(hint, angular_error_deg=round(
-                    abs((math.degrees(candidate['angle'])-hint['bearing_deg']+180)%360-180),2))
-                for hint in tentative_bearings
-                if abs((math.degrees(candidate['angle'])-hint['bearing_deg']+180)%360-180)
-                    <= self.camera.turn_angle
-            ],key=lambda h:h['angular_error_deg'])[:2]
-            self.paths[identifier]['tentative_goal_bearings'] = path['tentative_goal_bearings']
             paths.append(copy.deepcopy(path))
         return dict(
             status='OK' if paths else 'NEEDS_VIEW',
@@ -642,10 +570,9 @@ class ToolExecutor:
             # Preserve the original selected endpoint; a checked fragment never replaces it.
             self.motion_controller.target = tuple(checked['original_target'])
             self.memory.active_attempt['original_endpoint_xz_m'] = list(self.motion_controller.target)
-            # The selected local route has a finite quantized forward
-            # horizon (including direct model-specified distances). A failed
-            # registration must never create an unlimited blind-movement
-            # budget or fake measured distance.
+            # A waypoint is at most two atomic forward steps in the current
+            # generator. A failed visual registration must never create an
+            # unlimited blind-movement budget or fake measured distance.
             self.memory.active_attempt['forward_action_horizon'] = max(1, math.ceil(
                 (path['distance'] - 1e-6) / self.camera.forward_step))
             self.memory.active_attempt['forward_actions'] = 0
@@ -697,21 +624,6 @@ class ToolExecutor:
                 if attempt:
                     attempt['forward_actions'] += 1
                 alert = result['feedback'].get('motion_alert') or {}
-                # The model owns the route, but continuous CRUISE must hand
-                # control back on freshly measured semantic-direction conflict.
-                # Do not keep moving uphill on an explicitly downward goal
-                # merely because the local depth ahead remains clear.
-                # Ordinary single-batch navigation still reports the mismatch
-                # to the model as evidence without an automatic route policy.
-                if (getattr(self,'navigation_mode','OBSERVE')=='CRUISE'
-                        and result['feedback'].get('semantic_direction_mismatch')):
-                    return self._navigation_feedback(path,checked,
-                        'REQUIRES_ATTENTION',
-                        'cruise_motion_direction_disagrees_with_semantic_goal',
-                        observed_vertical_motion=(result['feedback'].get(
-                            'rgbd_motion') or {}).get('vertical_motion'),
-                        semantic_direction_mismatch=True,
-                        requires_model_route_decision=True)
                 if not result['feedback']['translation_supported']:
                     # Register uncertainty BEFORE any early interruption.
                     # _navigation_feedback reads unknown_motion_seen to avoid
@@ -721,16 +633,6 @@ class ToolExecutor:
                         attempt['unknown_observation_ids'].append(
                             self.memory.current['observation_id'])
                     self.executable_segment = None
-                    if getattr(self,'navigation_mode','OBSERVE')=='CRUISE':
-                        # A long-lived cruise must NOT spend the remainder of
-                        # its atomic batch moving relative to an unregistered
-                        # pose. Yield immediately to model-owned reanchoring.
-                        return self._navigation_feedback(path,checked,
-                            'REQUIRES_ATTENTION',
-                            'cruise_unregistered_forward_requires_model_reanchor',
-                            unknown_motion_observation_id=self.memory.current['observation_id'],
-                            old_endpoint_valid=False,
-                            requires_model_route_decision=True)
                 if alert and alert.get('reason') != 'motion_estimate_unknown':
                     # A byte-identical post-step camera view cannot justify a
                     # blind second forward. Yield to NavigationAgent instead
@@ -762,36 +664,65 @@ class ToolExecutor:
         return self._navigation_feedback(path, checked, 'TARGET_REACHED' if reached else 'PARTIAL',
                                          'original_endpoint_reached' if reached else 'tool_action_limit')
 
-    def _finish_navigation(self, outcome, evidence):
-        """Only current authenticated semantic completion can authorize STOP.
+    def _update_progress(self, claim, evidence, observation_ids):
+        self.refresh()
+        result = verify_progress(
+            self.memory,
+            claim,
+            evidence,
+            observation_ids,
+            self.config['max_scene_age_seconds'],
+            self.config['waypoint_distance'],
+            self.config.get('max_static_landmark_age_seconds', 300),
+            self.config.get('max_human_age_seconds', 2),
+        )
+        if result['completion_confirmed']:
+            self._cancel_local_navigation('verified_language_goal_completed')
+        return result
 
-        VerificationAgent already evaluated the task's meaning. The final
-        gate must not silently repeat old stair/door/nearby landmark rules.
-        """
+    def _finish_navigation(self, outcome, evidence):
+        if outcome == 'success' and set(self.memory.task.completed_subgoals) != set(range(len(
+            self.memory.task.subgoals
+        ))):
+            return dict(status='INSUFFICIENT_EVIDENCE', reason='ordered_subgoals_not_verified')
         if outcome == 'success':
-            task=self.memory.task
-            if not task.subgoals or set(task.completed_subgoals)!=set(
-                    range(len(task.subgoals))):
-                return dict(status='INSUFFICIENT_EVIDENCE',
-                            reason='ordered_subgoals_not_verified')
-            last=len(task.subgoals)-1
-            certificate=next((row.get('verification') or {}
-                for row in reversed(task.completion_evidence)
-                if row.get('subgoal')==last),{})
-            details=certificate.get('evidence_details') or {}
-            if not (certificate.get('completion_confirmed')
-                    and details.get('verifier')=='model_led_sensor_guarded'
-                    and details.get('terminal_observation_id')):
-                return dict(status='INSUFFICIENT_EVIDENCE',
-                            reason='final_model_semantic_arrival_not_verified')
-            # No extra VLM pass or distance rule: the verifier has already
-            # inspected the terminal frame. A fresh read checks that the
-            # previously certified view and position still apply.
             self.refresh()
-            if details['terminal_observation_id']!=(
-                    self.memory.current or {}).get('observation_id'):
-                return dict(status='INSUFFICIENT_EVIDENCE',
-                            reason='final_certified_view_changed_reverify')
-        self.terminate('goal_completed' if outcome=='success' else 'model_aborted',
-                       model_requested=True)
-        return dict(status='FINISHED',outcome=outcome,evidence=evidence)
+            scene = self.memory.scene_memory
+            if (
+                not self.memory.task.subgoals
+                or not scene
+                or not current_visual_evidence(scene['source'], self.memory, time.monotonic(),
+                                               self.config['max_scene_age_seconds'])
+                or not scene['scene']['final_target_visible']
+                or not scene['scene']['final_target_evidence'].strip()
+            ):
+                return dict(status='INSUFFICIENT_EVIDENCE', reason='fresh_final_arrival_evidence_required')
+            final = self.memory.task.subgoals[-1]
+            wanted = task_tokens(final['landmark'] + ' ' + final['target'])
+            nearby = [
+                g
+                for g in self.memory.groundings
+                if g['status'] == 'LOCALIZED'
+                and current_visual_evidence(g['source'], self.memory, time.monotonic(),
+                                            self.config['max_scene_age_seconds'])
+                and wanted & task_tokens(g['target'])
+                and g['position']['status'] == 'LOCALIZED'
+                and not self.estimate_goal(g)['requires_reconfirmation']
+                and math.hypot(g['position']['x_right'], g['position']['z_forward']) <= self.config['waypoint_distance']
+            ]
+            proof = self.memory.task.completion_evidence[-1].get('verification', {}) \
+                if self.memory.task.completion_evidence else {}
+            landing_arrival = (
+                proof.get('completion_confirmed')
+                and 'multi_frame_level_landing_transition' in proof.get('supported', [])
+                and not any(a['action'] == 'MOVE_FORWARD' for a in self.memory.actions
+                            if a['step'] >= self.memory.task.subgoal_started)
+                and any(g.get('landing_geometry', {}).get('status') == 'SUPPORTED'
+                        and current_visual_evidence(g['source'], self.memory, time.monotonic(),
+                                                    self.config['max_scene_age_seconds'])
+                        and wanted & task_tokens(g['target']) for g in self.memory.groundings)
+            )
+            if not nearby and not landing_arrival:
+                return dict(status='INSUFFICIENT_EVIDENCE', reason='fresh_nearby_final_grounding_required')
+        self.terminate('goal_completed' if outcome == 'success' else 'model_aborted', model_requested=True)
+        return dict(status='FINISHED', outcome=outcome, evidence=evidence)

@@ -140,59 +140,6 @@ class ExplorationTests(unittest.TestCase):
         self.assertIsNone(covered_view(self.mem.observations,
             pose(105,epoch=1),0,105,-60,15))
 
-    def test_turn_only_motion_receipt_explains_pending_continuation(self):
-        movement=dict(
-            tool='navigate_relative',status='PARTIAL',
-            executed_motion=['TURN_LEFT'],requested_actions=1,executed_actions=1,
-            waypoint_id='direct_0099',
-            movement_intent_feedback=dict(
-                turn_actions_executed=1,forward_actions_executed=0,
-                only_turns_executed=True,desired_forward_motion_not_yet_attempted=True,
-                waypoint_pending=True,waypoint_id='direct_0099',
-                was_forward_attempted=False,
-                registered_translation_known='no_forward_attempt',
-                interpretation='turn_only_not_a_failed_forward_attempt'),
-            remaining_path=dict(path_id='direct_0099',
-                status='IN_PROGRESS',completed=False,endpoint_estimate_valid=True))
-        summary=tool_summary(movement)
-        self.assertTrue(summary['movement_intent_feedback']['only_turns_executed'])
-        self.assertEqual(summary['movement_intent_feedback']['forward_actions_executed'],0)
-        self.assertEqual(summary['remaining_path']['path_id'],'direct_0099')
-
-    def test_registered_translation_differs_from_camera_rotation(self):
-        self.mem.actions=[
-            dict(step=0,action='TURN_LEFT'),
-            dict(step=1,action='LOOK_UP'),
-            dict(step=2,action='MOVE_FORWARD',evidence_state='motion_verified',
-                 pose=pose(120),result=dict(rgbd_motion=dict(status='UNKNOWN'))),
-            dict(step=3,action='LOOK_DOWN'),
-            dict(step=4,action='TURN_RIGHT')]
-        self.mem.tool_ledger=[
-            dict(call=dict(tool='navigate_relative'),
-                 result=dict(tool='navigate_relative',status='PARTIAL',
-                     executed_motion=['TURN_LEFT'],
-                     movement_intent_feedback=dict(
-                         only_turns_executed=True,waypoint_pending=True,
-                         forward_actions_executed=0))),
-            dict(call=dict(tool='turn_and_observe'),
-                 result=dict(status='NO_NEW_INFORMATION',
-                     executed_motion=['LOOK_DOWN','TURN_RIGHT']))]
-        runtime=SimpleNamespace(memory=self.mem,
-            motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
-            active_subgoal=dict(action='descend',target='stairs'),
-            active_waypoint_id=None,pitch_deg=-60,
-            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
-            config=dict(max_steps=150,max_scene_age_seconds=300),paths={})
-        with patch('havln_agent.contexts.turn_evidence',
-                   return_value=dict(requirement=None)):
-            result=navigation_context(runtime)
-        fb=result['decision_feedback']
-        self.assertEqual(fb['registered_forward_count'],1)
-        self.assertEqual(fb['recorded_forward_count'],1)
-        self.assertEqual(fb['actions_since_registered_forward'],2)
-        self.assertTrue(fb['turn_only_move_does_not_count_as_forward'])
-        self.assertTrue(fb['incomplete_movement_may_resume_same_waypoint'])
-
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
             motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
@@ -223,82 +170,13 @@ class ExplorationTests(unittest.TestCase):
         runtime.source=Mock(return_value=dict(observation_id='source'))
         return runtime
 
-    def test_revisited_camera_heading_is_advisory_not_action_veto(self):
+    def test_runtime_suppresses_revisited_turn_without_spending_actions(self):
         runtime=self.agent()
-        runtime.memory.current=dict(
-            observation_id='unchanged',new_visual_information=False)
-        result=runtime._turn_and_observe(-30,'none',purpose='explore')
-        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(runtime._step.call_count,2)
-        self.assertTrue(result['observation_advisory']['previously_observed_static_sector'])
-        self.assertEqual(result['observation_advisory']['decision_authority'],
-                         'navigation_agent')
-
-    def test_repeat_scan_without_recent_block_is_still_model_controlled(self):
-        self.mem.tool_ledger=[]
-        runtime=self.agent()
-        runtime.memory.current=dict(
-            observation_id='unchanged',new_visual_information=False)
         result=runtime._turn_and_observe(-30,'none')
         self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(runtime._step.call_count,2)
-        self.assertTrue(result['observation_advisory']['previously_observed_static_sector'])
-
-    def test_in_place_turn_is_no_longer_dependent_on_purpose_exemption(self):
-        self.mem.tool_ledger=[]
-        self.mem.task.subgoals[0]['action']='Turn right in place'
-        runtime=self.agent()
-        runtime.memory.current=dict(
-            observation_id='unchanged',new_visual_information=False)
-        result=runtime._turn_and_observe(-30,'none',purpose='explore')
-        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(runtime._step.call_count,2)
-
-    def test_intentional_turn_to_previously_seen_direction_still_allowed(self):
-        self.mem.tool_ledger=[]
-        runtime=self.agent()
-        seen=iter([dict(observation_id='known1',new_visual_information=False),
-                   dict(observation_id='known2',new_visual_information=False)])
-        def turn(action):
-            runtime.memory.current=next(seen)
-            return dict(status='EXECUTED')
-        runtime._step=Mock(side_effect=turn)
-        value=runtime._turn_and_observe(-30,'none',purpose='intentional_recheck')
-        self.assertEqual(value['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(runtime._step.call_count,2)
-
-    def test_navigation_context_retains_verification_and_target_identity(self):
-        self.mem.actions.extend([dict(action='TURN_RIGHT',step=i) for i in range(6,15)])
-        for idx in range(4):
-            self.mem.tool_ledger.append(dict(call_id='no_view_'+str(idx),
-                call=dict(tool='turn_and_observe'),
-                result=dict(status='NO_NEW_INFORMATION',
-                            reason='scan_completed_without_new_static_view')))
-        self.mem.events=[dict(event='progress_checked',step=12,
-            result=dict(status='INSUFFICIENT_EVIDENCE',subgoal=0,
-                missing=['Need a current view of landing'],
-                evidence_details=dict(model_verdict='IN_PROGRESS',
-                    next_evidence_action='Move to a distinct landing view')))]
-        self.mem.groundings=[dict(status='PARTIAL',
-            target='Original distant stair entry',
-            source=dict(subgoal=0,observation_id='obs_0090'),
-            semantic=dict(evidence='Visible steps and handrail',
-                confidence='medium',uncertainty='far edge obscured'),
-            position=dict(status='PARTIAL',bearing_degrees=16))]
-        runtime=SimpleNamespace(memory=self.mem,
-            motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
-            active_subgoal=dict(action='descend',target='stairs'),
-            active_waypoint_id=None,pitch_deg=-60,
-            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
-            config=dict(max_steps=150,max_scene_age_seconds=300),paths={})
-        with patch('havln_agent.contexts.turn_evidence',return_value=dict(requirement=None)):
-            output=navigation_context(runtime)
-        self.assertTrue(output['exploration_feedback']['scan_dominated_without_translation'])
-        self.assertEqual(output['verification_followup']['model_verdict'],'IN_PROGRESS')
-        self.assertEqual(output['target_identity_review']['historical_observation_ids'],
-                         ['obs_0090'])
-        self.assertEqual(output['target_identity_review']['consistency'],
-                         'UNVERIFIED_UNLESS_CROSS_VIEW_IDENTITY_EVIDENCE')
+        self.assertEqual(result['executed_actions'] if 'executed_actions' in result else 0,0)
+        self.assertFalse(result['exploration']['motion_authorized'])
+        runtime._step.assert_not_called()
 
     def test_runtime_allows_unseen_heading_after_obstacle(self):
         runtime=self.agent()
@@ -313,38 +191,16 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(runtime._step.call_count,2)
         self.assertEqual(result['scan']['new_information_ids'],['new1','new2'])
 
-    def test_active_observation_allows_model_reinspection_of_covered_views(self):
+    def test_active_observation_reuses_coverage_without_vlm_or_turn(self):
         runtime=self.agent()
-        runtime.visual_perception=SimpleNamespace(search_view=Mock(return_value=dict(
-            target_visible=False,target_type='none',confidence='low',
-            box=None,evidence='',uncertainty='',suggested_next_view='continue')))
-        runtime.observation=object()
-        runtime.memory.current=dict(self.mem.observations[-1])
-        runtime.memory.current['revisited_view_ids']=[]
-        runtime.memory.event=lambda kind,**kw:runtime.memory.events.append(
-            dict(event=kind,**kw))
-        runtime.event=Mock()
-        n=[0]
-        def move(action):
-            n[0]+=1
-            runtime.memory.current=dict(
-                observation_id='recheck_'+str(n[0]),
-                new_visual_information=False,revisited_view_ids=[],
-                rgb_hash='rgb'+str(n[0]),depth_hash='depth'+str(n[0]))
-            return dict(status='EXECUTED')
-        runtime._step=Mock(side_effect=move)
-        runtime.source=lambda:dict(observation_id=runtime.memory.current['observation_id'],
-                                   subgoal=0,captured_at=n[0],
-                                   pose=runtime.motion_controller.pose())
-        runtime.geometry=lambda:SimpleNamespace(
-            assess_step=lambda:dict(state='BLOCKED',reason='occupied_next_step',
-                depth=dict(clearance=.12),support=dict(status='UNKNOWN')))
+        runtime.visual_perception=SimpleNamespace(search_view=Mock())
+        runtime.memory.current=self.mem.observations[-1]
         result=ObservationController(runtime).scan('find stairs',
             ['stair_entry'],'right',30,checkpoint_degrees=30)
-        self.assertEqual(result['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
-        self.assertEqual(runtime._step.call_count,2)
-        self.assertTrue(result['observation_advisory']['already_covered_since_block'])
-        runtime.visual_perception.search_view.assert_called_once()
+        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(result['outcome'],'REPEATED_SEARCH_NO_NEW_VIEW')
+        runtime.visual_perception.search_view.assert_not_called()
+        runtime._step.assert_not_called()
 
     def test_explicit_dynamic_recheck_is_model_directed_not_throttled(self):
         runtime=self.agent()

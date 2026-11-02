@@ -11,13 +11,11 @@ on:
       - "tests/test_smoke50012_feedback.py"
       - "tests/test_terminal_progress.py"
       - "tests/test_smoke50013_waypoints.py"
-      - "tests/test_partial_target_waypoint_hints.py"
       - "tests/test_active_observation.py"
       - "tests/test_odometry_gap_navigation.py"
       - "tests/test_motion_consensus.py"
       - "tests/test_compact_diagnostics.py"
       - "tests/test_observe_move_cycle.py"
-      - "tests/test_cruise_scheduler.py"
       - "tests/test_auto_archive.py"
       - "tests/test_batch_evaluation.py"
       - "tests/test_batch_worker_failure_diagnostics.py"
@@ -27,11 +25,14 @@ on:
       - "tests/test_model_driven_direction.py"
       - "tests/test_model_control_runtime.py"
       - "tests/test_direct_motion_execution.py"
+      - "tests/test_progress_alternative_evidence.py"
+      - "tests/test_progress_full_transition.py"
+      - "tests/test_cross_epoch_landmark_proof.py"
       - "tests/test_cross_epoch_evidence_and_task_control.py"
+      - "tests/test_turn_verification_without_visual_scene.py"
       - "tests/test_direct_navigation_failure_memory.py"
       - "havln_agent/export.py"
       - "tests/test_local_exploration.py"
-      - "tests/test_model_verification.py"
       - "tests/test_scheduler_liveness.py"
       - "tests/test_runtime_config_liveness.py"
       - "scripts/pack_agent_diagnostics.py"
@@ -56,8 +57,6 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_runtime_perf.py' -v
       - name: Run navigation loop regression
         run: python -m unittest discover -s tests -p 'test_navigation_loop.py' -v
-      - name: Check partial visual bearings remain hints not goal-proof
-        run: python -m unittest discover -s tests -p 'test_partial_target_waypoint_hints.py' -v
       - name: Check role prompt contracts
         run: python -m unittest discover -s tests -p 'test_role_prompt_contracts.py' -v
       - name: Check measured collision and repeated-view regressions
@@ -74,10 +73,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
       - name: Check compact diagnostic packaging
         run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
-      - name: Check OBSERVE/CRUISE state transitions and memory
+      - name: Check OBSERVE/MOVE cycle and memory
         run: python -m unittest discover -s tests -p 'test_observe_move_cycle.py' -v
-      - name: Check no-LLM finite cruise scheduler continuation
-        run: python -m unittest discover -s tests -p 'test_cruise_scheduler.py' -v
       - name: Check automatic diagnostic archive
         run: python -m unittest discover -s tests -p 'test_auto_archive.py' -v
       - name: Check multi-process batch scheduling and terminal-log toggle
@@ -96,14 +93,20 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_model_control_runtime.py' -v
       - name: Check end-to-end direct route, pause and resume execution
         run: python -m unittest discover -s tests -p 'test_direct_motion_execution.py' -v
+      - name: Check independent stair transition proof alternatives
+        run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
+      - name: Check full registered-motion transition with partial entry
+        run: python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
+      - name: Check landmark crossing cannot leak pose across epochs
+        run: python -m unittest discover -s tests -p 'test_cross_epoch_landmark_proof.py' -v
       - name: Check cross-epoch motion proof and model-owned semantic progression
         run: python -m unittest discover -s tests -p 'test_cross_epoch_evidence_and_task_control.py' -v
+      - name: Check turn-only evidence and final arrival safeguards
+        run: python -m unittest discover -s tests -p 'test_turn_verification_without_visual_scene.py' -v
       - name: Check direct navigation failures persist in task memory
         run: python -m unittest discover -s tests -p 'test_direct_navigation_failure_memory.py' -v
       - name: Check post-block local exploration and scan deduplication
         run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
-      - name: Check model-led historical evidence verification and sensor proof guards
-        run: python -m unittest discover -s tests -p 'test_model_verification.py' -v
       - name: Check evidence-state liveness and bounded API decisions
         run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
       - name: Check shipped agent.yaml liveness configuration compatibility
