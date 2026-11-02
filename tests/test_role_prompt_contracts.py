@@ -71,7 +71,7 @@ class PromptContractTests(unittest.TestCase):
                     dict(observation_id='o7',target='distant doorway')]))):
             NavigationAgent(runtime).decide()
         self.assertIn('the sole strategic decision-maker',client.system)
-        self.assertIn('don't cycle identical waypoint resumes',client.system)
+        self.assertIn("don't cycle identical waypoint resumes",client.system)
         self.assertIn('No hard quotas and no mandatory movement',client.system)
         self.assertNotIn('you MUST move forward',client.system)
         self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
