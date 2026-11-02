@@ -90,6 +90,17 @@ def tool_summary(result):
     if 'memory' in result:value['memory']=result['memory']
     if 'waypoint_id' in result:value['waypoint_id']=result['waypoint_id']
     if 'requested_motion' in result:value['requested_motion']=result['requested_motion']
+    if 'movement_intent_feedback' in result:
+        value['movement_intent_feedback']=fields(result['movement_intent_feedback'],(
+            'turn_actions_executed','forward_actions_executed',
+            'only_turns_executed','desired_forward_motion_not_yet_attempted',
+            'waypoint_pending','waypoint_id','was_forward_attempted',
+            'registered_translation_known','interpretation'))
+    if 'remaining_path' in result:
+        value['remaining_path']=fields(result['remaining_path'],(
+            'path_id','status','completed','endpoint_estimate_valid'))
+    if result.get('pending_target') is not None:
+        value['pending_route_exists']=True
     if 'pixel_target' in result:value['pixel_target']=result['pixel_target']
     if 'geometry' in result:
         value['geometry']=fields(result['geometry']['front'],('motion_state','depth_state','clearance',
@@ -203,6 +214,57 @@ def navigation_context(runtime):
         or (v.get('result') or {}).get('reason') in (
             'scan_completed_without_new_static_view','repeated_camera_sector_after_measured_block',
             'REPEATED_SEARCH_NO_NEW_VIEW'))]
+    # Explicit sensor-registered progress versus mere camera rotation.
+    # No hidden simulator pose or guessed displacement is used here.
+    accepted_forward=[a for a in memory.actions
+        if a.get('action')=='MOVE_FORWARD'
+        and a.get('evidence_state')=='motion_verified']
+    last_registered=max((a.get('step',i)
+        for i,a in enumerate(memory.actions)
+        if a.get('action')=='MOVE_FORWARD'
+        and a.get('evidence_state')=='motion_verified'), default=-1)
+    movement_calls=[entry for entry in reversed(memory.tool_ledger)
+        if (entry.get('call') or {}).get('tool') in
+            ('navigate_local','navigate_relative','navigate_to_pixel')]
+    latest_movement=(movement_calls[0]['result'] if movement_calls else {})
+    latest_movement_summary=tool_summary(latest_movement) if latest_movement else None
+    movement_outcome=(latest_movement.get('movement_intent_feedback') or {})
+    last_execution=memory.tool_ledger[-1]['result'] if memory.tool_ledger else {}
+    last_visual=(last_execution.get('scan') or {})
+    recent_scene_calls=[x for x in recent_tools
+        if (x.get('call') or {}).get('tool') in (
+            'analyze_scene','compare_views','ground_landmark','observe_for_goal',
+            'turn_and_observe')]
+    visual_low_gain=sum(
+        (x.get('result') or {}).get('status')=='NO_NEW_INFORMATION'
+        or (x.get('result') or {}).get('reason')=='scan_completed_without_new_static_view'
+        or (x.get('result') or {}).get('outcome')=='REPEATED_SEARCH_NO_NEW_VIEW'
+        for x in recent_scene_calls)
+    decision_feedback=dict(
+        evidence_basis='public_RGBD_and_authenticated_action_receipts_not_gt_pose',
+        action_count=len(memory.actions),
+        last_registered_forward_step=last_registered,
+        actions_since_registered_forward=len(memory.actions)-last_registered-1,
+        registered_forward_count=len(accepted_forward),
+        recorded_forward_count=sum(a.get('action')=='MOVE_FORWARD'
+            for a in memory.actions),
+        recent_static_visual_calls=len(recent_scene_calls),
+        recent_static_low_gain_calls=visual_low_gain,
+        last_action=(memory.actions[-1]['action'] if memory.actions else None),
+        latest_tool_status=last_execution.get('status'),
+        latest_tool_motion=fields(last_execution,(
+            'executed_motion','requested_actions','executed_actions')),
+        new_static_view_ids_last_scan=last_visual.get('new_information_ids',[])[-4:],
+        latest_movement=fields(latest_movement_summary or {},(
+            'tool','status','reason','executed_motion','movement_intent_feedback',
+            'remaining_path','waypoint_id','interrupted_status')),
+        turn_only_move_does_not_count_as_forward=bool(
+            movement_outcome.get('only_turns_executed')),
+        incomplete_movement_may_resume_same_waypoint=bool(
+            movement_outcome.get('waypoint_pending')),
+        decision_authority='navigation_agent',
+        note='camera rotations and novel images are not physical translation; '
+             'no forced action, hard scan quota or automatic goal switch')
     exploration_feedback=dict(
         actions_since_last_forward=len(memory.actions)-last_forward-1,
         last_forward_step=last_forward,
@@ -324,6 +386,7 @@ def navigation_context(runtime):
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
+        decision_feedback=decision_feedback,
         exploration_feedback=exploration_feedback,
         verification_followup=verification_state,
         target_identity_review=target_identity_review,
