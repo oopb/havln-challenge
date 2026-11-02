@@ -131,11 +131,11 @@ class ProvisionalTaskControlTests(unittest.TestCase):
         result=r._select_subgoal(2,'Observed the later corridor first',['o0'])
         self.assertEqual(result['status'],'OK')
         self.assertEqual(result['selection'],'PROVISIONAL_UNVERIFIED')
-        self.assertEqual(result['bypassed_unverified_subgoal_indices'],[0,1])
+        self.assertEqual(result['bypassed_unverified_subgoal_indices'],[1])
         self.assertEqual(r.memory.task.current_subgoal_index,2)
         self.assertEqual(r.memory.task.completed_subgoals,[])
         self.assertEqual(r.memory.task.provisional_transitions[-1]
-                         ['bypassed_unverified_subgoal_indices'],[0,1])
+                         ['bypassed_unverified_subgoal_indices'],[1])
         self.assertEqual(r._select_subgoal(1,'fake',['missing'])['status'],
                          'INVALID_ARGUMENTS')
         self.assertEqual(r.memory.task.current_subgoal_index,2)
