@@ -145,7 +145,9 @@ class ToolExecutor:
         self.client.trace_context=dict(decision_id=self.current_decision_id,subgoal_id=self.active_subgoal_id,tool_call_id=self.tool_id)
         context=dict(context_version=self.context_version,observation_id=observation_before,
             pose=self.motion_controller.pose(),requested_at=started,subgoal_id=self.active_subgoal_id,
-            actor=(decision or {}).get('actor','navigation_agent'),decision_id=self.current_decision_id)
+            actor=(decision or {}).get('actor','navigation_agent'),
+            decision_id=self.current_decision_id,
+            decision_reason=str((decision or {}).get('decision_reason',''))[:300])
         try:
             self.registry=self.make_registry()
             if set(call)!={'tool','args'} or call['tool'] not in self.registry:
