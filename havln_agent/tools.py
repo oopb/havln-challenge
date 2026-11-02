@@ -145,7 +145,9 @@ class ToolExecutor:
         self.client.trace_context=dict(decision_id=self.current_decision_id,subgoal_id=self.active_subgoal_id,tool_call_id=self.tool_id)
         context=dict(context_version=self.context_version,observation_id=observation_before,
             pose=self.motion_controller.pose(),requested_at=started,subgoal_id=self.active_subgoal_id,
-            actor=(decision or {}).get('actor','navigation_agent'),decision_id=self.current_decision_id)
+            actor=(decision or {}).get('actor','navigation_agent'),
+            decision_id=self.current_decision_id,
+            decision_reason=str((decision or {}).get('decision_reason',''))[:300])
         try:
             self.registry=self.make_registry()
             if set(call)!={'tool','args'} or call['tool'] not in self.registry:
@@ -172,9 +174,10 @@ class ToolExecutor:
         if call.get('tool')=='turn_and_observe':
             requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='observe_for_goal':
-            # Upper bound: sweep TURN actions, optional initial LOOK and at
-            # most one VLM-guided pitch refinement, all counted atomically.
-            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+1+int(args.get('look','none')!='none')
+            # The VLM may suggest a new view but cannot execute additional
+            # LOOK actions. Only the agent's requested sweep and initial LOOK
+            # consume atomic actions in this observation tool.
+            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
@@ -182,6 +185,33 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
+        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel'):
+            turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
+            forwards=actions.count('MOVE_FORWARD')
+            pending=bool(result.get('pending_target') is not None or
+                         (result.get('remaining_path') or {}).get('status')=='IN_PROGRESS')
+            result['movement_intent_feedback']=dict(
+                turn_actions_executed=turns,forward_actions_executed=forwards,
+                only_turns_executed=turns>0 and forwards==0,
+                desired_forward_motion_not_yet_attempted=(
+                    turns>0 and forwards==0 and pending),
+                waypoint_pending=pending,
+                waypoint_id=result.get('waypoint_id') or (
+                    result.get('remaining_path') or {}).get('path_id'),
+                was_forward_attempted=forwards>0,
+                registered_translation_known=(
+                    'all_registered' if forwards and all(
+                        row.get('evidence_state')=='motion_verified'
+                        for row in self.memory.actions[before:]
+                        if row['action']=='MOVE_FORWARD') else
+                    'some_unregistered' if forwards else 'no_forward_attempt'),
+                interpretation=(
+                    'turn_only_not_a_failed_forward_attempt'
+                    if turns>0 and forwards==0 else
+                    'forward_action_requires_sensor_receipts'
+                    if forwards else 'no_atomic_motion'),
+                note='Return to the agent without canceling a valid pending route; '
+                     'every subsequent MOVE still requires fresh sensor checks')
         result=self.finalize_result(result,before,observation_before,call)
         try:
             Draft7Validator(tool_result_schema()).validate(result)
@@ -612,9 +642,10 @@ class ToolExecutor:
             # Preserve the original selected endpoint; a checked fragment never replaces it.
             self.motion_controller.target = tuple(checked['original_target'])
             self.memory.active_attempt['original_endpoint_xz_m'] = list(self.motion_controller.target)
-            # A waypoint is at most two atomic forward steps in the current
-            # generator. A failed visual registration must never create an
-            # unlimited blind-movement budget or fake measured distance.
+            # The selected local route has a finite quantized forward
+            # horizon (including direct model-specified distances). A failed
+            # registration must never create an unlimited blind-movement
+            # budget or fake measured distance.
             self.memory.active_attempt['forward_action_horizon'] = max(1, math.ceil(
                 (path['distance'] - 1e-6) / self.camera.forward_step))
             self.memory.active_attempt['forward_actions'] = 0

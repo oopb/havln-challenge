@@ -166,7 +166,9 @@ class ObservationController:
                     if p.get('new_static_information')],
                 revisited_view_ids=[p['observation_id'] for p in record['checkpoints']
                     if not p.get('new_static_information')],
-                next_step='navigation_agent_review_evidence_not_motion_authorization',
+                next_step='navigation_agent_decides_observation_or_movement',
+                suggested_next_view=(record['checkpoints'][-1]['visual'].get(
+                    'suggested_next_view') if record['checkpoints'] else None),
                 paused_waypoint_preserved=bool(r.motion_controller.target is not None),
                 usable_for_live_safety=False,
                 observation_advisory=copy.deepcopy(observation_advisory))
@@ -239,7 +241,9 @@ class ObservationController:
                 return finish('INTERRUPTED', status='PARTIAL', reason=failed.get('reason'))
 
         turn_action = 'TURN_LEFT' if direction == 'left' else 'TURN_RIGHT'
-        refined = False
+        # The visual model reports what it can see. It does not own
+        # subsequent pitch/scan decisions; a suggested next view is sent
+        # back to NavigationAgent for a separate deliberate choice.
         for index in range(1,total+1):
             failed = step(turn_action)
             if failed:
@@ -253,24 +257,9 @@ class ObservationController:
                     reason=type(exc).__name__+'_at_visual_checkpoint')
             if found:
                 return finish('TARGET_CANDIDATE_FOUND',candidate=found)
-            # At most one VLM-guided pitch refinement in the entire subtask.
-            last = record['checkpoints'][-1]['visual']
-            suggestion = last.get('suggested_next_view')
-            if not refined and suggestion in ('look_up','look_down'):
-                next_pitch = r.pitch_deg + (
-                    r.camera.tilt_angle if suggestion == 'look_up' else -r.camera.tilt_angle)
-                if abs(next_pitch) <= 60:
-                    refined = True
-                    failed = step('LOOK_UP' if suggestion == 'look_up' else 'LOOK_DOWN')
-                    if failed:
-                        return finish('INTERRUPTED',status='PARTIAL',reason=failed.get('reason'))
-                    try:
-                        found = checkpoint()
-                    except (APIError, BudgetExceeded) as exc:
-                        return finish('VISION_UNAVAILABLE',status='PARTIAL',
-                            reason=type(exc).__name__+'_at_visual_checkpoint')
-                    if found:
-                        return finish('TARGET_CANDIDATE_FOUND',candidate=found)
+            # A VLM suggestion is advisory, not permission for a hidden
+            # additional LOOK action. NavigationAgent sees the checkpoint
+            # suggestion in the returned record.
             if r.done:
                 return finish('INTERRUPTED',status='PARTIAL',reason='environment_done')
         return finish('SEARCH_REGION_COVERED_NO_MATCH')

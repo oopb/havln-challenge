@@ -276,7 +276,9 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS', reason='choose_a_turn_or_look_runtime_already_refreshes')
         # Reserve room for the requested pitch action so LOOK is never silently dropped.
         if len(actions) > self.config['tool_max_actions']:
-            return dict(status='INVALID_ARGUMENTS', reason='choose_1_to_3_actions_then_reconsider_new_views')
+            return dict(status='INVALID_ARGUMENTS', reason='requested_turn_look_exceeds_current_tool_atomic_action_limit',
+                        requested_atomic_actions=len(actions),
+                        allowed_atomic_actions=self.config['tool_max_actions'])
         final_pitch=self.pitch_deg+(self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle if look=='down' else 0)
         if abs(final_pitch)>60:
             return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
@@ -336,6 +338,7 @@ class AgentRuntime(ToolExecutor):
 
     def _inspect_geometry(self):
         self.refresh()
+        source=self.source()
         geometry=self.geometry()
         check=geometry.assess_step()
         directions=[]
@@ -348,15 +351,22 @@ class AgentRuntime(ToolExecutor):
         value=dict(status=check['state'],reason=check['reason'],
             geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
                 terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
-            alternatives=alternatives,information_options=['get_waypoint_candidates','turn_and_observe'])
+            alternatives=alternatives,
+            inspection_reference=dict(
+                observation_id=source['observation_id'],
+                heading_deg=round(math.degrees(source['pose']['heading']),2),
+                pitch_deg=self.pitch_deg,
+                motion_epoch=source['pose'].get('motion_epoch',0),
+                checked_relative_bearings_deg=[d['bearing_deg'] for d in directions],
+                scope='this_observation_and_heading_not_post_turn_clearance',
+                live_forward_probe_still_required=True),
+            information_options=['get_waypoint_candidates','turn_and_observe'])
         value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
             self.camera.turn_angle,round(360/self.camera.turn_angle))
-        if alternatives:
-            value['suggestion']='request_waypoints_then_choose_a_measured_clear_approach_direction'
-        elif value['exploration']['unexplored_directions']:
-            value['suggestion']='inspect_a_new_absolute_heading_from_exploration; do_not_revisit_blocked_views'
-        else:
-            value['suggestion']='local_coverage_exhausted_request_route_or_semantic_review'
+        value['navigation_note'] = (
+            'Measured candidates are informational: NavigationAgent chooses '
+            'a route; a TURN or changed RGB-D frame requires NEW live forward '
+            'safety checks before physical motion.')
         return value
 
     def _compare_views(self, observation_ids, question):

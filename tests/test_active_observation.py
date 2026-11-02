@@ -136,16 +136,17 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertEqual(result['best_candidate'],None)
         self.assertEqual(len(r.memory.observation_searches),1)
 
-    def test_vlm_requests_at_most_one_pitch_refinement(self):
+    def test_vlm_pitch_suggestion_is_advisory_not_a_hidden_action(self):
         r=FakeRuntime([visual(suggestion='look_down'),
-                       visual(suggestion='look_down'),visual()])
+                       visual(suggestion='look_down')])
         result=ObservationController(r).scan(
             'Find stairs',['stairs_down'],'left',60,checkpoint_degrees=30)
         self.assertEqual(result['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
-        self.assertEqual(r.step_calls.count('LOOK_DOWN'),1)
+        self.assertEqual(r.step_calls.count('LOOK_DOWN'),0)
         self.assertEqual(r.step_calls.count('TURN_LEFT'),4)
-        self.assertEqual(len(r.visual_perception.calls),3)
-        self.assertEqual(r.pitch_deg,-30.)
+        self.assertEqual(len(r.visual_perception.calls),2)
+        self.assertEqual(result['suggested_next_view'],'look_down')
+        self.assertEqual(r.pitch_deg,0.)
 
     def test_active_navigation_can_pause_to_scan_without_cancelling_path(self):
         r=FakeRuntime([visual(found=True)])

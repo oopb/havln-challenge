@@ -61,17 +61,30 @@ class TaskPlanner:
 
         plan = client.complete(
             'task_planner', 'task_initial_plan',
-            'Decompose the instruction into ordered semantic navigation milestones. '
-            'Separate in-place turns from translation, retain location qualifiers '
-            'and human activities in the correct milestone. Cite every numbered '
-            'source sentence, including descriptive and contextual sentences. '
-            'An omitted source sentence prevents using the first plan. '
-            'Return semantic goals ONLY, not success predicates, '
-            'atomic actions, coordinates or waypoints. The read-only verifier '
-            'decides semantic completion from actual cited evidence. Do not invent '
-            'a predicate checklist or treat the plan as completion proof. '
-            'Distinguish approaching a target from passing or entering it. '
-            'Return exactly one JSON object.',
+            'You are TaskPlanner. Produce a minimal ordered set of semantic '
+            'navigation milestones matching the COMPLETE original instruction. '
+            'Preserve all required physical actions, destinations, source '
+            'sentence references, sequence, and genuine location qualifiers. '
+            'Separate mandatory task transitions from descriptive reference '
+            'landmarks and incidental environmental context. A clause like '
+            '"turn left, where a chandelier is above a green table" requires '
+            'the leftward orientation at the intended place; it does NOT '
+            'automatically require a second physical action or perfect '
+            'simultaneous visual confirmation of both objects before any '
+            'further navigation. Keep the identifying objects in landmark '
+            'or target if they genuinely distinguish the location. '
+            'Likewise, "turn at the bottom of the stairs" requires being '
+            'at the bottom; do not discard the spatial prerequisite. '
+            'Create separate milestones ONLY for distinct instructed actions '
+            'or independently meaningful location transitions, not every '
+            'named object or visual phrase. Distinguish approach, turn, '
+            'enter, cross, descend, exit and reach. Cite every numbered '
+            'source sentence including descriptive context, retain original '
+            'text, do not fabricate atomic actions, coordinates, waypoints, '
+            'fixed success predicates or extra destinations. '
+            'NavigationAgent chooses safe actions under partial evidence; '
+            'VerificationAgent independently certifies completion. '
+            'Return exactly one schema-valid plan JSON object.',
             dict(instruction=instruction, source_sentences=[
                 dict(id=i+1, text=s) for i,s in enumerate(sentences)],
                 **({'format_feedback':format_feedback} if format_feedback else {})),
@@ -91,10 +104,15 @@ class TaskPlanner:
             'verified history. intent=continue keeps the same milestone; '
             'intent=revise improves its short semantic description, without '
             'changing the ordered instruction or inventing a new action. '
-            'Keep location qualifiers such as "at the bottom" and distinguish '
-            'approach from crossing. Do not generate success criteria or a '
-            'task-specific verification predicate: independent model-led '
-            'verification owns completion. Return exactly one JSON object.',
+            'Keep required location qualifiers such as "at the bottom" and '
+            'distinguish approach from actual crossing. Treat incidental '
+            'objects and uncertain landmark identities as context, not as '
+            'invented mandatory visual confirmation subtasks. Do not generate '
+            'success criteria or a task-specific verification predicate: '
+            'independent model-led verification owns completion. '
+            'Do not tell the navigator it must remain stationary until all '
+            'visual descriptions have been confirmed. '
+            'Return exactly one JSON object.',
             dict(planner_context(r), current_goal=dict(
                 action=goal['action'], target=goal['target'],
                 landmark=goal['landmark'], source_text=goal.get('source_text')),
