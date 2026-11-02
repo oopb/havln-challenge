@@ -189,17 +189,14 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(result['scan']['new_information_ids'],[])
         runtime._step.assert_not_called()
 
-    def test_in_place_language_turn_is_not_mistaken_for_wasteful_exploration(self):
+    def test_in_place_goal_does_not_exempt_unproductive_explore_sweep(self):
         self.mem.tool_ledger=[]
         self.mem.task.subgoals[0]['action']='Turn right in place'
         runtime=self.agent()
-        seen=iter([dict(observation_id='r1',new_visual_information=False),
-                   dict(observation_id='r2',new_visual_information=False)])
-        runtime._step=Mock(side_effect=lambda action: (
-            setattr(runtime.memory,'current',next(seen)) or dict(status='EXECUTED')))
-        result=runtime._turn_and_observe(-30,'none')
+        result=runtime._turn_and_observe(-30,'none',purpose='explore')
         self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(runtime._step.call_count,2)
+        self.assertEqual(result['scan']['new_information_ids'],[])
+        runtime._step.assert_not_called()
 
     def test_intentional_turn_to_previously_seen_direction_still_allowed(self):
         self.mem.tool_ledger=[]
