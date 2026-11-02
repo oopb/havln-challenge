@@ -26,6 +26,7 @@ VERIFICATION_SCHEMA = object_schema(dict(
     cited_observation_ids=dict(type='array', maxItems=24, uniqueItems=True, items=TEXT),
     cited_action_steps=dict(type='array', maxItems=48, uniqueItems=True,
                             items=dict(type='integer', minimum=0)),
+    terminal_observation_id=TEXT,
     reasoning=dict(type='string', maxLength=2000),
     next_evidence_action=dict(type='string', maxLength=300),
 ))
@@ -61,7 +62,9 @@ PROMPT = (
     'IN_PROGRESS or UNKNOWN and identify a concrete missing observation. '
     'You MUST finish with operation=verdict, include source observation IDs '
     'and accepted atomic action step IDs directly supporting the proposed '
-    'COMPLETED claim. Never cite an action from a different milestone as its '
+    'COMPLETED claim. For COMPLETED, set terminal_observation_id to the '
+    'real captured frame showing the result of the cited motion; for incomplete '
+    'verdicts use the string none. Never cite an action from a different milestone as its '
     'sole proof. If you report COMPLETED, give a concise evidence-based '
     'explanation of how the goal was achieved. Output one schema-valid JSON '
     'object on every round. Use the fields required by the schema even when '
@@ -154,7 +157,8 @@ class VerificationAgent:
             current_observation_id=(memory.current or {}).get('observation_id'),
             current_motion_epoch=((memory.current or {}).get('pose') or {}).get('motion_epoch'),
             history_actions=actions,  # complete indexed motion record, never a recent-only window
-            registered_history=registered_motion_history(memory),
+            registered_history={k: v for k,v in registered_motion_history(memory).items()
+                                if k != 'rows'},
             observation_index=[dict(observation_id=o['observation_id'],
                 step=o.get('step'),subgoal=o.get('subgoal'),
                 motion_epoch=(o.get('pose') or {}).get('motion_epoch'))
@@ -222,6 +226,10 @@ class VerificationAgent:
         for ident in image_ids:
             if ident not in observed:
                 errors.append('unknown_cited_observation_id:'+ident)
+        terminal=decision['terminal_observation_id']
+        endpoint=observed.get(terminal)
+        if terminal not in image_ids or endpoint is None:
+            errors.append('terminal_observation_not_cited_or_missing')
         registered=[]
         for step in steps:
             action=by_step.get(step)
@@ -245,13 +253,17 @@ class VerificationAgent:
         # Never bridge an UNKNOWN movement or motion epoch reset to claim one
         # continuous displacement chain. Non-metric TURN citations may coexist.
         moves=[a for a in registered if a['action']=='MOVE_FORWARD']
+        if endpoint and registered and endpoint['step'] < max(a['step'] for a in registered):
+            errors.append('terminal_observation_precedes_claimed_actions')
         if moves:
             epochs={(a.get('pose') or {}).get('motion_epoch',0) for a in moves}
+            if endpoint and endpoint['pose'].get('motion_epoch',0) not in epochs:
+                errors.append('terminal_observation_outside_cited_motion_epoch')
             if len(epochs)>1:
                 errors.append('cross_epoch_displacement_chain')
             for action in memory.actions:
                 if (min(a['step'] for a in moves) < action['step']
-                        < max(a['step'] for a in moves)
+                        < (endpoint['step'] if endpoint else max(a['step'] for a in moves))
                         and action['action']=='MOVE_FORWARD'
                         and action.get('subgoal')==index
                         and not registered_action(action,observed)):
@@ -329,6 +341,7 @@ class VerificationAgent:
                 reasoning=decision['reasoning'],
                 cited_observation_ids=decision['cited_observation_ids'],
                 cited_action_steps=decision['cited_action_steps'],
+                terminal_observation_id=decision['terminal_observation_id'],
                 inspection_rounds=len(inspections),
                 next_evidence_action=decision['next_evidence_action'],
                 proof_guard_errors=guard,
