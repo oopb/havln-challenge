@@ -58,6 +58,12 @@ def registry(camera, max_actions, pitch_deg=0.):
                 max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
         'navigate_local': ('Execute or resume a waypoint for the agent-selected number of atomic actions up to the configured limit. Revalidate fresh RGB-D, terrain and people before every forward.',
             object_schema(dict(waypoint_id=text, max_atomic_steps=dict(type='integer', minimum=1, maximum=max_actions)))),
+        'start_cruise': ('Agent explicitly authorizes a finite local route (relative bearing and 0.25-3m). Execute up to max_atomic_steps now, then AUTOMATICALLY continue the SAME waypoint in bounded batches without new LLM/VLM requests while fresh per-step safety and registered motion remain valid. Return control to Agent when target reached, blocked, localization uncertain, budget exhausted, or route invalid. This never invents a new destination.',
+            object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
+                distance_m=dict(type='number',minimum=.25,maximum=3.0),
+                max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
+        'resume_cruise': ('Agent explicitly converts one existing still-valid waypoint into a finite persistent CRUISE intent. The executor only follows that SAME waypoint, rechecking live depth/people before each forward; it never creates a new route or requests extra visual observations.',
+            object_schema(dict(waypoint_id=text, max_atomic_steps=dict(type='integer',minimum=1,maximum=max_actions)))),
         'cancel_local_navigation': ('Cancel a pending local waypoint without changing the semantic task.', object_schema(dict(reason=text))),
         'recall_observation': ('Retrieve up to four short keyframe summaries by place, heading or landmark.',
             dict(object_schema(dict(place_id=text, heading_deg=dict(type='number'), landmark=text, top_k=top)), required=['place_id'])),
@@ -77,7 +83,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','start_cruise','resume_cruise','observe_for_goal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 
