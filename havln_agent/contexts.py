@@ -188,8 +188,8 @@ def navigation_context(runtime):
             interpretation='visual_location_hypothesis_not_motion_permission'))
     # Make repeated observations and silent forward starvation explicit to the
     # decision maker. This is evidence, NOT a fixed scan/movement policy.
-    last_forward=max((a['step'] for a in memory.actions
-        if a['action']=='MOVE_FORWARD'),default=-1)
+    last_forward=max((a.get('step', i) for i,a in enumerate(memory.actions)
+        if a.get('action')=='MOVE_FORWARD'),default=-1)
     recent_tools=list(memory.tool_ledger[-30:])
     unproductive=[v for v in recent_tools if (
         (v.get('result') or {}).get('status')=='NO_NEW_INFORMATION'
