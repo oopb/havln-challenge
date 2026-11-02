@@ -50,6 +50,37 @@ class TaskPlannerContractTests(unittest.TestCase):
         with self.assertRaises(APIError):
             TaskPlanner.parse(FakeClient(raw),'Descend the stairs. Turn right.')
 
+    def test_second_attempt_salvages_missing_context_without_dropping_instruction(self):
+        instruction=('Descend the staircase. A person is standing nearby. '
+                     'Then turn right at the bottom.')
+        raw=dict(subgoals=[
+            dict(action='Descend the staircase',landmark='stairs',target='bottom',
+                 source_sentence_ids=[1]),
+            dict(action='Turn right at the bottom',landmark='landing',
+                 target='right',source_sentence_ids=[3])],
+            final_target='landing',constraints=[])
+        plan=TaskPlanner.parse(FakeClient(raw),instruction,
+            format_feedback=dict(error='first_planning_attempt_missing_source_2'))
+        self.assertEqual(plan['source_coverage_repaired_ids'],[2])
+        self.assertEqual(set(i for g in plan['subgoals']
+            for i in g['source_sentence_ids']),{1,2,3})
+        self.assertIn('A person is standing nearby.',
+                      ' '.join(g['source_text'] for g in plan['subgoals']))
+        self.assertEqual(plan['subgoals'][0]['action'],'Descend the staircase')
+        self.assertEqual(plan['subgoals'][1]['action'],'Turn right at the bottom')
+
+    def test_first_attempt_missing_mapping_reports_exact_missing_clause(self):
+        instruction='Descend stairs. Turn right. Enter the foyer.'
+        raw=dict(subgoals=[
+            dict(action='Descend stairs',landmark='stairs',target='landing',
+                source_sentence_ids=[1]),
+            dict(action='Enter the foyer',landmark='foyer',target='foyer',
+                source_sentence_ids=[3])], final_target='foyer',constraints=[])
+        with self.assertRaises(APIError) as err:
+            TaskPlanner.parse(FakeClient(raw),instruction)
+        self.assertIn('missing_source_ids=[2]',str(err.exception))
+        self.assertIn('Turn right',str(err.exception))
+
     def test_duplicate_or_invalid_source_order_is_rejected(self):
         raw=dict(subgoals=[dict(action='Move',landmark='hallway',
             target='foyer',source_sentence_ids=[2,1])],
