@@ -122,6 +122,13 @@ def tool_summary(result):
         value['exploration']=result['exploration']
     if result.get('no_new_information_reason'):
         value['no_new_information_reason']=result['no_new_information_reason']
+    if isinstance(result.get('observation_advisory'),dict):
+        value['observation_advisory']=fields(result['observation_advisory'],(
+            'decision_authority','previously_observed_static_sector',
+            'new_static_view_expected','prior_observation_ids',
+            'already_covered_since_block','identical_recent_scan',
+            'previous_static_view_does_not_prove_current_dynamic_scene',
+            'may_still_be_useful_for_orientation_or_dynamic_recheck'))
     if isinstance(result.get('evidence_details'),dict):
         details=result['evidence_details']
         value['verification_guidance']=fields(details,('verifier','model_verdict',
@@ -228,9 +235,8 @@ def navigation_context(runtime):
     scan_dominated=(exploration_feedback['repeated_low_information_calls']>=3
         and exploration_feedback['actions_since_last_forward']>=6)
     exploration_feedback['scan_dominated_without_translation']=scan_dominated
-    exploration_feedback['decision_priority']=(
-        'evaluate_executable_local_displacement_or_a_distinct_trajectory'
-        if scan_dominated else 'normal_model_directed_navigation')
+    exploration_feedback['decision_authority']='navigation_agent'
+    exploration_feedback['scan_stagnation_is_advisory_not_an_action_gate']=True
     # Preserve multiple candidate identities across VLM calls: a later
     # single-frame grounding is a hypothesis, not a replacement for the
     # historically observed goal. The model can call compare_views on IDs.
@@ -306,7 +312,9 @@ def navigation_context(runtime):
             provisional_transitions=getattr(memory.task,'provisional_transitions',[])[-3:],
             unverified_subgoal_indices=[i for i in range(len(memory.task.subgoals))
                 if i not in getattr(memory.task,'completed_subgoals',[])],
-            select_subgoal_is_navigation_decision_not_verified_completion=True),
+            select_subgoal_is_navigation_decision_not_verified_completion=True,
+            may_select_any_unverified_subgoal_provisionally=True,
+            original_milestone_order_preserved_for_final_verification=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
         stair_replay=stair_replay_hint(memory),
@@ -413,6 +421,7 @@ def navigation_context(runtime):
         result['latest_observation_task']=dict(
             objective=recent_search['objective'],outcome=recent_search['outcome'],
             direction=recent_search['direction'],
+            observation_advisory=recent_search.get('observation_advisory'),
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
