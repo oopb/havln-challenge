@@ -289,27 +289,22 @@ class AgentRuntime(ToolExecutor):
         # or an intentional physical turn is still allowed without a timer.
         # Movement to a previously observed heading should instead use
         # navigate_relative/navigate_local with new per-step depth validation.
-        # A purposeful in-place task rotation must be made explicitly with
-        # purpose=intentional_recheck. Do not exempt *all* turns during an
-        # orientation milestone: batch4-3 spent 86 atomic actions revisiting
-        # the same headings while the verifier was asking for more context.
-        # Default explore scans are deduplicated for EVERY milestone.
-        if purpose=='explore':
-            planned=predicted_scan(self.memory,self.motion_controller.pose(),
-                relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
-            if not planned['new_view_expected']:
-                exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                    self.camera.turn_angle,round(360/self.camera.turn_angle))
-                blocked=bool(last_block(self.memory,self.motion_controller.pose()))
-                return dict(status='NO_NEW_INFORMATION',
-                    reason=('repeated_camera_sector_after_measured_block' if blocked
-                            else 'repeated_camera_sector_without_new_view'),
-                    no_new_information_reason='all_requested_absolute_views_already_recorded',
-                    scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
-                        v['observation_id'] for v in planned['already_visited']]),
-                    exploration=exploration,
-                    suggestion='choose_genuinely_new_view_or_execute_a_live_safe_short_route; '
-                               'use_intentional_recheck_or_dynamic_recheck_when_needed')
+        # Observation is a model-owned physical choice. Previously this
+        # duplicate-view prediction cancelled valid TURN/LOOK requests before
+        # execution, even when the agent intended to reacquire a dynamic view
+        # or deliberately face a known direction. Preserve the warning as
+        # telemetry, but do not substitute a runtime strategy decision.
+        planned=predicted_scan(self.memory,self.motion_controller.pose(),
+            relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
+        already_seen=bool(planned['already_visited']) and not planned['new_view_expected']
+        observation_advisory=dict(
+            previously_observed_static_sector=already_seen,
+            prior_observation_ids=[v['observation_id']
+                for v in planned['already_visited']],
+            new_static_view_expected=planned['new_view_expected'],
+            decision_authority='navigation_agent',
+            may_still_be_useful_for_orientation_or_dynamic_recheck=True,
+            prior_views_are_not_live_human_or_collision_evidence=True)
         frames = []
         novel, revisited = [], []
         for action in actions:
@@ -336,7 +331,8 @@ class AgentRuntime(ToolExecutor):
             source=self.source(), scan=dict(frames=frames,
             new_information_ids=novel, revisited_view_ids=revisited),
             exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None)
+                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None,
+            observation_advisory=observation_advisory)
 
     def _inspect_geometry(self):
         self.refresh()
