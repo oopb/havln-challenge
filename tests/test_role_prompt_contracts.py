@@ -41,11 +41,16 @@ class PromptContractTests(unittest.TestCase):
             "navigate_relative", "navigate_to_pixel", "max_atomic_steps=1",
             "PARTIAL", "NEEDS_VIEW", "REQUIRES_ATTENTION", "BLOCKED",
             "decision_feedback", "TARGET_REACHED", "live",
-            "Verify milestones", "Never request_finish(success)"):
+            "verify_subgoal", "Never request_finish(success)"):
             self.assertIn(phrase.lower(), client.system.lower(), phrase)
         self.assertIn('tool_action_limit',client.system)
-        self.assertIn('different pitch alone', ' '.join(client.system.lower().split()))
-        self.assertIn('same doorway',client.system)
+        self.assertIn('turn-only PARTIAL',client.system)
+        self.assertIn('unknown_depth_or_fov',client.system)
+        self.assertIn('ACTION-FIRST DECISION RULE',client.system)
+        self.assertIn('orientation.ever_completed',client.system)
+        self.assertIn('first_completed_step',client.system)
+        self.assertIn('A pending waypoint ID alone is not evidence',client.system)
+        self.assertIn('do NOT invent displacement',client.system)
         self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
         self.assertNotIn('MODE: OBSERVE',client.system)
         self.assertNotIn('LOOK_DOWN and assess/ground the entrance',client.system)
@@ -65,12 +70,47 @@ class PromptContractTests(unittest.TestCase):
                 target_identity_review=dict(candidates=[
                     dict(observation_id='o7',target='distant doorway')]))):
             NavigationAgent(runtime).decide()
-        self.assertIn('You own observation choices',client.system)
-        self.assertIn('do not just repeat',client.system)
-        self.assertIn('no forced action',str(client.context).lower() if
-                      'decision_feedback' in client.context else 'no forced action')
+        self.assertIn('the sole strategic decision-maker',client.system)
+        self.assertIn('don't cycle identical waypoint resumes',client.system)
+        self.assertIn('No hard quotas and no mandatory movement',client.system)
         self.assertNotIn('you MUST move forward',client.system)
         self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
+
+    def test_turn_completion_history_survives_later_camera_search(self):
+        from havln_agent.progress import turn_evidence
+        records=[]
+        for index,action in enumerate(['TURN_LEFT']*6+['TURN_RIGHT']*3):
+            records.append(dict(step=index,subgoal=0,action=action,
+                result=dict(visual_change=True)))
+        task=SimpleNamespace(current_subgoal_index=0,
+            subgoals=[dict(action='Turn left toward the open door')],
+            subgoal_started=0)
+        memory=SimpleNamespace(task=task,actions=records,
+            camera=SimpleNamespace(turn_angle=15.))
+        status=turn_evidence(memory)
+        self.assertFalse(status['completed'])
+        self.assertTrue(status['ever_completed'])
+        self.assertEqual(status['first_completed_step'],5)
+        self.assertEqual(status['remaining_deg'],45)
+        self.assertTrue(status[
+            'remaining_deg_is_current_heading_error_not_unexecuted_task'])
+        self.assertEqual(len(status['turn_steps']),9)
+        # Reversing the camera does not erase an earlier authenticated act.
+        memory.actions.extend(dict(step=9+i,subgoal=0,action='TURN_RIGHT',
+                result=dict(visual_change=True)) for i in range(3))
+        status=turn_evidence(memory)
+        self.assertTrue(status['ever_completed'])
+        self.assertEqual(status['first_completed_step'],5)
+        self.assertEqual(status['remaining_deg'],90)
+
+    def test_turn_history_not_inferred_without_public_view_change(self):
+        from havln_agent.progress import turn_evidence
+        task=SimpleNamespace(current_subgoal_index=0,
+            subgoals=[dict(action='Turn left')],subgoal_started=0)
+        mem=SimpleNamespace(task=task,camera=SimpleNamespace(turn_angle=15.),
+            actions=[dict(step=i,subgoal=0,action='TURN_LEFT',
+                          result=dict(visual_change=False)) for i in range(6)])
+        self.assertFalse(turn_evidence(mem)['ever_completed'])
 
     def test_task_review_only_updates_semantic_description(self):
         client=CapturingClient(dict(intent='continue',subgoal='Descend stairs'))
