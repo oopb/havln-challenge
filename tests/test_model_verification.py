@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from havln_agent.verification_agent import VerificationAgent
+from havln_agent.tools import ToolExecutor
 
 
 def obs(i, epoch=0):
@@ -165,6 +166,69 @@ class VerificationAgentTests(unittest.TestCase):
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertEqual(result['reason'],'verification_inspection_limit')
         self.assertFalse(result['completion_confirmed'])
+
+
+
+class FinalFinishEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def executor(certificates=None,verified=None,view='o1'):
+        certificates=certificates if certificates is not None else [dict(
+            subgoal=0,verification=dict(completion_confirmed=True,
+                evidence_details=dict(verifier='model_led_sensor_guarded',
+                    terminal_observation_id='o1')))]
+        executor=ToolExecutor.__new__(ToolExecutor)
+        executor.memory=SimpleNamespace(
+            task=SimpleNamespace(subgoals=[dict(action='arrive at destination')],
+                completed_subgoals=verified if verified is not None else [0],
+                completion_evidence=certificates),
+            current=dict(observation_id=view))
+        executor.refresh=Mock()
+        executor.terminate=Mock()
+        return executor
+
+    def test_final_semantic_proof_does_not_require_second_vlm_or_stair_rule(self):
+        executor=self.executor()
+        result=executor._finish_navigation('success','All goals certified')
+        self.assertEqual(result['status'],'FINISHED')
+        executor.refresh.assert_called_once()
+        executor.terminate.assert_called_once_with('goal_completed',model_requested=True)
+
+    def test_same_goal_previous_frame_cannot_authorize_stop(self):
+        executor=self.executor(view='o2')
+        result=executor._finish_navigation('success','done')
+        self.assertEqual(result['reason'],'final_certified_view_changed_reverify')
+        executor.terminate.assert_not_called()
+
+    def test_missing_model_certificate_cannot_be_replaced_by_legacy_evidence(self):
+        executor=self.executor(certificates=[dict(subgoal=0,verification=dict(
+            completion_confirmed=True,supported=['multi_frame_level_landing_transition']))])
+        result=executor._finish_navigation('success','done')
+        self.assertEqual(result['reason'],'final_model_semantic_arrival_not_verified')
+        executor.refresh.assert_not_called()
+        executor.terminate.assert_not_called()
+
+    def test_all_milestones_must_be_verified_even_if_final_is_certified(self):
+        executor=self.executor(verified=[])
+        result=executor._finish_navigation('success','done')
+        self.assertEqual(result['reason'],'ordered_subgoals_not_verified')
+        executor.terminate.assert_not_called()
+
+    def test_model_abort_remains_available_without_completion(self):
+        executor=self.executor(verified=[])
+        result=executor._finish_navigation('aborted','blocked')
+        self.assertEqual(result['status'],'FINISHED')
+        executor.terminate.assert_called_once_with('model_aborted',model_requested=True)
+
+    def test_final_certificate_selected_by_milestone_not_ledger_order(self):
+        final=dict(subgoal=1,verification=dict(completion_confirmed=True,
+            evidence_details=dict(verifier='model_led_sensor_guarded',
+                                  terminal_observation_id='o1')))
+        older=dict(subgoal=0,verification=dict(completion_confirmed=True))
+        executor=self.executor(certificates=[final,older],verified=[1,0])
+        executor.memory.task.subgoals=[dict(action='approach'),dict(action='enter')]
+        result=executor._finish_navigation('success','done')
+        self.assertEqual(result['status'],'FINISHED')
+        executor.terminate.assert_called_once_with('goal_completed',model_requested=True)
 
 
 if __name__=='__main__':
