@@ -140,6 +140,58 @@ class ExplorationTests(unittest.TestCase):
         self.assertIsNone(covered_view(self.mem.observations,
             pose(105,epoch=1),0,105,-60,15))
 
+    def test_turn_only_motion_receipt_explains_pending_continuation(self):
+        movement=dict(
+            tool='navigate_relative',status='PARTIAL',
+            executed_motion=['TURN_LEFT'],requested_actions=1,executed_actions=1,
+            waypoint_id='direct_0099',
+            movement_intent_feedback=dict(
+                turn_actions_executed=1,forward_actions_executed=0,
+                only_turns_executed=True,desired_forward_motion_not_yet_attempted=True,
+                waypoint_pending=True,waypoint_id='direct_0099',
+                was_forward_attempted=False,
+                registered_translation_known='no_forward_attempt',
+                interpretation='turn_only_not_a_failed_forward_attempt'),
+            remaining_path=dict(path_id='direct_0099',
+                status='IN_PROGRESS',completed=False,endpoint_estimate_valid=True))
+        summary=tool_summary(movement)
+        self.assertTrue(summary['movement_intent_feedback']['only_turns_executed'])
+        self.assertEqual(summary['movement_intent_feedback']['forward_actions_executed'],0)
+        self.assertEqual(summary['remaining_path']['path_id'],'direct_0099')
+
+    def test_registered_translation_differs_from_camera_rotation(self):
+        self.mem.actions=[
+            dict(step=0,action='TURN_LEFT'),
+            dict(step=1,action='LOOK_UP'),
+            dict(step=2,action='MOVE_FORWARD',evidence_state='motion_verified'),
+            dict(step=3,action='LOOK_DOWN'),
+            dict(step=4,action='TURN_RIGHT')]
+        self.mem.tool_ledger=[
+            dict(call=dict(tool='navigate_relative'),
+                 result=dict(tool='navigate_relative',status='PARTIAL',
+                     executed_motion=['TURN_LEFT'],
+                     movement_intent_feedback=dict(
+                         only_turns_executed=True,waypoint_pending=True,
+                         forward_actions_executed=0))),
+            dict(call=dict(tool='turn_and_observe'),
+                 result=dict(status='NO_NEW_INFORMATION',
+                     executed_motion=['LOOK_DOWN','TURN_RIGHT']))]
+        runtime=SimpleNamespace(memory=self.mem,
+            motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
+            active_subgoal=dict(action='descend',target='stairs'),
+            active_waypoint_id=None,pitch_deg=-60,
+            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
+            config=dict(max_steps=150,max_scene_age_seconds=300),paths={})
+        with patch('havln_agent.contexts.turn_evidence',
+                   return_value=dict(requirement=None)):
+            result=navigation_context(runtime)
+        fb=result['decision_feedback']
+        self.assertEqual(fb['registered_forward_count'],1)
+        self.assertEqual(fb['recorded_forward_count'],1)
+        self.assertEqual(fb['actions_since_registered_forward'],2)
+        self.assertTrue(fb['turn_only_move_does_not_count_as_forward'])
+        self.assertTrue(fb['incomplete_movement_may_resume_same_waypoint'])
+
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
             motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
