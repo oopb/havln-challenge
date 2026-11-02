@@ -96,9 +96,41 @@ class VisualPerception:
             result_schema=SEARCH_SCHEMA)
 
     def grounding(self,observation,source,target):
-        return ground(self,observation,Geometry(observation,self.runtime.camera,self.runtime.config['safety_margin']),
-            target,dict(mode='grounding',question='Locate the target and any walkable entry, treads or landing.',
-                vision_contract=dict(coordinate_space='image_1000_xyxy')),source)
+        # Preserve the original language goal and cite earlier *hypotheses*
+        # when grounding a new frame. The new VLM report must not silently
+        # rename an old target (e.g. a window as a previously seen doorway).
+        # Single-image grounding does not establish cross-frame identity.
+        memory=self.runtime.memory
+        task=memory.task
+        idx=task.current_subgoal_index
+        goal=task.subgoals[idx] if idx<len(task.subgoals) else {}
+        references=[]
+        for entry in reversed(memory.groundings):
+            if entry.get('source',{}).get('subgoal')!=idx:continue
+            semantic=entry.get('semantic') or {}
+            references.append(dict(
+                observation_id=entry['source'].get('observation_id'),
+                name=entry.get('target'),
+                evidence=str(semantic.get('evidence',''))[:220],
+                confidence=semantic.get('confidence'),
+                status=entry.get('status')))
+            if len(references)>=3:break
+        inquiry=dict(mode='grounding',
+            question='Ground only a target genuinely visible in THIS frame. '
+                'Different bright openings, windows, doorways, niches and '
+                'partly occluded views can resemble one another. Do not rename '
+                'a different opening as the earlier target simply because the '
+                'requested phrase calls it a door. If not visually identifiable, '
+                'return uncertain/unknown rather than manufacturing identity. '
+                'Locate any walkable entry, treads or landing only if visible.',
+            original_language_goal=dict(action=goal.get('action'),
+                target=goal.get('target'),landmark=goal.get('landmark')),
+            earlier_visual_hypotheses=references,
+            cross_view_identity_authenticated=False,
+            vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        return ground(self,observation,
+            Geometry(observation,self.runtime.camera,self.runtime.config['safety_margin']),
+            target,inquiry,source)
 
     def compare(self,frames,question):
         frames=sorted(frames,key=lambda pair:pair[1]['captured_at'])
