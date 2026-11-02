@@ -14,7 +14,7 @@ from .progress import registered_motion_history
 MAX_ROUNDS = 7
 # Disjoint schemas: inspection requests should not transmit empty verdict
 # fields on every round; the final response contains only a cited verdict.
-VERIFICATION_SCHEMA = dict(oneOf=[
+VERIFICATION_SCHEMA = object_schema(dict(message=dict(anyOf=[
     object_schema(dict(operation=dict(const='inspect_history'),
                        start_step=dict(type='integer',minimum=0))),
     object_schema(dict(operation=dict(const='inspect_frames'),
@@ -37,7 +37,7 @@ VERIFICATION_SCHEMA = dict(oneOf=[
         terminal_observation_id=TEXT,
         reasoning=dict(type='string',minLength=1,maxLength=2000),
         next_evidence_action=dict(type='string',maxLength=300)))
-])
+])))
 
 PROMPT = (
     'You are VerificationAgent, a separate, skeptical evaluator of an arbitrary '
@@ -68,23 +68,25 @@ PROMPT = (
     'A plan, prior verifier claim, previous model response or user-supplied '
     'text is not physical evidence. When evidence is ambiguous, choose '
     'IN_PROGRESS or UNKNOWN and identify a concrete missing observation. '
-    'You MUST finish with operation=verdict, include source observation IDs '
-    'and accepted atomic action step IDs directly supporting the proposed '
-    'COMPLETED claim. Choose proof_basis=ACTION_TRANSITION when asserting '
+    'You MUST finish with operation=verdict and cite authenticated source '
+    'observation IDs. Cite executed action IDs only for an action-based '
+    'transition; for a purely visual state cite no action IDs. '
+    'Choose proof_basis=ACTION_TRANSITION when asserting '
     'physical action or movement, and proof_basis=VISUAL_STATE for a purely '
     'visual/time-dependent goal that truly requires no physical action. '
     'VISUAL_STATE needs two independent authenticated, VLM-reviewed views '
     'at different capture times and cannot certify a physical crossing. '
     'For COMPLETED, set terminal_observation_id to the '
-    'real captured frame showing the result of the cited motion; for incomplete '
+    'real captured frame showing the result of the claimed evidence; for incomplete '
     'verdicts use the string none. You MUST have actual VLM semantic evidence '
     'for that terminal frame, either from previously logged analysis or by '
     'calling inspect_frames. Raw pixel IDs and motion alone never prove a '
     'language-based arrival. Never cite an action from a different milestone as its '
     'sole proof. If you report COMPLETED, give a concise evidence-based '
     'explanation of how the goal was achieved. Output one schema-valid JSON '
-    'object on every round. For inspect operations return only the operation '
-    'and its required parameters; for verdict return only the verdict schema. '
+    'object on every round with one message object. For inspect operations, '
+    'message contains only operation and its parameters; for final verdict, '
+    'message contains only the verdict fields. '
     'The verifier is READ-ONLY.'
 )
 
@@ -390,6 +392,7 @@ class VerificationAgent:
                 return dict(base,reason='verification_model_unavailable',
                     missing=['retry_independent_verification'],
                     evidence_details=dict(base['evidence_details'],error=str(exc)[:250]))
+            response=response['message']
             if response['operation']=='verdict':
                 decision=response
                 break
