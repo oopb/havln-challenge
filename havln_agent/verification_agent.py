@@ -331,11 +331,23 @@ class VerificationAgent:
         decision=None
         for number in range(MAX_ROUNDS):
             try:
-                response=r.client.complete(
-                    'navigation_agent','verification_decision',PROMPT,
-                    dict(overview=overview,inspections=inspections[-4:],
-                         round_index=number,rounds_remaining=MAX_ROUNDS-number),
-                    VERIFICATION_SCHEMA,retry_safe=True)
+                request_context=dict(overview=overview,inspections=inspections[-4:],
+                    round_index=number,rounds_remaining=MAX_ROUNDS-number)
+                try:
+                    response=r.client.complete(
+                        'navigation_agent','verification_decision',PROMPT,
+                        request_context,VERIFICATION_SCHEMA,retry_safe=True)
+                except APIError as format_error:
+                    if format_error.category not in (
+                            'json_syntax','structured_field','json_schema'):
+                        raise
+                    response=r.client.complete(
+                        'navigation_agent','verification_decision',PROMPT,
+                        dict(request_context,format_feedback=dict(
+                            error=str(format_error)[:240],
+                            instruction='Regenerate one complete schema-valid JSON. '
+                                'Use every required field, no duplicate keys.')),
+                        VERIFICATION_SCHEMA,retry_safe=True,format_retry=1)
             except BudgetExceeded:
                 raise
             except APIError as exc:
