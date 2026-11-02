@@ -38,7 +38,9 @@ class ObserveMoveTests(unittest.TestCase):
             self.assertFalse(r._authorized_action)
             run.assert_called_once()
         events=[call.args[0] for call in r.event.call_args_list]
-        self.assertEqual(events.count('navigation_mode_changed'),2)
+        self.assertEqual(events.count('navigation_mode_changed'),0)
+        self.assertEqual(events.count('bounded_motion_batch_started'),1)
+        self.assertEqual(events.count('bounded_motion_batch_finished'),1)
 
     def cruise_runtime(self):
         r=AgentRuntime.__new__(AgentRuntime)
@@ -224,7 +226,7 @@ class ObserveMoveTests(unittest.TestCase):
             r.dispatch(dict(tool='navigate_local',
                             args=dict(waypoint_id='wp_0',max_atomic_steps=2)),
                        decision)
-        self.assertEqual(events[-1],('navigation_mode_changed','OBSERVE','NAVIGATING'))
+        self.assertEqual(events[-1],('bounded_motion_batch_finished','OBSERVE','NAVIGATING'))
 
     def test_observation_decision_rejects_move_mode(self):
         runtime=SimpleNamespace(navigation_mode='MOVE')
