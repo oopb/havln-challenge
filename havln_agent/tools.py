@@ -765,7 +765,22 @@ class ToolExecutor:
                                                     self.config['max_scene_age_seconds'])
                         and wanted & task_tokens(g['target']) for g in self.memory.groundings)
             )
-            if not nearby and not landing_arrival:
+            # A model-led final milestone can certify semantic arrival with
+            # historical tools and a captured terminal view, without requiring
+            # a task-category-specific stair/door rule. It is usable for STOP
+            # only while the robot still occupies the exact public RGB-D frame
+            # and local pose that the verifier certified. The independently
+            # fresh final scene check above remains mandatory.
+            final_evidence=next((v for v in reversed(self.memory.task.completion_evidence)
+                if v.get('subgoal')==len(self.memory.task.subgoals)-1),None)
+            final_proof=(final_evidence or {}).get('verification') or {}
+            final_terminal=(final_proof.get('evidence_details') or {}).get('terminal_observation_id')
+            certified_current_arrival=bool(
+                final_proof.get('completion_confirmed')
+                and (final_proof.get('evidence_details') or {}).get('verifier')
+                    =='model_led_sensor_guarded'
+                and final_terminal==self.memory.current.get('observation_id'))
+            if not nearby and not landing_arrival and not certified_current_arrival:
                 return dict(status='INSUFFICIENT_EVIDENCE', reason='fresh_nearby_final_grounding_required')
         self.terminate('goal_completed' if outcome == 'success' else 'model_aborted', model_requested=True)
         return dict(status='FINISHED', outcome=outcome, evidence=evidence)
