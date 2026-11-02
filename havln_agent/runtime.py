@@ -286,7 +286,33 @@ class AgentRuntime(ToolExecutor):
             if not self.done:
                 self.phase='NAVIGATING'
             if requested_cruise or auto:
-                if self._cruise_continuable(result, executed_since=before):
+                continuable=self._cruise_continuable(result,executed_since=before)
+                pose_now=self.motion_controller.pose()
+                segment=self.memory.actions[before:]
+                previous=(self.cruise_intent or {}).get('checkpoint_poses',[])
+                if continuable and auto and segment and all(
+                        row['action'] in ('TURN_LEFT','TURN_RIGHT')
+                        for row in segment):
+                    # Detect a physical orientation cycle across *batches*
+                    # at the same measured stance, rather than a scan count.
+                    # Keep the model in charge of choosing a new route.
+                    for seen in previous:
+                        same_position=(math.hypot(
+                            seen['x']-pose_now['x'],
+                            seen['z']-pose_now['z']) < .08)
+                        same_heading=abs((seen['heading']-pose_now['heading']
+                            +math.pi)%(2*math.pi)-math.pi) < math.radians(
+                                self.camera.turn_angle/2)
+                        same_epoch=(seen.get('motion_epoch',0)==pose_now.get(
+                            'motion_epoch',0))
+                        if same_position and same_heading and same_epoch:
+                            continuable=False
+                            self.event('cruise_steering_cycle_detected',
+                                source='runtime',
+                                waypoint_id=self.active_waypoint_id,
+                                evidence='repeated_same_stance_and_heading_without_forward')
+                            break
+                if continuable:
                     if requested_cruise:
                         self.cruise_intent=dict(
                             waypoint_id=self.active_waypoint_id,
@@ -295,7 +321,11 @@ class AgentRuntime(ToolExecutor):
                             subgoal_id=self.active_subgoal_id,
                             decision_reason=str(decision.get('decision_reason',''))[:300],
                             authorized_at_step=before,
-                            initial_tool=kind)
+                            initial_tool=kind,
+                            checkpoint_poses=[dict(pose_now)])
+                    elif self.cruise_intent is not None:
+                        self.cruise_intent.setdefault('checkpoint_poses',[]).append(
+                            dict(pose_now))
                     self.event('cruise_progress',source='runtime',
                         waypoint_id=self.active_waypoint_id,
                         executed_batch_actions=len(self.memory.actions)-before,
