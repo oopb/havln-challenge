@@ -64,7 +64,10 @@ PROMPT = (
     'and accepted atomic action step IDs directly supporting the proposed '
     'COMPLETED claim. For COMPLETED, set terminal_observation_id to the '
     'real captured frame showing the result of the cited motion; for incomplete '
-    'verdicts use the string none. Never cite an action from a different milestone as its '
+    'verdicts use the string none. You MUST have actual VLM semantic evidence '
+    'for that terminal frame, either from previously logged analysis or by '
+    'calling inspect_frames. Raw pixel IDs and motion alone never prove a '
+    'language-based arrival. Never cite an action from a different milestone as its '
     'sole proof. If you report COMPLETED, give a concise evidence-based '
     'explanation of how the goal was achieved. Output one schema-valid JSON '
     'object on every round. Use the fields required by the schema even when '
@@ -215,7 +218,7 @@ class VerificationAgent:
         return dict(error='unknown_verification_operation')
 
     @staticmethod
-    def _proof_guard(memory, index, decision):
+    def _proof_guard(memory, index, decision, inspected_frames=()):
         observed={v['observation_id']:v for v in memory.observations}
         by_step={a['step']:a for a in memory.actions}
         image_ids=decision['cited_observation_ids']
@@ -234,6 +237,18 @@ class VerificationAgent:
         endpoint=observed.get(terminal)
         if terminal not in image_ids or endpoint is None:
             errors.append('terminal_observation_not_cited_or_missing')
+        # A genuine sensor frame is not itself a semantic interpretation.
+        # Require VLM analysis on the claimed endpoint, logged previously or
+        # explicitly requested during this independent verification session.
+        reviewed=set(inspected_frames)
+        for entry in list(getattr(memory,'scene_history',[])) + list(memory.groundings):
+            src=entry.get('source') or {}
+            frame=observed.get(src.get('observation_id'))
+            if (frame and src.get('rgb_hash')==frame.get('rgb_hash')
+                    and src.get('depth_hash')==frame.get('depth_hash')):
+                reviewed.add(src['observation_id'])
+        if terminal not in reviewed:
+            errors.append('terminal_visual_semantics_not_reviewed')
         registered=[]
         for step in steps:
             action=by_step.get(step)
@@ -295,6 +310,7 @@ class VerificationAgent:
         overview=self._overview(claim,evidence,observation_ids)
         observed={v['observation_id']:v for v in memory.observations}
         inspections=[]
+        inspected_frames=set()
         decision=None
         for number in range(MAX_ROUNDS):
             try:
@@ -318,11 +334,15 @@ class VerificationAgent:
                 inspection=dict(operation=response['operation'],
                     error='inspection_failed',detail=str(exc)[:300])
             inspections.append(inspection)
+            if (inspection.get('operation')=='inspect_frames'
+                    and not inspection.get('error')):
+                inspected_frames.update(view.get('observation_id') for view in
+                    inspection.get('views',[]) if view.get('observation_id'))
         if decision is None:
             return dict(base,reason='verification_inspection_limit',
                 missing=['verifier_must_return_cited_verdict'],
                 evidence_details=dict(base['evidence_details'],inspection_rounds=len(inspections)))
-        guard=self._proof_guard(memory,index,decision) if (
+        guard=self._proof_guard(memory,index,decision,inspected_frames) if (
             claim=='subgoal_completed' and decision['verdict']=='COMPLETED') else []
         complete=(claim=='subgoal_completed' and decision['verdict']=='COMPLETED'
                   and not guard and not decision['contradictions'] and not decision['missing'])
