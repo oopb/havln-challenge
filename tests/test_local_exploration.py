@@ -270,6 +270,7 @@ class ExplorationTests(unittest.TestCase):
         runtime.memory.current['revisited_view_ids']=[]
         runtime.memory.event=lambda kind,**kw:runtime.memory.events.append(
             dict(event=kind,**kw))
+        runtime.event=Mock()
         n=[0]
         def move(action):
             n[0]+=1
