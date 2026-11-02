@@ -51,24 +51,46 @@ def turn_evidence(memory):
     degrees=(signed+180)%360-180
     complete=False
     remaining,directions=None,[]
+    first_completed_step=None
+    historical_rotation_completed=False
+    def orientation_error(net_degrees,angle,side):
+        if side=='either':
+            return min(abs((net_degrees-angle+180)%360-180),
+                       abs((net_degrees+angle+180)%360-180))
+        wanted=angle if side=='left' else -angle
+        return abs((net_degrees-wanted+180)%360-180)
     if requirement:
         expected=requirement['angle_deg']
-        desired=-expected if requirement['direction']=='right' else expected
+        side=requirement['direction']
+        desired=-expected if side=='right' else expected
         delta=(desired-degrees+180)%360-180
         remaining=abs(delta)
         directions=['left','right'] if math.isclose(remaining,180) else [
             'left' if delta>0 else 'right']
-        error=(min(abs(degrees-expected),abs(degrees+expected))
-            if requirement['direction']=='either' else
-            abs((degrees-(expected if requirement['direction']=='left' else -expected)+180)%360-180))
-        complete=error<memory.camera.turn_angle/2 and any(
-            a['action'].startswith('TURN_') and a['result'].get('visual_change')
-            for a in actions)
+        saw_change=False
+        running_turn=0.
+        for row in actions:
+            if row['action'] not in ('TURN_LEFT','TURN_RIGHT'):
+                continue
+            running_turn+=(1 if row['action']=='TURN_LEFT' else -1)*memory.camera.turn_angle
+            saw_change=saw_change or bool((row.get('result') or {}).get('visual_change'))
+            if saw_change and first_completed_step is None and (
+                orientation_error(running_turn,expected,side)
+                < memory.camera.turn_angle/2):
+                first_completed_step=row['step']
+        historical_rotation_completed=first_completed_step is not None
+        complete=historical_rotation_completed and (
+            orientation_error(degrees,expected,side)
+            < memory.camera.turn_angle/2)
     return dict(requirement=requirement,net_turn_deg=degrees,completed=complete,
+        ever_completed=historical_rotation_completed,
+        first_completed_step=first_completed_step,
         remaining_deg=remaining,allowed_directions=directions,
+        remaining_deg_is_current_heading_error_not_unexecuted_task=True,
         turn_steps=[a['step'] for a in actions if a['action'].startswith('TURN_')],
         source='accepted_turn_receipts_and_public_view_change',
-        confidence='estimated_not_gt_yaw')
+        confidence='estimated_not_gt_yaw',
+        caveat='historical physical rotation is not independent semantic verification')
 
 
 def current_visual_evidence(source,memory,now,max_age):
