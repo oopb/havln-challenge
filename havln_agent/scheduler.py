@@ -111,6 +111,9 @@ def run(runtime,append):
             runtime.event('navigation_decision',source='navigation_agent',decision=proposal)
             append('navigation_agent',dict(event='navigation_decision',decision_id=runtime.current_decision_id,
                 subgoal_id=runtime.active_subgoal_id,decision=proposal))
+            # Preserve the model's own concise decision rationale alongside
+            # the authentic tool receipt for subsequent retrospection.
+            binding['decision_reason']=proposal.get('decision_reason','')
             result=runtime.execute(dict(tool=proposal['tool'],args=proposal['args']),binding)
             for note in proposal.get('memory_delta',[]):runtime.memory.write_hypothesis(**note)
             append('navigation_agent',dict(event='tool_feedback',tool_call_id=result['tool_call_id'],
