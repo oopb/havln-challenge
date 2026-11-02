@@ -204,6 +204,66 @@ def navigation_context(runtime):
         repeated_call_types=[(v.get('call') or {}).get('tool') for v in unproductive[-6:]],
         model_may_change_goal_or_detour=True,
         no_automatic_motion_or_stop_policy=True)
+    # Keep an unsuccessful verification verdict available after unrelated
+    # tools, so the LLM does not repeatedly ask for the same proof with no new
+    # motion or visual evidence. This is a planning hint, never a hard veto.
+    last_check=next((event for event in reversed(getattr(memory,'events',[]))
+        if event.get('event')=='progress_checked'),None)
+    verification_state=None
+    if last_check:
+        outcome=last_check.get('result') or {}
+        check_step=last_check.get('step',-1)
+        verification_state=dict(
+            checked_step=check_step,actions_since_check=max(0,len(memory.actions)-check_step),
+            status=outcome.get('status'),model_verdict=(
+                (outcome.get('evidence_details') or {}).get('model_verdict')),
+            missing=outcome.get('missing',[])[:5],
+            next_evidence_action=(
+                (outcome.get('evidence_details') or {}).get('next_evidence_action')),
+            new_forward_since_check=any(a.get('action')=='MOVE_FORWARD'
+                and a.get('step',-1)>=check_step for a in memory.actions),
+            insufficient_verification_is_not_a_new_navigation_obstacle=True)
+    # Repeated scans are not progress. Tell the navigation model explicitly
+    # when it has been spending substantial time revisiting old views.
+    scan_dominated=(exploration_feedback['repeated_low_information_calls']>=3
+        and exploration_feedback['actions_since_last_forward']>=6)
+    exploration_feedback['scan_dominated_without_translation']=scan_dominated
+    exploration_feedback['decision_priority']=(
+        'evaluate_executable_local_displacement_or_a_distinct_trajectory'
+        if scan_dominated else 'normal_model_directed_navigation')
+    # Preserve multiple candidate identities across VLM calls: a later
+    # single-frame grounding is a hypothesis, not a replacement for the
+    # historically observed goal. The model can call compare_views on IDs.
+    target_identity_history=[]
+    for item in reversed(memory.groundings):
+        if item.get('source',{}).get('subgoal')!=index:continue
+        if len(target_identity_history)>=5:break
+        s=item.get('semantic') or {}
+        src=item.get('source') or {}
+        target_identity_history.append(dict(
+            target=item.get('target','')[:140],
+            observation_id=src.get('observation_id'),
+            evidence=str(s.get('evidence',''))[:230],
+            uncertainty=str(s.get('uncertainty',''))[:170],
+            semantic_confidence=s.get('confidence'),
+            localized=(item.get('position') or {}).get('status'),
+            image_bearing_deg=(item.get('position') or {}).get('bearing_degrees'),
+            motion_epoch=(src.get('pose') or {}).get('motion_epoch'),
+            identity_match_to_earlier_candidates='NOT_ESTABLISHED_BY_SINGLE_FRAME'))
+    identity_reference_ids=list(dict.fromkeys(
+        item['observation_id'] for item in reversed(target_identity_history)
+        if item.get('observation_id')))
+    target_identity_review=dict(
+        candidates=target_identity_history,
+        historical_observation_ids=identity_reference_ids[-4:],
+        newest_observation_id=(memory.current or {}).get('observation_id'),
+        consistency='UNVERIFIED_UNLESS_CROSS_VIEW_IDENTITY_EVIDENCE',
+        compare_views_question='Is the target in the later camera view the SAME '
+          'physical landmark seen in the earlier frame, or a distinct opening, '
+          'window, wall recess, or object? Describe unambiguous differences. '
+          'Do not treat camera rotation as target movement.',
+        caution='A later PARTIAL grounding is not permission to rename the '
+                'original task target or to claim the destination changed.')
     # Preserve historical semantic target identities across camera turns and
     # reanchors. Old bearings are NOT reliable coordinates or motion consent.
     semantic_targets=[]
@@ -257,6 +317,8 @@ def navigation_context(runtime):
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
         exploration_feedback=exploration_feedback,
+        verification_followup=verification_state,
+        target_identity_review=target_identity_review,
         persistent_semantic_targets=semantic_targets,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
             pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
