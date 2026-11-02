@@ -86,6 +86,7 @@ def navigation_schema(tools):
     branches=[]
     for name,spec in tools.items():
         branch=object_schema(dict(tool=dict(const=name), args=spec['parameters'],
+            decision_reason=dict(type='string',maxLength=300),
             memory_delta=dict(type='array', maxItems=4, items=HYPOTHESIS)))
         branch['required']=['tool','args']
         branch['description']=spec['description']
@@ -96,6 +97,7 @@ def navigation_schema(tools):
 def navigation_envelope(tools):
     """Malformed messages are API errors; valid calls get runtime argument feedback."""
     value=object_schema(dict(tool=dict(enum=list(tools)),args=dict(type='object'),
+        decision_reason=dict(type='string',maxLength=300),
         memory_delta=dict(type='array',maxItems=4,items=HYPOTHESIS)))
     value['required']=['tool','args']
     return value
@@ -121,7 +123,9 @@ def compact_navigation_protocol(tools):
         required=schema.get('required',[])
         return '('+', '.join(name+('' if name in required else '?')+':'+kind(value)
             for name,value in schema.get('properties',{}).items())+')'
-    return ('Return exactly {"tool":"name","args":{...}}. Optional memory_delta is at most 4 '
+    return ('Return exactly {"tool":"name","args":{...}}. You may add a brief '
+        'decision_reason explaining WHY this observation, movement or milestone is useful. '
+        'Optional memory_delta is at most 4 '
         'objects {"finding":"text","source_observation_ids":["existing ID"]}; hypotheses only. '
         'Use only listed tools/args. ? means optional; all text <=1000 characters, IDs nonempty, '
         'arrays unique. Tool signatures and purpose:\n'+'\n'.join(
