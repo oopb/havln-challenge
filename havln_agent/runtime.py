@@ -300,7 +300,7 @@ class AgentRuntime(ToolExecutor):
                     self.cruise_intent=None
                     self.set_navigation_mode('OBSERVE','cruise_reached_or_interrupted',
                         status=(result or {}).get('status','INTERRUPTED'),
-                        reason=(result or {}).get('reason'))
+                        interruption_reason=(result or {}).get('reason'))
             elif moving:
                 self.cruise_intent=None
                 self.set_navigation_mode('OBSERVE','bounded_motion_batch_finished',
