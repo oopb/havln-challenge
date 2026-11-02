@@ -170,33 +170,36 @@ class ExplorationTests(unittest.TestCase):
         runtime.source=Mock(return_value=dict(observation_id='source'))
         return runtime
 
-    def test_runtime_suppresses_revisited_turn_without_spending_actions(self):
+    def test_revisited_camera_heading_is_advisory_not_action_veto(self):
         runtime=self.agent()
-        result=runtime._turn_and_observe(-30,'none')
+        runtime.memory.current=dict(
+            observation_id='unchanged',new_visual_information=False)
+        result=runtime._turn_and_observe(-30,'none',purpose='explore')
         self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(result['executed_actions'] if 'executed_actions' in result else 0,0)
-        self.assertFalse(result['exploration']['motion_authorized'])
-        runtime._step.assert_not_called()
+        self.assertEqual(runtime._step.call_count,2)
+        self.assertTrue(result['observation_advisory']['previously_observed_static_sector'])
+        self.assertEqual(result['observation_advisory']['decision_authority'],
+                         'navigation_agent')
 
-    def test_repeated_camera_sweep_without_recent_block_uses_zero_actions(self):
-        # Batch4-2/3 repeatedly turned through already seen absolute views
-        # even without any recent measured obstacle.
+    def test_repeat_scan_without_recent_block_is_still_model_controlled(self):
         self.mem.tool_ledger=[]
         runtime=self.agent()
+        runtime.memory.current=dict(
+            observation_id='unchanged',new_visual_information=False)
         result=runtime._turn_and_observe(-30,'none')
         self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(result['reason'],'repeated_camera_sector_without_new_view')
-        self.assertEqual(result['scan']['new_information_ids'],[])
-        runtime._step.assert_not_called()
+        self.assertEqual(runtime._step.call_count,2)
+        self.assertTrue(result['observation_advisory']['previously_observed_static_sector'])
 
-    def test_in_place_goal_does_not_exempt_unproductive_explore_sweep(self):
+    def test_in_place_turn_is_no_longer_dependent_on_purpose_exemption(self):
         self.mem.tool_ledger=[]
         self.mem.task.subgoals[0]['action']='Turn right in place'
         runtime=self.agent()
+        runtime.memory.current=dict(
+            observation_id='unchanged',new_visual_information=False)
         result=runtime._turn_and_observe(-30,'none',purpose='explore')
         self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(result['scan']['new_information_ids'],[])
-        runtime._step.assert_not_called()
+        self.assertEqual(runtime._step.call_count,2)
 
     def test_intentional_turn_to_previously_seen_direction_still_allowed(self):
         self.mem.tool_ledger=[]
@@ -257,16 +260,38 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(runtime._step.call_count,2)
         self.assertEqual(result['scan']['new_information_ids'],['new1','new2'])
 
-    def test_active_observation_reuses_coverage_without_vlm_or_turn(self):
+    def test_active_observation_allows_model_reinspection_of_covered_views(self):
         runtime=self.agent()
-        runtime.visual_perception=SimpleNamespace(search_view=Mock())
-        runtime.memory.current=self.mem.observations[-1]
+        runtime.visual_perception=SimpleNamespace(search_view=Mock(return_value=dict(
+            target_visible=False,target_type='none',confidence='low',
+            box=None,evidence='',uncertainty='',suggested_next_view='continue')))
+        runtime.observation=object()
+        runtime.memory.current=dict(self.mem.observations[-1])
+        runtime.memory.current['revisited_view_ids']=[]
+        runtime.memory.event=lambda kind,**kw:runtime.memory.events.append(
+            dict(event=kind,**kw))
+        runtime.event=Mock()
+        n=[0]
+        def move(action):
+            n[0]+=1
+            runtime.memory.current=dict(
+                observation_id='recheck_'+str(n[0]),
+                new_visual_information=False,revisited_view_ids=[],
+                rgb_hash='rgb'+str(n[0]),depth_hash='depth'+str(n[0]))
+            return dict(status='EXECUTED')
+        runtime._step=Mock(side_effect=move)
+        runtime.source=lambda:dict(observation_id=runtime.memory.current['observation_id'],
+                                   subgoal=0,captured_at=n[0],
+                                   pose=runtime.motion_controller.pose())
+        runtime.geometry=lambda:SimpleNamespace(
+            assess_step=lambda:dict(state='BLOCKED',reason='occupied_next_step',
+                depth=dict(clearance=.12),support=dict(status='UNKNOWN')))
         result=ObservationController(runtime).scan('find stairs',
             ['stair_entry'],'right',30,checkpoint_degrees=30)
-        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(result['outcome'],'REPEATED_SEARCH_NO_NEW_VIEW')
-        runtime.visual_perception.search_view.assert_not_called()
-        runtime._step.assert_not_called()
+        self.assertEqual(result['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
+        self.assertEqual(runtime._step.call_count,2)
+        self.assertTrue(result['observation_advisory']['already_covered_since_block'])
+        runtime.visual_perception.search_view.assert_called_once()
 
     def test_explicit_dynamic_recheck_is_model_directed_not_throttled(self):
         runtime=self.agent()

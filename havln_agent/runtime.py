@@ -289,27 +289,22 @@ class AgentRuntime(ToolExecutor):
         # or an intentional physical turn is still allowed without a timer.
         # Movement to a previously observed heading should instead use
         # navigate_relative/navigate_local with new per-step depth validation.
-        # A purposeful in-place task rotation must be made explicitly with
-        # purpose=intentional_recheck. Do not exempt *all* turns during an
-        # orientation milestone: batch4-3 spent 86 atomic actions revisiting
-        # the same headings while the verifier was asking for more context.
-        # Default explore scans are deduplicated for EVERY milestone.
-        if purpose=='explore':
-            planned=predicted_scan(self.memory,self.motion_controller.pose(),
-                relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
-            if not planned['new_view_expected']:
-                exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                    self.camera.turn_angle,round(360/self.camera.turn_angle))
-                blocked=bool(last_block(self.memory,self.motion_controller.pose()))
-                return dict(status='NO_NEW_INFORMATION',
-                    reason=('repeated_camera_sector_after_measured_block' if blocked
-                            else 'repeated_camera_sector_without_new_view'),
-                    no_new_information_reason='all_requested_absolute_views_already_recorded',
-                    scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
-                        v['observation_id'] for v in planned['already_visited']]),
-                    exploration=exploration,
-                    suggestion='choose_genuinely_new_view_or_execute_a_live_safe_short_route; '
-                               'use_intentional_recheck_or_dynamic_recheck_when_needed')
+        # Observation is a model-owned physical choice. Previously this
+        # duplicate-view prediction cancelled valid TURN/LOOK requests before
+        # execution, even when the agent intended to reacquire a dynamic view
+        # or deliberately face a known direction. Preserve the warning as
+        # telemetry, but do not substitute a runtime strategy decision.
+        planned=predicted_scan(self.memory,self.motion_controller.pose(),
+            relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
+        already_seen=bool(planned['already_visited']) and not planned['new_view_expected']
+        observation_advisory=dict(
+            previously_observed_static_sector=already_seen,
+            prior_observation_ids=[v['observation_id']
+                for v in planned['already_visited']],
+            new_static_view_expected=planned['new_view_expected'],
+            decision_authority='navigation_agent',
+            may_still_be_useful_for_orientation_or_dynamic_recheck=True,
+            prior_views_are_not_live_human_or_collision_evidence=True)
         frames = []
         novel, revisited = [], []
         for action in actions:
@@ -336,7 +331,8 @@ class AgentRuntime(ToolExecutor):
             source=self.source(), scan=dict(frames=frames,
             new_information_ids=novel, revisited_view_ids=revisited),
             exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None)
+                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None,
+            observation_advisory=observation_advisory)
 
     def _inspect_geometry(self):
         self.refresh()
@@ -705,10 +701,15 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='already_active_subgoal')
         if subgoal_index in task.completed_subgoals:
             return dict(status='INVALID_ARGUMENTS',reason='cannot_revisit_verified_subgoal')
+        # Navigation strategy is model-owned: it may pursue ANY unverified
+        # milestone when environmental evidence warrants a detour, even if
+        # earlier goals have not been visited yet. This does not change the
+        # original milestone list, ordering requirements or the final proof:
+        # request_finish(success) still requires independent VERIFIED evidence
+        # for every original goal.
         prior_seen = {int(k) for k in task.subgoal_start_steps}
-        if subgoal_index not in prior_seen and subgoal_index != previous + 1:
-            return dict(status='INVALID_ARGUMENTS',
-                        reason='cannot_skip_unvisited_ordered_milestones')
+        bypassed=[i for i in range(subgoal_index)
+            if i not in task.completed_subgoals and i not in prior_seen]
         known = {o['observation_id'] for o in self.memory.observations}
         if not set(observation_ids) <= known:
             return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
@@ -720,7 +721,9 @@ class AgentRuntime(ToolExecutor):
         task.provisional_transitions.append(dict(from_subgoal=previous,
             to_subgoal=subgoal_index,reason=reason,observation_ids=observation_ids,
             step=len(self.memory.actions),verified=False,
-            evidence_scope='navigation_strategy_not_completion_certification'))
+            evidence_scope='navigation_strategy_not_completion_certification',
+            bypassed_unverified_subgoal_indices=bypassed,
+            original_task_order_unchanged=True))
         task.current_subgoal_index = subgoal_index
         task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
         task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
@@ -737,6 +740,8 @@ class AgentRuntime(ToolExecutor):
         return dict(status='OK',current_subgoal_index=subgoal_index,
             previous_subgoal_index=previous,
             selection='PROVISIONAL_UNVERIFIED',
+            bypassed_unverified_subgoal_indices=bypassed,
+            original_task_order_unchanged=True,
             unverified_subgoals=[i for i in range(count)
                 if i not in task.completed_subgoals],
             reason=reason,

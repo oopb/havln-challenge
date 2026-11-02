@@ -5,17 +5,21 @@ from .api_client import APIError
 
 COMMON_PROMPT = (
     'You are NavigationAgent. TaskPlanner supplies ordered semantic subgoals. '
-    'Work on the CURRENT subgoal. Navigation progress and verified completion '
-    'are separate: you can select_subgoal to provisionally move to the NEXT '
-    'ordered milestone when evidence suggests you reached or passed the current '
-    'milestone, even if a rigid metric proof is unavailable. You may revisit '
-    'an earlier unverified milestone using select_subgoal. This NEVER marks '
+    'You alone own strategic navigation choices: observe or move, choose '
+    'the trajectory, decide if a stale view is worth rechecking, revise '
+    'hypotheses, request tools, verify, or pursue ANY unverified milestone '
+    'provisionally when its context makes that useful. Navigation progress '
+    'and verified completion are separate: select_subgoal only changes the '
+    'active objective and NEVER marks '
     'a milestone completed: request_finish success still needs all milestones '
     'independently verified. Do not advance solely to evade a collision, '
     'without relevant visual/motion evidence. '
     'You receive structured state, not raw RGB or depth; use visual tools as needed. '
     'Return exactly ONE JSON object containing one registered tool and args, '
-    'plus optional evidence-linked memory_delta. Wait for the tool result. '
+    'plus optional concise decision_reason and evidence-linked memory_delta. '
+    'If a previously seen view is worth revisiting or a provisional task '
+    'jump is useful, briefly explain your information goal in decision_reason. '
+    'Wait for the tool result. '
     'Do not invent observations, movement, target coordinates or completion. '
     'Each MOVE requires the local controller to check fresh RGB-D geometry. '
     'A local TARGET_REACHED is not semantic task completion. Read '
@@ -90,14 +94,17 @@ OBSERVE_PROMPT = (
     'a relevant fresh depth view. Such evidence never proves collision. '
     'Camera-only view directions '
     'are not executable movement waypoints. '
-    'Treat NO_NEW_INFORMATION and REPEATED_SEARCH_NO_NEW_VIEW as evidence of '
-    'low information value, not absolute prohibitions. Use purpose=intentional_recheck '
+    'Treat NO_NEW_INFORMATION, prior scan coverage, and historical camera '
+    'directions as evidence about expected information gain, NOT as vetoes. '
+    'All legal model-requested observations execute even if prior camera views '
+    'were similar; they consume ordinary action/API budgets. '
+    'Use purpose=intentional_recheck '
     'or force_recheck=true when an older view must actually be rechecked. '
     'For a genuinely required in-place turn toward a previously viewed heading, '
     'set turn_and_observe purpose=intentional_recheck so it remains executable; '
     'do not mark such a physical orientation action as an exploration scan. '
-    'A default purpose=explore sweep repeating known camera sectors is '
-    'deduplicated even during an orientation milestone. Prefer '
+    'A default purpose=explore sweep repeating known camera sectors '
+    'remains your choice and reports view redundancy as a warning. Prefer '
     'evaluating a short available waypoint or an actually different view. '
     'Observe whenever it materially informs the decision, even during a paused '
     'local route; the route will be revalidated before it resumes. '
@@ -119,28 +126,21 @@ OBSERVE_PROMPT = (
     'After each MOVE, choose the next short segment using the new observation '
     'and retained memory; continue the same subgoal. '
 )
-# Model-owned decisional emphasis after documented low-information scanning.
-# This is not a turn quota, forced forward action, automatic STOP or bypass of
-# live depth/terrain/human checks.
-ROUTE_REASSESSMENT_PROMPT = (
-    'EXECUTION-FOCUS REVIEW: This episode has spent many actions observing '
-    'without making registered forward progress. Do not restart the same '
-    'room scan or repeat an unchanged verification claim. First consider '
-    'whether the saved current geometry, local_navigation or candidate '
-    'waypoints support a short, genuinely task-useful movement. '
-    'You can choose navigate_relative directly without a waypoint ID and '
-    'the executor will validate fresh public RGB-D and human safety before '
-    'each step. Do NOT wait for perfect full-room semantic localization when '
-    'a short safe viewpoint change or task-directed detour is reasonable. '
-    'If every relevant movement is actually blocked or the goal identity is '
-    'contradictory, choose ONE specific information-producing tool instead: '
-    'compare_views for the target_identity_review observation IDs, '
-    'ground_landmark for a genuinely new viewpoint, or inspect_geometry '
-    'for a new measured obstruction. Explain the change of viewpoint in '
-    'memory_delta when appropriate. Do not claim a forbidden move is safe. '
-    'When verification_followup indicates no new evidence since a prior '
-    'INSUFFICIENT_EVIDENCE decision, move or observe for that missing evidence '
-    'instead of immediately calling verify_subgoal again. '
+# Runtime offers sensor receipts and history; this prompt does not command
+# a model-owned policy merely because a counter crosses an arbitrary threshold.
+AGENT_STRATEGY_PROMPT = (
+    'STRATEGY AUTHORITY: You own the choice between safe short movement, '
+    'resuming a waypoint, inspecting a new or old scene, asking VLM to '
+    'compare target identity, changing semantic objective, or retrying '
+    'verification. Choose based on task progress, current RGB-D geometry, '
+    'historical failures, and information value. exploration_feedback and '
+    'verification_followup are factual telemetry, NOT automatic directives. '
+    'A prior unproductive scan does not forbid re-observation, and a safe '
+    'free sector does not compel moving in the wrong direction. '
+    'Do not treat UNKNOWN displacement as measured movement, and do not '
+    'overrule live collision, unsafe terrain or human occupancy. '
+    'An accepted tool choice may be suboptimal; review actual execution '
+    'feedback and change plans when warranted. '
 )
 TARGET_IDENTITY_PROMPT = (
     'TARGET CONTINUITY: target_identity_review contains competing historical '
@@ -178,10 +178,7 @@ class NavigationAgent:
                                category='structured_field')
         context = dict(navigation_context(runtime),
                        **({'format_feedback': format_feedback} if format_feedback else {}))
-        focus = context.get('exploration_feedback') or {}
-        system_prompt = COMMON_PROMPT + OBSERVE_PROMPT
-        if focus.get('scan_dominated_without_translation'):
-            system_prompt += ROUTE_REASSESSMENT_PROMPT
+        system_prompt = COMMON_PROMPT + OBSERVE_PROMPT + AGENT_STRATEGY_PROMPT
         if (context.get('target_identity_review') or {}).get('candidates'):
             system_prompt += TARGET_IDENTITY_PROMPT
         return runtime.client.complete(
