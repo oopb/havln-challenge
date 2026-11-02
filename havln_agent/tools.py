@@ -697,6 +697,21 @@ class ToolExecutor:
                 if attempt:
                     attempt['forward_actions'] += 1
                 alert = result['feedback'].get('motion_alert') or {}
+                # The model owns the route, but continuous CRUISE must hand
+                # control back on freshly measured semantic-direction conflict.
+                # Do not keep moving uphill on an explicitly downward goal
+                # merely because the local depth ahead remains clear.
+                # Ordinary single-batch navigation still reports the mismatch
+                # to the model as evidence without an automatic route policy.
+                if (getattr(self,'navigation_mode','OBSERVE')=='CRUISE'
+                        and result['feedback'].get('semantic_direction_mismatch')):
+                    return self._navigation_feedback(path,checked,
+                        'REQUIRES_ATTENTION',
+                        'cruise_motion_direction_disagrees_with_semantic_goal',
+                        observed_vertical_motion=(result['feedback'].get(
+                            'rgbd_motion') or {}).get('vertical_motion'),
+                        semantic_direction_mismatch=True,
+                        requires_model_route_decision=True)
                 if not result['feedback']['translation_supported']:
                     # Register uncertainty BEFORE any early interruption.
                     # _navigation_feedback reads unknown_motion_seen to avoid
