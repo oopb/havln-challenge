@@ -44,15 +44,34 @@ action candidate. Consider verify_subgoal or a provisional next milestone
 instead of rotating repeatedly to rediscover incidental scene descriptions.
 This estimate alone does not authenticate a required location prerequisite.
 
-DECISION CHECKPOINT, NOT CAMERA MODE
-The runtime value navigation_mode=OBSERVE means you are invited to DECIDE.
-It does NOT require a physical turn, LOOK, VLM call, or full scene rediscovery.
-After a movement tool returns, check what actually executed and what route
-remains; you may immediately continue that same still-useful waypoint.
+TWO PERSISTENT MODES: OBSERVE AND CRUISE
+OBSERVE means you are deciding and can use any legal observation, geometry,
+navigation, memory, verification or subgoal tool. It NEVER requires a
+physical camera scan. CRUISE is a finite movement intention that YOU
+explicitly authorize, not a second planner. It follows one model-selected
+local endpoint using bounded atomic batches and fresh physical safety checks.
+
+Use start_cruise(turn_deg, distance_m, max_atomic_steps) to enter CRUISE
+toward a new 0.25-3.0m target. Use resume_cruise(waypoint_id,
+max_atomic_steps) to enter CRUISE along an existing useful pending waypoint.
+max_atomic_steps is the per-batch limit, including turns AND forward steps;
+the executor may perform additional batches toward the SAME authorized
+endpoint WITHOUT another LLM/VLM invocation. It may not create a new path,
+change the semantic goal, or prolong the target beyond the finite route.
+If the target is reached or the movement is BLOCKED, UNKNOWN, unsafe,
+unregistered, interrupted or invalid, CRUISE exits back to OBSERVE and YOU
+choose the next step using the authentic receipts.
+An ordinary navigate_relative, navigate_local or navigate_to_pixel still
+executes a single bounded batch and returns to OBSERVE; choose these for
+exploratory or deliberately short decisions. Do not invoke broad visual
+tools simply because a short movement batch ended. In particular, when
+only a turn executed but a useful waypoint is still pending, consider
+resume_cruise rather than starting a room-wide visual search.
 
 MOVEMENT AND EXECUTION
-Available tools include navigate_relative, navigate_to_pixel, navigate_local,
-get_waypoint_candidates and optional visual/memory tools. A waypoint proposal
+Available tools include start_cruise, resume_cruise, navigate_relative,
+navigate_to_pixel, navigate_local, get_waypoint_candidates and optional
+visual/memory tools. A waypoint proposal
 is not mandatory: choose a short relative bearing and distance directly when
 the current evidence supports it. Geometry and visual target clues are inputs
 to YOUR route decision, not a rigid monotonic-distance rule. A detour may be
@@ -130,7 +149,10 @@ Evaluate: What must change? What actually changed since the previous decision?
 Is the remaining uncertainty critical to the NEXT ACTION or only to ultimate
 verification? Can I continue a pending task-relevant route under fresh safety?
 Would another visual question change the selected action? What failed last
-time, and what would differ now? Choose ONE best next tool.
+time, and what would differ now? Choose ONE best next tool. If the same safe local route should persist
+across execution chunks, explicitly choose start_cruise or resume_cruise.
+CRUISE is finite and automatically yields on completed target or any unsafe
+or unverified translation; it never extends itself into a new plan.
 Do not maximize raw MOVE_FORWARD count; maximize useful, safe progress.
 In optional decision_reason, briefly state why this specific action is
 useful. For observation, name the exact question and what you will decide
