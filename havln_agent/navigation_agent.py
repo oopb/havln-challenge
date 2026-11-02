@@ -45,9 +45,11 @@ instead of rotating repeatedly to rediscover incidental scene descriptions.
 This estimate alone does not authenticate a required location prerequisite.
 
 TWO PERSISTENT MODES: OBSERVE AND CRUISE
-OBSERVE means you are deciding and can use any legal observation, geometry,
-navigation, memory, verification or subgoal tool. It NEVER requires a
-physical camera scan. CRUISE is a finite movement intention that YOU
+The runtime value navigation_mode=OBSERVE is an invitation to DECIDE,
+not an order to perform a camera observation. You can use any legal
+observation, geometry, navigation, memory, verification or subgoal tool.
+It NEVER requires a physical camera scan. CRUISE is a finite movement
+intention that YOU
 explicitly authorize, not a second planner. It follows one model-selected
 local endpoint using bounded atomic batches and fresh physical safety checks.
 
