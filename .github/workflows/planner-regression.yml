@@ -34,6 +34,7 @@ on:
       - "tests/test_direct_navigation_failure_memory.py"
       - "havln_agent/export.py"
       - "tests/test_local_exploration.py"
+      - "tests/test_model_verification.py"
       - "tests/test_scheduler_liveness.py"
       - "tests/test_runtime_config_liveness.py"
       - "scripts/pack_agent_diagnostics.py"
@@ -110,6 +111,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_direct_navigation_failure_memory.py' -v
       - name: Check post-block local exploration and scan deduplication
         run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
+      - name: Check model-led historical evidence verification and sensor proof guards
+        run: python -m unittest discover -s tests -p 'test_model_verification.py' -v
       - name: Check evidence-state liveness and bounded API decisions
         run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
       - name: Check shipped agent.yaml liveness configuration compatibility
