@@ -107,6 +107,21 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertTrue(r.memory.actions[0]['result']['semantic_direction_mismatch'])
         self.assertIsNone(r.motion_controller.target)
 
+    def test_cruise_ends_on_first_unknown_forward_even_when_batch_has_room(self):
+        r=runtime()
+        r.navigation_mode='CRUISE'
+        unknown=dict(status='UNKNOWN',reason='motion_estimate_unknown')
+        with patch('havln_agent.tools.estimate_translation',return_value=unknown):
+            result=r._navigate_relative(0,1.,6)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],
+            'cruise_unregistered_forward_requires_model_reanchor')
+        self.assertEqual(len(r.memory.actions),1)
+        self.assertEqual(r.memory.actions[0]['action'],'MOVE_FORWARD')
+        self.assertFalse(result['endpoint_estimate_valid'])
+        self.assertIsNone(result['remaining_distance'])
+        self.assertTrue(result['requires_model_route_decision'])
+
     def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
         r=runtime()
         unknown=dict(status='UNKNOWN',
