@@ -124,7 +124,7 @@ class AgentRuntime(ToolExecutor):
                     semantic_source_observation_id=bound['semantic_source_observation_id'])
 
     def set_navigation_mode(self, mode, reason, **detail):
-        if mode not in ('OBSERVE', 'MOVE', 'CRUISE'):
+        if mode not in ('OBSERVE', 'CRUISE'):
             raise ValueError('unknown_navigation_mode')
         previous = self.navigation_mode
         if previous != mode:
@@ -269,7 +269,10 @@ class AgentRuntime(ToolExecutor):
                 'agent_authorized_finite_route' if requested_cruise else 'cruise_batch_continuation',
                 waypoint_id=call['args'].get('waypoint_id'))
         elif moving:
-            self.set_navigation_mode('MOVE','model_selected_bounded_motion',
+            # One-batch movement is a tool execution during OBSERVE strategy,
+            # not a third persistent mode. Runtime phase=EXECUTE describes
+            # motor activity without changing the Agent's planning state.
+            self.event('bounded_motion_batch_started',source='runtime',
                 waypoint_id=call['args'].get('waypoint_id'))
         self.phase='EXECUTE'
         self._authorized_action=True
@@ -304,7 +307,7 @@ class AgentRuntime(ToolExecutor):
                         interruption_reason=(result or {}).get('reason'))
             elif moving:
                 self.cruise_intent=None
-                self.set_navigation_mode('OBSERVE','bounded_motion_batch_finished',
+                self.event('bounded_motion_batch_finished',source='runtime',
                     status=(result or {}).get('status','INTERRUPTED'))
 
     def finalize_result(self, value, before, observation_before, call):
