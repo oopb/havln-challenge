@@ -197,6 +197,12 @@ class AgentRuntime(ToolExecutor):
 
     def _resume_cruise(self, waypoint_id, max_atomic_steps):
         """Convert a previously selected local waypoint into a cruise intent."""
+        attempt=getattr(self.memory,'active_attempt',None) or {}
+        if (self.active_waypoint_id==waypoint_id
+                and attempt.get('unknown_motion_seen')):
+            return dict(status='REQUIRES_ATTENTION',
+                reason='cannot_cruise_on_unregistered_translation',
+                suggestion='select_a_new_local_route_from_current_rgbd')
         return self._navigate_local(waypoint_id, max_atomic_steps)
 
     def _cruise_continuable(self, result, executed_since=None):
@@ -855,6 +861,9 @@ class AgentRuntime(ToolExecutor):
 
     def terminate(self, reason, model_requested=False):
         self.assert_owner()
+        self.cruise_intent=None
+        if self.navigation_mode=='CRUISE':
+            self.set_navigation_mode('OBSERVE','episode_terminated')
         self.finish_reason = ('goal_completed' if reason == 'goal_completed' else
             'action_budget_exhausted' if reason == 'action_budget_exhausted' else
             'navigation_no_new_evidence' if reason == 'navigation_no_new_evidence' else
