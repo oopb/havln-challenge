@@ -50,6 +50,26 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("LOOK_DOWN and assess/ground the entrance", client.system)
         self.assertTrue(client.kwargs["retry_safe"])
 
+    def test_scan_stagnation_injects_actionable_route_focus_without_force_move(self):
+        client=CapturingClient(dict(tool='inspect_geometry',args={}))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value={'inspect_geometry':dict(
+                parameters=dict(type='object',properties={},
+                                required=[],additionalProperties=False),
+                description='Inspect live geometry',permission='READ_ONLY')}),
+            memory=SimpleNamespace(keyframes={}))
+        with patch('havln_agent.navigation_agent.navigation_context',
+            return_value=dict(
+                exploration_feedback=dict(scan_dominated_without_translation=True),
+                target_identity_review=dict(candidates=[
+                    dict(observation_id='o7',target='distant doorway')]))):
+            NavigationAgent(runtime).decide()
+        self.assertIn('EXECUTION-FOCUS REVIEW',client.system)
+        self.assertIn('TARGET CONTINUITY',client.system)
+        self.assertIn('compare_views',client.system)
+        self.assertIn('executor will validate fresh public RGB-D',client.system)
+        self.assertNotIn('you MUST move forward',client.system)
+
     def test_task_review_only_updates_semantic_description(self):
         client=CapturingClient(dict(intent='continue',subgoal='Descend stairs'))
         goal=dict(action='Descend to the bottom of the stairs',

@@ -178,6 +178,75 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(result['exploration']['motion_authorized'])
         runtime._step.assert_not_called()
 
+    def test_repeated_camera_sweep_without_recent_block_uses_zero_actions(self):
+        # Batch4-2/3 repeatedly turned through already seen absolute views
+        # even without any recent measured obstacle.
+        self.mem.tool_ledger=[]
+        runtime=self.agent()
+        result=runtime._turn_and_observe(-30,'none')
+        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(result['reason'],'repeated_camera_sector_without_new_view')
+        self.assertEqual(result['scan']['new_information_ids'],[])
+        runtime._step.assert_not_called()
+
+    def test_in_place_language_turn_is_not_mistaken_for_wasteful_exploration(self):
+        self.mem.tool_ledger=[]
+        self.mem.task.subgoals[0]['action']='Turn right in place'
+        runtime=self.agent()
+        seen=iter([dict(observation_id='r1',new_visual_information=False),
+                   dict(observation_id='r2',new_visual_information=False)])
+        runtime._step=Mock(side_effect=lambda action: (
+            setattr(runtime.memory,'current',next(seen)) or dict(status='EXECUTED')))
+        result=runtime._turn_and_observe(-30,'none')
+        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(runtime._step.call_count,2)
+
+    def test_intentional_turn_to_previously_seen_direction_still_allowed(self):
+        self.mem.tool_ledger=[]
+        runtime=self.agent()
+        seen=iter([dict(observation_id='known1',new_visual_information=False),
+                   dict(observation_id='known2',new_visual_information=False)])
+        def turn(action):
+            runtime.memory.current=next(seen)
+            return dict(status='EXECUTED')
+        runtime._step=Mock(side_effect=turn)
+        value=runtime._turn_and_observe(-30,'none',purpose='intentional_recheck')
+        self.assertEqual(value['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(runtime._step.call_count,2)
+
+    def test_navigation_context_retains_verification_and_target_identity(self):
+        self.mem.actions.extend([dict(action='TURN_RIGHT',step=i) for i in range(6,15)])
+        for idx in range(4):
+            self.mem.tool_ledger.append(dict(call_id='no_view_'+str(idx),
+                call=dict(tool='turn_and_observe'),
+                result=dict(status='NO_NEW_INFORMATION',
+                            reason='scan_completed_without_new_static_view')))
+        self.mem.events=[dict(event='progress_checked',step=12,
+            result=dict(status='INSUFFICIENT_EVIDENCE',subgoal=0,
+                missing=['Need a current view of landing'],
+                evidence_details=dict(model_verdict='IN_PROGRESS',
+                    next_evidence_action='Move to a distinct landing view')))]
+        self.mem.groundings=[dict(status='PARTIAL',
+            target='Original distant stair entry',
+            source=dict(subgoal=0,observation_id='obs_0090'),
+            semantic=dict(evidence='Visible steps and handrail',
+                confidence='medium',uncertainty='far edge obscured'),
+            position=dict(status='PARTIAL',bearing_degrees=16))]
+        runtime=SimpleNamespace(memory=self.mem,
+            motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),
+            active_subgoal=dict(action='descend',target='stairs'),
+            active_waypoint_id=None,pitch_deg=-60,
+            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
+            config=dict(max_steps=150,max_scene_age_seconds=300),paths={})
+        with patch('havln_agent.contexts.turn_evidence',return_value=dict(requirement=None)):
+            output=navigation_context(runtime)
+        self.assertTrue(output['exploration_feedback']['scan_dominated_without_translation'])
+        self.assertEqual(output['verification_followup']['model_verdict'],'IN_PROGRESS')
+        self.assertEqual(output['target_identity_review']['historical_observation_ids'],
+                         ['obs_0090'])
+        self.assertEqual(output['target_identity_review']['consistency'],
+                         'UNVERIFIED_UNLESS_CROSS_VIEW_IDENTITY_EVIDENCE')
+
     def test_runtime_allows_unseen_heading_after_obstacle(self):
         runtime=self.agent()
         states=iter([dict(observation_id='new1',new_visual_information=True),

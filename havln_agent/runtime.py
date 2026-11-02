@@ -11,7 +11,7 @@ import time
 
 from .observation import array_hash
 from .grounding import project_grounding
-from .progress import current_visual_evidence, stair_motion_direction
+from .progress import current_visual_evidence, stair_motion_direction, turn_requirement
 from .motion import registered_action
 from .tools import ToolExecutor
 from .safety import forward_probe
@@ -282,45 +282,37 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
         if len(actions)>self.config['max_steps']-1-len(self.memory.actions):
             return dict(status='BUDGET_LIMIT',reason='whole_batch_exceeds_remaining_action_budget')
-        # Post-collision, do not spend action budget replaying the same
-        # absolute camera orientations with no new RGB-D evidence.
-        if last_block(self.memory,self.motion_controller.pose()):
+        # A static EXPLORE camera sweep is redundant when ALL its absolute
+        # RGB-D viewpoints are already documented at this stance. This applies
+        # even without a previous BLOCKED route: batch4-2/3 spent dozens of
+        # TURN actions re-visiting old views. A model-directed dynamic recheck
+        # or an intentional physical turn is still allowed without a timer.
+        # Movement to a previously observed heading should instead use
+        # navigate_relative/navigate_local with new per-step depth validation.
+        # A requested in-place orientation change is itself the semantic
+        # action, not an exploration sweep. Even if this camera heading was
+        # viewed before, the model can intentionally rotate to satisfy it.
+        current_goal=(self.memory.task.subgoals[
+            self.memory.task.current_subgoal_index]
+            if self.memory.task.current_subgoal_index<len(self.memory.task.subgoals)
+            else {})
+        semantic_turn=turn_requirement(current_goal) is not None
+        if purpose=='explore' and not semantic_turn:
             planned=predicted_scan(self.memory,self.motion_controller.pose(),
                 relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
             if not planned['new_view_expected']:
                 exploration=local_coverage(self.memory,self.motion_controller.pose(),
                     self.camera.turn_angle,round(360/self.camera.turn_angle))
-                # Turning to a formerly executable heading can still be useful
-                # for a NEW live revalidation, even if that view is old.
-                endpoint=planned['already_visited'][-1] if planned['already_visited'] else {}
-                previous=covered_view(self.memory.observations,self.motion_controller.pose(),
-                    self.memory.task.current_subgoal_index,
-                    endpoint.get('heading_deg',0),endpoint.get('pitch_deg',0),
-                    self.camera.turn_angle)
-                previously_free=any(d.get('angle_degrees')==0 and
-                    d.get('motion_state')=='EXECUTABLE'
-                    for d in (previous or {}).get('directions',[]))
-                dynamic_allowed=False
-                if purpose=='dynamic_recheck':
-                    # Explicit model-directed dynamic rechecks should not be
-                    # blocked by a fixed wall-clock timer.
-                    target_heading=endpoint.get('heading_deg',0)
-                    target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
-                    now=time.monotonic()
-                    previous_checks=[
-                        e for e in self.memory.events if e.get('event')=='dynamic_sector_rechecked'
-                        and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
-                        and abs(e.get('target_pitch_deg',0)-target_pitch)<1
-                        and same_stance(e.get('pose'),self.motion_controller.pose())]
-                    dynamic_allowed=True
-                if not previously_free and not dynamic_allowed and purpose != 'intentional_recheck':
-                    return dict(status='NO_NEW_INFORMATION',
-                        reason='repeated_camera_sector_after_measured_block',
-                        no_new_information_reason='all_requested_absolute_views_already_recorded',
-                        scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
-                            v['observation_id'] for v in planned['already_visited']]),
-                        exploration=exploration,
-                        suggestion='choose_unseen_absolute_heading_or_wait_for_dynamic_change_or_route_review')
+                blocked=bool(last_block(self.memory,self.motion_controller.pose()))
+                return dict(status='NO_NEW_INFORMATION',
+                    reason=('repeated_camera_sector_after_measured_block' if blocked
+                            else 'repeated_camera_sector_without_new_view'),
+                    no_new_information_reason='all_requested_absolute_views_already_recorded',
+                    scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
+                        v['observation_id'] for v in planned['already_visited']]),
+                    exploration=exploration,
+                    suggestion='choose_genuinely_new_view_or_execute_a_live_safe_short_route; '
+                               'use_intentional_recheck_or_dynamic_recheck_when_needed')
         frames = []
         novel, revisited = [], []
         for action in actions:
