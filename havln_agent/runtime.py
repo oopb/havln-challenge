@@ -249,7 +249,8 @@ class AgentRuntime(ToolExecutor):
                     or intent['waypoint_id']!=call['args'].get('waypoint_id')
                     or intent['plan_revision']!=self.plan_revision
                     or intent['subgoal_id']!=self.active_subgoal_id
-                    or call['args'].get('max_atomic_steps')!=intent['max_atomic_steps']):
+                    or not (1<=call['args'].get('max_atomic_steps',0)
+                            <=intent['max_atomic_steps'])):
                 return dict(status='STALE_TARGET',reason='cruise_authorization_invalid')
         elif self.navigation_mode=='CRUISE':
             return dict(status='STALE_TARGET',reason='cruise_requires_authorized_continuation')
