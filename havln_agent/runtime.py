@@ -24,6 +24,7 @@ from .local_exploration import (covered_view, last_block, local_coverage,
 from .navigation_agent import NavigationAgent
 from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
+from .verification_agent import VerificationAgent
 
 
 class AgentRuntime(ToolExecutor):
@@ -44,6 +45,7 @@ class AgentRuntime(ToolExecutor):
         self.task_planner = TaskPlanner(self)
         self.navigation_agent = NavigationAgent(self)
         self.visual_perception = VisualPerception(self)
+        self.verification_agent = VerificationAgent(self)
         self.observation_controller = ObservationController(self)
         self._authorized_action = False
         # Pitch changes only after a successful public environment receipt.
@@ -681,6 +683,16 @@ class AgentRuntime(ToolExecutor):
 
     def _query_task_memory(self, **args):
         return dict(status='OK', memory=self.memory.query_task_memory(**args))
+
+    def _update_progress(self, claim, evidence, observation_ids):
+        # Semantic completion is decided by a separate read-only model that
+        # retrieves historical evidence. Runtime authenticates references and
+        # remains the only writer of VERIFIED milestones.
+        self.refresh()
+        result = self.verification_agent.verify(claim, evidence, observation_ids)
+        if result['completion_confirmed']:
+            self._cancel_local_navigation('verified_language_goal_completed')
+        return result
 
     def _verify_subgoal(self, claim, evidence, observation_ids):
         value = self._update_progress(claim, evidence, observation_ids)
