@@ -128,6 +128,11 @@ class VerificationAgentTests(unittest.TestCase):
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
         self.assertIn('terminal_observation_outside_cited_motion_epoch',result['missing'])
 
+    def test_odometry_pair_must_share_motion_epoch(self):
+        rt=fake_runtime([reply()],observations=[obs(0),obs(1,epoch=1)])
+        result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
+        self.assertIn('move_observation_pair_crosses_motion_epoch:0',result['missing'])
+
     def test_unknown_interior_forward_breaks_composed_displacement(self):
         rt=fake_runtime([reply(steps=[0,2],ids=['o0','o3'],terminal='o3')],
             actions=[action(0),action(1,'UNKNOWN'),action(2)],
