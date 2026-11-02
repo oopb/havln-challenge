@@ -17,6 +17,7 @@ on:
       - "tests/test_motion_consensus.py"
       - "tests/test_compact_diagnostics.py"
       - "tests/test_observe_move_cycle.py"
+      - "tests/test_cruise_scheduler.py"
       - "tests/test_auto_archive.py"
       - "tests/test_batch_evaluation.py"
       - "tests/test_batch_worker_failure_diagnostics.py"
@@ -73,8 +74,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
       - name: Check compact diagnostic packaging
         run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
-      - name: Check OBSERVE/MOVE cycle and memory
+      - name: Check OBSERVE/CRUISE state transitions and memory
         run: python -m unittest discover -s tests -p 'test_observe_move_cycle.py' -v
+      - name: Check no-LLM finite cruise scheduler continuation
+        run: python -m unittest discover -s tests -p 'test_cruise_scheduler.py' -v
       - name: Check automatic diagnostic archive
         run: python -m unittest discover -s tests -p 'test_auto_archive.py' -v
       - name: Check multi-process batch scheduling and terminal-log toggle

@@ -89,6 +89,39 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertEqual([a['action'] for a in r.memory.actions].count('MOVE_FORWARD'),2)
         self.assertEqual([a['action'] for a in r.memory.actions].count('TURN_RIGHT'),1)
 
+    def test_cruise_yields_on_registered_motion_opposite_to_task(self):
+        r=runtime()
+        r.navigation_mode='CRUISE'
+        r.semantic_motion_policy='DESCEND_STAIRS'
+        motion=dict(status='ESTIMATED',vertical_motion='UP',
+            translation_m=dict(x_right=0.,y_up=.12,z_forward=.25),
+            uncertainty_m=.01)
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            result=r._navigate_relative(0,.75,3)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],
+            'cruise_motion_direction_disagrees_with_semantic_goal')
+        self.assertEqual(result['observed_vertical_motion'],'UP')
+        self.assertEqual(len(r.memory.actions),1)
+        self.assertEqual(r.memory.actions[0]['action'],'MOVE_FORWARD')
+        self.assertTrue(r.memory.actions[0]['result']['semantic_direction_mismatch'])
+        self.assertIsNone(r.motion_controller.target)
+
+    def test_cruise_ends_on_first_unknown_forward_even_when_batch_has_room(self):
+        r=runtime()
+        r.navigation_mode='CRUISE'
+        unknown=dict(status='UNKNOWN',reason='motion_estimate_unknown')
+        with patch('havln_agent.tools.estimate_translation',return_value=unknown):
+            result=r._navigate_relative(0,1.,6)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],
+            'cruise_unregistered_forward_requires_model_reanchor')
+        self.assertEqual(len(r.memory.actions),1)
+        self.assertEqual(r.memory.actions[0]['action'],'MOVE_FORWARD')
+        self.assertFalse(result['endpoint_estimate_valid'])
+        self.assertIsNone(result['remaining_distance'])
+        self.assertTrue(result['requires_model_route_decision'])
+
     def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
         r=runtime()
         unknown=dict(status='UNKNOWN',

@@ -1,13 +1,33 @@
-# OBSERVE → MOVE navigation
+# Persistent OBSERVE ⇄ CRUISE navigation
 
-Keep TaskPlanner's original semantic milestones. The runtime's legacy
-`navigation_mode=OBSERVE` means **NavigationAgent may DECIDE**, not that it
-must turn/look or call VLM. It can immediately continue an existing waypoint,
-choose `navigate_relative`/`navigate_to_pixel`, request a directed visual
-question or provisionally select another unverified milestone. Each movement
-batch allows the agent to request up to six atomic actions; the runtime
-rechecks live safety before every forward step and returns a resumable
-waypoint ID. No separate strategic route planner overrides NavigationAgent.
+Two distinct strategies are supported. `OBSERVE` is a NavigationAgent
+planning/observation checkpoint, **not** an obligation to turn or call VLM.
+`CRUISE` is a persistent, explicitly authorized **finite local waypoint**,
+not a second LLM planner. Only NavigationAgent creates the route:
+
+- `start_cruise(turn_deg, distance_m, max_atomic_steps)`: choose a new
+  calibrated relative turn plus 0.25–3.0 m segment.
+- `resume_cruise(waypoint_id, max_atomic_steps)`: explicitly authorize
+  continuous execution of an existing still-valid waypoint.
+- Regular `navigate_relative`, `navigate_to_pixel`, and `navigate_local`
+  remain single bounded batches and return to OBSERVE.
+
+Once CRUISE is active, scheduler executes `navigate_local` on **the exact same
+waypoint**, in repeated batches limited to the Agent-selected 1–6 atomic
+actions. There are **no extra NavigationAgent or VisualPerception requests**
+between batches. Each actual MOVE_FORWARD still gets independent live RGB-D,
+body-depth, people and terrain validity checks. There is no automatic route
+selection, target extension, goal verification, or subgoal change.
+
+CRUISE yields to OBSERVE when the finite waypoint completes, physical
+collision or missing view blocks it, odometry becomes uncertain, execution is
+interrupted, task authorization changes, or a batch produces a net-zero
+turn-only steering cycle. It never assumes an UNKNOWN displacement was 0.25 m.
+
+The model decides when to **enter** CRUISE and which bounded route it means.
+The physical executor decides only whether it remains safe/legal to honor
+that previously authorized route. On any interruption the Agent may inspect
+the new evidence, create a detour, resume a valid route, or change subgoals.
 
 ## Execution
 
@@ -21,10 +41,11 @@ waypoint ID. No separate strategic route planner overrides NavigationAgent.
 4. Repeat until the independent progress verifier confirms the current
    semantic subgoal. TaskPlanner `continue` reviews do not cancel the waypoint.
 
-The `navigation_mode` field and `navigation_mode_changed` events appear in
-state/trace logs. OBSERVE allows any legal agent-selected tool, including immediate movement;
-the literal mode name is a historical API label, not a sensor-scan mandate. MOVE does not
-make an extra NavigationAgent model request.
+The `navigation_mode` and `cruise_intent` fields and
+`navigation_mode_changed`, `cruise_progress`, and `cruise_batch_requested`
+events appear in state/trace logs. One authorizing model decision may execute
+multiple physically validated batches. Normal one-batch MOVE remains supported
+for brief exploratory attempts.
 
 ## Memory
 

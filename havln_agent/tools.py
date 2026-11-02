@@ -185,7 +185,7 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
-        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel'):
+        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel','start_cruise','resume_cruise'):
             turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
             forwards=actions.count('MOVE_FORWARD')
             pending=bool(result.get('pending_target') is not None or
@@ -697,6 +697,21 @@ class ToolExecutor:
                 if attempt:
                     attempt['forward_actions'] += 1
                 alert = result['feedback'].get('motion_alert') or {}
+                # The model owns the route, but continuous CRUISE must hand
+                # control back on freshly measured semantic-direction conflict.
+                # Do not keep moving uphill on an explicitly downward goal
+                # merely because the local depth ahead remains clear.
+                # Ordinary single-batch navigation still reports the mismatch
+                # to the model as evidence without an automatic route policy.
+                if (getattr(self,'navigation_mode','OBSERVE')=='CRUISE'
+                        and result['feedback'].get('semantic_direction_mismatch')):
+                    return self._navigation_feedback(path,checked,
+                        'REQUIRES_ATTENTION',
+                        'cruise_motion_direction_disagrees_with_semantic_goal',
+                        observed_vertical_motion=(result['feedback'].get(
+                            'rgbd_motion') or {}).get('vertical_motion'),
+                        semantic_direction_mismatch=True,
+                        requires_model_route_decision=True)
                 if not result['feedback']['translation_supported']:
                     # Register uncertainty BEFORE any early interruption.
                     # _navigation_feedback reads unknown_motion_seen to avoid
@@ -706,6 +721,16 @@ class ToolExecutor:
                         attempt['unknown_observation_ids'].append(
                             self.memory.current['observation_id'])
                     self.executable_segment = None
+                    if getattr(self,'navigation_mode','OBSERVE')=='CRUISE':
+                        # A long-lived cruise must NOT spend the remainder of
+                        # its atomic batch moving relative to an unregistered
+                        # pose. Yield immediately to model-owned reanchoring.
+                        return self._navigation_feedback(path,checked,
+                            'REQUIRES_ATTENTION',
+                            'cruise_unregistered_forward_requires_model_reanchor',
+                            unknown_motion_observation_id=self.memory.current['observation_id'],
+                            old_endpoint_valid=False,
+                            requires_model_route_decision=True)
                 if alert and alert.get('reason') != 'motion_estimate_unknown':
                     # A byte-identical post-step camera view cannot justify a
                     # blind second forward. Yield to NavigationAgent instead

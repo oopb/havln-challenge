@@ -50,6 +50,25 @@ class ModelControlRuntimeTests(unittest.TestCase):
         self.assertEqual(tools['navigate_relative']['parameters']['properties']
                          ['max_atomic_steps']['maximum'],6)
 
+    def test_cruise_tools_are_explicit_model_authored_navigation(self):
+        tools=registry(camera(),6)
+        for tool,args in (
+            ('start_cruise',dict(turn_deg=30,distance_m=1.5,max_atomic_steps=4)),
+            ('resume_cruise',dict(waypoint_id='direct_0042',max_atomic_steps=6))):
+            with self.subTest(tool=tool):
+                self.assertEqual(tools[tool]['permission'],'NAVIGATION')
+                proposal=dict(tool=tool,args=args,
+                    decision_reason='Move along the task-aligned local segment')
+                self.assertFalse(list(Draft7Validator(
+                    navigation_schema(tools)).iter_errors(proposal)))
+        invalid=dict(tool='start_cruise',args=dict(
+            turn_deg=0,distance_m=3.25,max_atomic_steps=4))
+        self.assertTrue(list(Draft7Validator(
+            navigation_schema(tools)).iter_errors(invalid)))
+        invalid['args']=dict(turn_deg=0,distance_m=1.5,max_atomic_steps=7)
+        self.assertTrue(list(Draft7Validator(
+            navigation_schema(tools)).iter_errors(invalid)))
+
     def test_model_direct_motion_creates_resumable_route_without_candidates(self):
         r=direct_runtime()
         result=r._navigate_relative(turn_deg=45,distance_m=2.,max_atomic_steps=3)
