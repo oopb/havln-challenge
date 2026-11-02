@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import numpy as np
 from jsonschema import Draft7Validator
 
-from havln_agent.contracts import registry
+from havln_agent.contracts import registry, navigation_schema, navigation_envelope
 from havln_agent.runtime import AgentRuntime
 from havln_agent.perception import Camera, Geometry, Observation
 from havln_agent.spatial import relative_goal
@@ -40,6 +40,16 @@ def direct_runtime():
 
 
 class ModelControlRuntimeTests(unittest.TestCase):
+    def test_optional_agent_reason_accepts_strategy_without_hardcoded_policy(self):
+        tools=registry(camera(),6)
+        call=dict(tool='navigate_relative',args=dict(
+            turn_deg=0,distance_m=1.5,max_atomic_steps=6),
+            decision_reason='The current visible corridor offers a task-directed, short safe approach.')
+        self.assertFalse(list(Draft7Validator(navigation_schema(tools)).iter_errors(call)))
+        self.assertFalse(list(Draft7Validator(navigation_envelope(tools)).iter_errors(call)))
+        self.assertEqual(tools['navigate_relative']['parameters']['properties']
+                         ['max_atomic_steps']['maximum'],6)
+
     def test_model_direct_motion_creates_resumable_route_without_candidates(self):
         r=direct_runtime()
         result=r._navigate_relative(turn_deg=45,distance_m=2.,max_atomic_steps=3)
