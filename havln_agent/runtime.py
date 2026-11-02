@@ -701,10 +701,16 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='already_active_subgoal')
         if subgoal_index in task.completed_subgoals:
             return dict(status='INVALID_ARGUMENTS',reason='cannot_revisit_verified_subgoal')
+        # Navigation strategy is model-owned: it may pursue ANY unverified
+        # milestone when environmental evidence warrants a detour, even if
+        # earlier goals have not been visited yet. This does not change the
+        # original milestone list, ordering requirements or the final proof:
+        # request_finish(success) still requires independent VERIFIED evidence
+        # for every original goal.
         prior_seen = {int(k) for k in task.subgoal_start_steps}
-        if subgoal_index not in prior_seen and subgoal_index != previous + 1:
-            return dict(status='INVALID_ARGUMENTS',
-                        reason='cannot_skip_unvisited_ordered_milestones')
+        bypassed=[i for i in range(count)
+            if i != subgoal_index and i not in task.completed_subgoals
+            and i not in prior_seen]
         known = {o['observation_id'] for o in self.memory.observations}
         if not set(observation_ids) <= known:
             return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
@@ -716,7 +722,9 @@ class AgentRuntime(ToolExecutor):
         task.provisional_transitions.append(dict(from_subgoal=previous,
             to_subgoal=subgoal_index,reason=reason,observation_ids=observation_ids,
             step=len(self.memory.actions),verified=False,
-            evidence_scope='navigation_strategy_not_completion_certification'))
+            evidence_scope='navigation_strategy_not_completion_certification',
+            bypassed_unverified_subgoal_indices=bypassed,
+            original_task_order_unchanged=True))
         task.current_subgoal_index = subgoal_index
         task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
         task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
@@ -733,6 +741,8 @@ class AgentRuntime(ToolExecutor):
         return dict(status='OK',current_subgoal_index=subgoal_index,
             previous_subgoal_index=previous,
             selection='PROVISIONAL_UNVERIFIED',
+            bypassed_unverified_subgoal_indices=bypassed,
+            original_task_order_unchanged=True,
             unverified_subgoals=[i for i in range(count)
                 if i not in task.completed_subgoals],
             reason=reason,
