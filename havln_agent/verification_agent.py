@@ -12,7 +12,7 @@ from .api_client import APIError, BudgetExceeded, TEXT, object_schema
 from .motion import registered_action
 from .progress import registered_motion_history
 
-MAX_ROUNDS = 5
+MAX_ROUNDS = 7
 VERIFICATION_SCHEMA = object_schema(dict(
     operation=dict(enum=['inspect_history', 'inspect_frames', 'inspect_records', 'verdict']),
     start_step=dict(type='integer', minimum=0),
@@ -137,7 +137,14 @@ class VerificationAgent:
         task = memory.task
         index = task.current_subgoal_index
         observed = {v['observation_id']: v for v in memory.observations}
+        # Complete compact chronological manifest for context size, with
+        # detailed measured FORWARD receipts. Turn and look receipts can be
+        # expanded by inspect_history without sending huge payloads every round.
         actions = [_action_row(a,observed) for a in memory.actions]
+        manifest=[dict(step=a['step'],action=a['action'],
+            subgoal=a['subgoal'],motion_epoch=a['motion_epoch']) for a in actions]
+        detailed=[a for a in actions if a['action']=='MOVE_FORWARD'
+                  or a['step']>=len(memory.actions)-8]
         goal = task.subgoals[index]
         scenes = []
         for entry in getattr(memory, 'scene_history', []):
@@ -159,7 +166,10 @@ class VerificationAgent:
             proposed_observation_ids=requested_ids,
             current_observation_id=(memory.current or {}).get('observation_id'),
             current_motion_epoch=((memory.current or {}).get('pose') or {}).get('motion_epoch'),
-            history_actions=actions,  # complete indexed motion record, never a recent-only window
+            history_action_manifest=manifest,
+            history_actions=detailed,
+            history_action_detail_scope='all_forward_receipts_plus_recent_eight_actions; '
+                'inspect_history(start_step) expands every action in any 40-step window',
             registered_history={k: v for k,v in registered_motion_history(memory).items()
                                 if k != 'rows'},
             observation_index=[dict(observation_id=o['observation_id'],
@@ -259,7 +269,14 @@ class VerificationAgent:
                 if not registered_action(action,observed):
                     errors.append('unregistered_motion_step:'+str(step))
                 else:
-                    registered.append(action)
+                    epoch=(action.get('pose') or {}).get('motion_epoch',0)
+                    before=observed.get((action.get('result') or {}).get('observation_before')) or {}
+                    after=observed.get((action.get('result') or {}).get('observation_after')) or {}
+                    if (before.get('pose',{}).get('motion_epoch',0)!=epoch
+                            or after.get('pose',{}).get('motion_epoch',0)!=epoch):
+                        errors.append('move_observation_pair_crosses_motion_epoch:'+str(step))
+                    else:
+                        registered.append(action)
             elif action['action'].startswith('TURN_'):
                 if not (action.get('result') or {}).get('visual_change'):
                     errors.append('turn_without_observed_change:'+str(step))
