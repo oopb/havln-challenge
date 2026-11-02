@@ -231,7 +231,7 @@ def navigation_context(runtime):
         and a.get('evidence_state')=='motion_verified'), default=-1)
     movement_calls=[entry for entry in reversed(memory.tool_ledger)
         if (entry.get('call') or {}).get('tool') in
-            ('navigate_local','navigate_relative','navigate_to_pixel')]
+            ('navigate_local','navigate_relative','navigate_to_pixel','start_cruise','resume_cruise')]
     latest_movement=(movement_calls[0]['result'] if movement_calls else {})
     latest_movement_summary=tool_summary(latest_movement) if latest_movement else None
     movement_outcome=(latest_movement.get('movement_intent_feedback') or {})
@@ -395,6 +395,14 @@ def navigation_context(runtime):
             direct_segment_max_m=3.0),
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
+        cruise_state=dict(
+            active=getattr(runtime,'navigation_mode','OBSERVE')=='CRUISE',
+            intent=fields(getattr(runtime,'cruise_intent',None) or {},(
+                'waypoint_id','max_atomic_steps','decision_reason',
+                'authorized_at_step','subgoal_id','initial_tool')),
+            mode_switch_authority='navigation_agent_explicit_start_or_resume',
+            continuation_scope='same_finite_waypoint_only_live_RGBD_safety',
+            return_to_observe_on='target_reached_or_blocked_or_unknown_or_interrupted'),
         navigation_memory=navigation_memory,
         decision_feedback=decision_feedback,
         exploration_feedback=exploration_feedback,
