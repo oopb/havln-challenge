@@ -50,7 +50,7 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("LOOK_DOWN and assess/ground the entrance", client.system)
         self.assertTrue(client.kwargs["retry_safe"])
 
-    def test_scan_stagnation_injects_actionable_route_focus_without_force_move(self):
+    def test_agent_strategy_authority_is_not_an_threshold_driven_script(self):
         client=CapturingClient(dict(tool='inspect_geometry',args={}))
         runtime=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value={'inspect_geometry':dict(
@@ -64,10 +64,13 @@ class PromptContractTests(unittest.TestCase):
                 target_identity_review=dict(candidates=[
                     dict(observation_id='o7',target='distant doorway')]))):
             NavigationAgent(runtime).decide()
-        self.assertIn('EXECUTION-FOCUS REVIEW',client.system)
+        self.assertIn('STRATEGY AUTHORITY',client.system)
+        self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
+        self.assertIn('you alone own strategic navigation choices',client.system.lower())
         self.assertIn('TARGET CONTINUITY',client.system)
         self.assertIn('compare_views',client.system)
-        self.assertIn('executor will validate fresh public RGB-D',client.system)
+        self.assertIn('RGB-D',client.system)
+        self.assertIn('All legal model-requested observations execute',client.system)
         self.assertNotIn('you MUST move forward',client.system)
 
     def test_task_review_only_updates_semantic_description(self):
