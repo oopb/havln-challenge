@@ -239,8 +239,8 @@ class ActiveObservationTests(unittest.TestCase):
         self.assertEqual(kwargs['result_schema'],SEARCH_SCHEMA)
         self.assertIn('Do not infer metric distance',args[2])
 
-    def test_exact_recent_scan_is_idempotent_without_extra_turns(self):
-        r=FakeRuntime([visual()])
+    def test_identical_recent_scan_is_model_choice_not_a_hidden_veto(self):
+        r=FakeRuntime([visual(),visual()])
         first=ObservationController(r).scan(
             'Find a corridor',['corridor'],'left',30)
         self.assertEqual(first['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
@@ -248,14 +248,15 @@ class ActiveObservationTests(unittest.TestCase):
         r.heading=2*math.pi  # heading wrap is same pose
         second=ObservationController(r).scan(
             'Find a corridor',['corridor'],'left',30)
-        self.assertEqual(second['outcome'],'REPEATED_SEARCH_NO_NEW_VIEW')
-        self.assertEqual(second['status'],'NO_NEW_INFORMATION')
-        self.assertEqual(second['covered_turn_deg'],0)
+        self.assertEqual(second['outcome'],'SEARCH_REGION_COVERED_NO_MATCH')
+        self.assertEqual(second['covered_turn_deg'],30)
         self.assertFalse(second['usable_for_live_safety'])
-        self.assertEqual(len(r.step_calls),2)
-        self.assertEqual(len(r.visual_perception.calls),1)
-        self.assertEqual(len(r.memory.observation_searches),1)
-        # A meaningful translation invalidates the former view coverage.
+        self.assertEqual(len(r.step_calls),4)
+        self.assertEqual(len(r.visual_perception.calls),2)
+        self.assertEqual(len(r.memory.observation_searches),2)
+        self.assertEqual(second['observation_advisory']['decision_authority'],
+                         'navigation_agent')
+        self.assertIn('identical_recent_scan',second['observation_advisory'])
         self.assertFalse(comparable_scan_pose(
             dict(r.pose(),x=.25),r.pose()))
 
