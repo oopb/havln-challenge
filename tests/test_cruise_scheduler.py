@@ -113,7 +113,7 @@ class CruiseSchedulerTests(unittest.TestCase):
         run(rt,lambda role,event:None)
         rt.execute.assert_called_once()
         rt.navigation_agent.decide.assert_not_called()
-        rt.terminate.assert_called_once_with('action_budget_exhausted')
+        rt.terminate.assert_called_once_with('navigation_inference_budget_exhausted')
         self.assertEqual(len(memory.actions),23)
 
     def test_rejected_cruise_batch_hands_back_to_model(self):
