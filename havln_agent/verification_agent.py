@@ -12,23 +12,31 @@ from .motion import registered_action
 from .progress import registered_motion_history
 
 MAX_ROUNDS = 7
-VERIFICATION_SCHEMA = object_schema(dict(
-    operation=dict(enum=['inspect_history', 'inspect_frames', 'inspect_records', 'verdict']),
-    start_step=dict(type='integer', minimum=0),
-    observation_ids=dict(type='array', maxItems=4, uniqueItems=True, items=TEXT),
-    record_ids=dict(type='array', maxItems=4, uniqueItems=True, items=TEXT),
-    question=dict(type='string', maxLength=1000),
-    verdict=dict(enum=['COMPLETED', 'IN_PROGRESS', 'UNKNOWN', 'CONTRADICTED']),
-    supported=dict(type='array', maxItems=12, items=TEXT),
-    missing=dict(type='array', maxItems=12, items=TEXT),
-    contradictions=dict(type='array', maxItems=8, items=TEXT),
-    cited_observation_ids=dict(type='array', maxItems=24, uniqueItems=True, items=TEXT),
-    cited_action_steps=dict(type='array', maxItems=48, uniqueItems=True,
-                            items=dict(type='integer', minimum=0)),
-    terminal_observation_id=TEXT,
-    reasoning=dict(type='string', maxLength=2000),
-    next_evidence_action=dict(type='string', maxLength=300),
-))
+# Disjoint schemas: inspection requests should not transmit empty verdict
+# fields on every round; the final response contains only a cited verdict.
+VERIFICATION_SCHEMA = dict(oneOf=[
+    object_schema(dict(operation=dict(const='inspect_history'),
+                       start_step=dict(type='integer',minimum=0))),
+    object_schema(dict(operation=dict(const='inspect_frames'),
+                       observation_ids=dict(type='array',minItems=1,maxItems=4,
+                                            uniqueItems=True,items=TEXT),
+                       question=dict(type='string',minLength=1,maxLength=1000))),
+    object_schema(dict(operation=dict(const='inspect_records'),
+                       record_ids=dict(type='array',minItems=1,maxItems=4,
+                                       uniqueItems=True,items=TEXT))),
+    object_schema(dict(
+        operation=dict(const='verdict'),
+        verdict=dict(enum=['COMPLETED','IN_PROGRESS','UNKNOWN','CONTRADICTED']),
+        supported=dict(type='array',maxItems=12,items=TEXT),
+        missing=dict(type='array',maxItems=12,items=TEXT),
+        contradictions=dict(type='array',maxItems=8,items=TEXT),
+        cited_observation_ids=dict(type='array',maxItems=24,uniqueItems=True,items=TEXT),
+        cited_action_steps=dict(type='array',maxItems=48,uniqueItems=True,
+                                items=dict(type='integer',minimum=0)),
+        terminal_observation_id=TEXT,
+        reasoning=dict(type='string',minLength=1,maxLength=2000),
+        next_evidence_action=dict(type='string',maxLength=300)))
+])
 
 PROMPT = (
     'You are VerificationAgent, a separate, skeptical evaluator of an arbitrary '
@@ -69,8 +77,9 @@ PROMPT = (
     'language-based arrival. Never cite an action from a different milestone as its '
     'sole proof. If you report COMPLETED, give a concise evidence-based '
     'explanation of how the goal was achieved. Output one schema-valid JSON '
-    'object on every round. Use the fields required by the schema even when '
-    'they are empty. The verifier is READ-ONLY.'
+    'object on every round. For inspect operations return only the operation '
+    'and its required parameters; for verdict return only the verdict schema. '
+    'The verifier is READ-ONLY.'
 )
 
 
