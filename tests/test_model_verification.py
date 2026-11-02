@@ -3,8 +3,9 @@ import copy
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
+from jsonschema import Draft7Validator
 
-from havln_agent.verification_agent import VerificationAgent
+from havln_agent.verification_agent import VerificationAgent, VERIFICATION_SCHEMA
 from havln_agent.tools import ToolExecutor
 
 
@@ -30,14 +31,21 @@ def action(i, state='ESTIMATED', epoch=0):
                     after_depth_hash='depth%d'%(i+1)))))
 
 
-def reply(operation='verdict',verdict='COMPLETED',steps=None,ids=None,terminal='o1'):
-    return dict(operation=operation,start_step=0,observation_ids=[],
-        record_ids=[],question='',verdict=verdict,
+def reply(operation='verdict',verdict='COMPLETED',steps=None,ids=None,terminal='o1',
+          proof_basis='ACTION_TRANSITION'):
+    if operation=='inspect_history':
+        return dict(operation=operation,start_step=0)
+    if operation=='inspect_frames':
+        return dict(operation=operation,observation_ids=['o0'],
+                    question='What changed?')
+    if operation=='inspect_records':
+        return dict(operation=operation,record_ids=['ground_0000'])
+    return dict(operation='verdict',verdict=verdict,proof_basis=proof_basis,
         supported=['physical_and_visual_milestone_reached'],missing=[],
         contradictions=[],cited_observation_ids=ids if ids is not None else ['o0','o1'],
         cited_action_steps=steps if steps is not None else [0],
         terminal_observation_id=terminal,
-        reasoning='Measured movement and captured view support goal.',
+        reasoning='Measured evidence and public views support the milestone.',
         next_evidence_action='')
 
 
@@ -62,7 +70,7 @@ def fake_runtime(replies,actions=None,observations=None):
         provisional_transitions=[])
     mem=SimpleNamespace(task=task,actions=actions,observations=observations,
         groundings=[],scene_history=[dict(source=dict(observation_id='o1',
-            rgb_hash='rgb1',depth_hash='depth1'),
+            rgb_hash='rgb1',depth_hash='depth1',pose=observations[-1]['pose']),
             scene=dict(description='Door opening is now behind the robot'))],
         tool_ledger=[],current=observations[-1],
         camera=SimpleNamespace(forward_step=.25),progress_feedback=None,
@@ -84,6 +92,58 @@ class VerificationAgentTests(unittest.TestCase):
         self.assertEqual(rt.memory.task.completed_subgoals,[0])
         self.assertEqual(rt.memory.task.completion_evidence[0]['executed_steps'],[0])
         self.assertEqual(result['evidence_details']['terminal_observation_id'],'o1')
+
+    def test_compact_disjoint_verifier_schema_accepts_only_relevant_fields(self):
+        for operation in ('inspect_history','inspect_frames','inspect_records','verdict'):
+            self.assertFalse(list(Draft7Validator(VERIFICATION_SCHEMA).iter_errors(
+                reply(operation=operation))))
+        invalid=dict(reply(),extraneous_legacy_predicates=['target_nearby'])
+        self.assertTrue(list(Draft7Validator(VERIFICATION_SCHEMA).iter_errors(invalid)))
+
+    def test_visual_state_can_be_certified_without_moving(self):
+        answer=reply(steps=[],ids=['o0','o1'],proof_basis='VISUAL_STATE')
+        rt=fake_runtime([answer],actions=[])
+        rt.memory.scene_history=[
+            dict(source=dict(observation_id='o0',rgb_hash='rgb0',depth_hash='depth0',
+                             pose=rt.memory.observations[0]['pose']),
+                 scene=dict(description='person present')),
+            dict(source=dict(observation_id='o1',rgb_hash='rgb1',depth_hash='depth1',
+                             pose=rt.memory.observations[1]['pose']),
+                 scene=dict(description='person no longer present'))]
+        result=VerificationAgent(rt).verify('subgoal_completed',
+            'The watched state visibly changed',['o0','o1'])
+        self.assertEqual(result['status'],'VERIFIED')
+
+    def test_single_frame_visual_state_is_insufficient(self):
+        answer=reply(steps=[],ids=['o1'],proof_basis='VISUAL_STATE')
+        rt=fake_runtime([answer],actions=[])
+        result=VerificationAgent(rt).verify('subgoal_completed','seen',['o1'])
+        self.assertIn('visual_state_requires_two_reviewed_distinct_times',result['missing'])
+
+    def test_visual_state_requires_authentic_source_pose(self):
+        answer=reply(steps=[],ids=['o0','o1'],proof_basis='VISUAL_STATE')
+        rt=fake_runtime([answer],actions=[])
+        bad=dict(rt.memory.scene_history[0])
+        bad['source']=dict(bad['source'],pose=dict(motion_epoch=99))
+        rt.memory.scene_history=[bad]
+        result=VerificationAgent(rt).verify('subgoal_completed','seen',['o0'])
+        self.assertIn('visual_state_requires_two_reviewed_distinct_times',result['missing'])
+
+    def test_motion_claim_cannot_succeed_without_a_prior_context_frame(self):
+        answer=reply(ids=['o1'])
+        rt=fake_runtime([answer])
+        result=VerificationAgent(rt).verify('subgoal_completed','crossed',['o1'])
+        self.assertIn('action_transition_missing_before_view',result['missing'])
+
+    def test_unknown_forward_after_turn_invalidates_claimed_terminal(self):
+        turn=dict(step=0,subgoal=0,action='TURN_RIGHT',
+            pose=dict(motion_epoch=0,heading=0.),
+            result=dict(visual_change=True))
+        rt=fake_runtime([reply(steps=[0],ids=['o0','o2'],terminal='o2')],
+            actions=[turn,action(1,'UNKNOWN')],
+            observations=[obs(i) for i in range(3)])
+        result=VerificationAgent(rt).verify('subgoal_completed','entered',['o0'])
+        self.assertIn('unknown_motion_between_cited_steps',result['missing'])
 
     def test_unknown_translation_cannot_be_authenticated_by_model(self):
         rt=fake_runtime([reply()],actions=[action(0,'UNKNOWN')])
