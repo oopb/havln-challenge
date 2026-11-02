@@ -708,9 +708,8 @@ class AgentRuntime(ToolExecutor):
         # request_finish(success) still requires independent VERIFIED evidence
         # for every original goal.
         prior_seen = {int(k) for k in task.subgoal_start_steps}
-        bypassed=[i for i in range(count)
-            if i != subgoal_index and i not in task.completed_subgoals
-            and i not in prior_seen]
+        bypassed=[i for i in range(subgoal_index)
+            if i not in task.completed_subgoals and i not in prior_seen]
         known = {o['observation_id'] for o in self.memory.observations}
         if not set(observation_ids) <= known:
             return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
