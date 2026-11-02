@@ -126,7 +126,7 @@ class VerificationAgentTests(unittest.TestCase):
     def test_cross_epoch_terminal_frame_is_not_valid_metric_endpoint(self):
         rt=fake_runtime([reply()],observations=[obs(0),obs(1,epoch=1)])
         result=VerificationAgent(rt).verify('subgoal_completed','I crossed',['o0'])
-        self.assertIn('terminal_observation_outside_cited_motion_epoch',result['missing'])
+        self.assertIn('move_observation_pair_crosses_motion_epoch:0',result['missing'])
 
     def test_odometry_pair_must_share_motion_epoch(self):
         rt=fake_runtime([reply()],observations=[obs(0),obs(1,epoch=1)])
