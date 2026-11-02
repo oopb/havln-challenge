@@ -133,7 +133,7 @@ def tool_summary(result):
 def planner_context(runtime):
     task=runtime.memory.task
     index=task.current_subgoal_index
-    return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','success_criteria')),
+    return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','source_text')),
         stair_replay=stair_replay_hint(runtime.memory),
         registered_motion_evidence={key:value for key,value in
             registered_motion_history(runtime.memory).items() if key!='rows'},
