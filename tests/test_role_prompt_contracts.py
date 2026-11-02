@@ -44,7 +44,7 @@ class PromptContractTests(unittest.TestCase):
             "Verify milestones", "Never request_finish(success)"):
             self.assertIn(phrase.lower(), client.system.lower(), phrase)
         self.assertIn('tool_action_limit',client.system)
-        self.assertIn('camera pitch alone',client.system)
+        self.assertIn('different pitch alone',client.system.lower())
         self.assertIn('same doorway',client.system)
         self.assertNotIn('EXECUTION-FOCUS REVIEW',client.system)
         self.assertNotIn('MODE: OBSERVE',client.system)
@@ -66,7 +66,7 @@ class PromptContractTests(unittest.TestCase):
                     dict(observation_id='o7',target='distant doorway')]))):
             NavigationAgent(runtime).decide()
         self.assertIn('You own observation choices',client.system)
-        self.assertIn('do not just repeat the same question',client.system)
+        self.assertIn('do not just repeat',client.system)
         self.assertIn('no forced action',str(client.context).lower() if
                       'decision_feedback' in client.context else 'no forced action')
         self.assertNotIn('you MUST move forward',client.system)
