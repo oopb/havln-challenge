@@ -6,7 +6,6 @@ Python authenticates cited facts before a model verdict can advance the task.
 """
 import copy
 import math
-import time
 
 from .api_client import APIError, BudgetExceeded, TEXT, object_schema
 from .motion import registered_action
@@ -301,7 +300,9 @@ class VerificationAgent:
                 if (min(a['step'] for a in moves) < action['step']
                         < (endpoint['step'] if endpoint else max(a['step'] for a in moves))
                         and action['action']=='MOVE_FORWARD'
-                        and action.get('subgoal')==index
+                        # Any unregistered forward, including one recorded
+                        # during a provisional different subgoal, breaks the
+                        # local metric chain toward the cited terminal view.
                         and not registered_action(action,observed)):
                     errors.append('unknown_motion_between_cited_steps')
                     break
