@@ -11,7 +11,7 @@ import time
 
 from .observation import array_hash
 from .grounding import project_grounding
-from .progress import current_visual_evidence, stair_motion_direction, turn_requirement
+from .progress import current_visual_evidence, stair_motion_direction
 from .motion import registered_action
 from .tools import ToolExecutor
 from .safety import forward_probe
@@ -289,15 +289,12 @@ class AgentRuntime(ToolExecutor):
         # or an intentional physical turn is still allowed without a timer.
         # Movement to a previously observed heading should instead use
         # navigate_relative/navigate_local with new per-step depth validation.
-        # A requested in-place orientation change is itself the semantic
-        # action, not an exploration sweep. Even if this camera heading was
-        # viewed before, the model can intentionally rotate to satisfy it.
-        current_goal=(self.memory.task.subgoals[
-            self.memory.task.current_subgoal_index]
-            if self.memory.task.current_subgoal_index<len(self.memory.task.subgoals)
-            else {})
-        semantic_turn=turn_requirement(current_goal) is not None
-        if purpose=='explore' and not semantic_turn:
+        # A purposeful in-place task rotation must be made explicitly with
+        # purpose=intentional_recheck. Do not exempt *all* turns during an
+        # orientation milestone: batch4-3 spent 86 atomic actions revisiting
+        # the same headings while the verifier was asking for more context.
+        # Default explore scans are deduplicated for EVERY milestone.
+        if purpose=='explore':
             planned=predicted_scan(self.memory,self.motion_controller.pose(),
                 relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
             if not planned['new_view_expected']:
