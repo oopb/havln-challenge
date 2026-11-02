@@ -34,16 +34,39 @@ class TaskPlanner:
                     raise APIError('invalid_instruction_source_ids',
                                    category='structured_field')
                 covered.update(ids)
-            if covered != set(range(1, len(sentences)+1)):
-                raise APIError('instruction_source_coverage_incomplete',
-                               category='structured_field')
+            missing = sorted(set(range(1, len(sentences)+1))-covered)
+            if missing and not format_feedback:
+                # The first failure should be precise enough for the planner
+                # to repair its own source mapping on the normal API retry.
+                raise APIError(
+                    'instruction_source_coverage_incomplete; missing_source_ids='
+                    +str(missing)+'; missing_source_sentences='
+                    +repr([sentences[i-1][:180] for i in missing]),
+                    category='structured_field')
+            if missing:
+                # If the second model attempt still omits purely narrative
+                # sentences, keep ALL original instructions in the evidence
+                # chain instead of losing the entire physical episode.
+                # This changes only source attribution, NEVER the model's
+                # milestone actions, their ordering or completion status.
+                # Downstream agents see an explicit repair marker.
+                goals = plan['subgoals']
+                for i in missing:
+                    closest=min(range(len(goals)), key=lambda j: (
+                        min(abs(i-n) for n in goals[j]['source_sentence_ids']),
+                        j))
+                    goals[closest]['source_sentence_ids']=sorted(
+                        set(goals[closest]['source_sentence_ids'])|{i})
+                plan['source_coverage_repaired_ids']=missing
 
         plan = client.complete(
             'task_planner', 'task_initial_plan',
             'Decompose the instruction into ordered semantic navigation milestones. '
             'Separate in-place turns from translation, retain location qualifiers '
             'and human activities in the correct milestone. Cite every numbered '
-            'source sentence. Return semantic goals ONLY, not success predicates, '
+            'source sentence, including descriptive and contextual sentences. '
+            'An omitted source sentence prevents using the first plan. '
+            'Return semantic goals ONLY, not success predicates, '
             'atomic actions, coordinates or waypoints. The read-only verifier '
             'decides semantic completion from actual cited evidence. Do not invent '
             'a predicate checklist or treat the plan as completion proof. '
