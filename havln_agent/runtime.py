@@ -22,7 +22,7 @@ from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
-from .task_planner import TaskPlanner, validate_conditions
+from .task_planner import TaskPlanner
 from .visual_perception import VisualPerception
 from .verification_agent import VerificationAgent
 
@@ -160,14 +160,13 @@ class AgentRuntime(ToolExecutor):
             self.task_review_requested = False
             return
         goal = task.subgoals[i]
-        criteria = list(value['success_criteria'] if value else goal['success_criteria'])
-        validate_conditions(goal, criteria, i == len(task.subgoals)-1)
         self.plan_revision += 1
         self.active_subgoal_id = 'sg_%d' % i
         description = value['subgoal'] if value else goal['action']+' '+goal['target']
-        goal.update(success_criteria=criteria, semantic_description=description)
+        goal['semantic_description'] = description
         self.active_subgoal = dict(id=self.active_subgoal_id, description=description,
-            landmark=goal['landmark'], success_criteria=criteria)
+            action=goal['action'], landmark=goal['landmark'], target=goal['target'],
+            source_text=goal.get('source_text'))
         action = goal['action']
         stair_direction = stair_motion_direction(goal)
         self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else
