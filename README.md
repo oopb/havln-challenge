@@ -86,17 +86,17 @@ For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_
 and the [v5 implementation report](docs/agent_v5_implementation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
-**Post-obstacle exploration:** A `PARTIAL` waypoint that advanced once and
-then returned `interrupted_status=BLOCKED` now retains its measured
-obstacle evidence at the actual post-action pose. Local camera coverage uses
-absolute heading, pitch, subgoal and odometry epoch to distinguish unvisited
-directions from repeated relative turns. `turn_and_observe` and
-`observe_for_goal` return `NO_NEW_INFORMATION` for redundant camera
-sweeps instead of consuming atomic actions. An intentional
-`turn_and_observe(purpose="dynamic_recheck")` can revisit a potentially
-dynamic obstruction, rate-limited by sector; all motor actions still use fresh
-Depth/body/terrain/human safety. See
-[post-obstacle exploration](docs/post_block_exploration.md).
+**Agent-owned observation and navigation (current):** A `PARTIAL` waypoint
+preserves its executed TURN/FORWARD receipt, available continuation and measured
+obstruction at the post-action pose. Camera coverage reports previously seen
+headings and `NO_NEW_INFORMATION` as **evidence**, not as an automatic veto
+on Agent-requested turns. VLM visual checkpoints do not insert extra LOOK
+actions. NavigationAgent may choose a short route of up to six atomic actions,
+resume a pending waypoint, or inspect a specific dynamic uncertainty. Each
+actual forward step still requires fresh Depth/body/terrain/human checks.
+`decision_feedback` distinguishes attempted from registered translation,
+turn-only partial routes and repeated static view costs. See
+[observe/move decision cycle](docs/observe_move_cycle.md).
 
 
 **Compact diagnostics:** Episode tracing now stores one canonical `observations/obs_XXXX.npz`
