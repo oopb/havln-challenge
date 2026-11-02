@@ -174,9 +174,10 @@ class ToolExecutor:
         if call.get('tool')=='turn_and_observe':
             requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='observe_for_goal':
-            # Upper bound: sweep TURN actions, optional initial LOOK and at
-            # most one VLM-guided pitch refinement, all counted atomically.
-            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+1+int(args.get('look','none')!='none')
+            # The VLM may suggest a new view but cannot execute additional
+            # LOOK actions. Only the agent's requested sweep and initial LOOK
+            # consume atomic actions in this observation tool.
+            requested=round(args.get('sweep_degrees',0)/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
@@ -641,9 +642,10 @@ class ToolExecutor:
             # Preserve the original selected endpoint; a checked fragment never replaces it.
             self.motion_controller.target = tuple(checked['original_target'])
             self.memory.active_attempt['original_endpoint_xz_m'] = list(self.motion_controller.target)
-            # A waypoint is at most two atomic forward steps in the current
-            # generator. A failed visual registration must never create an
-            # unlimited blind-movement budget or fake measured distance.
+            # The selected local route has a finite quantized forward
+            # horizon (including direct model-specified distances). A failed
+            # registration must never create an unlimited blind-movement
+            # budget or fake measured distance.
             self.memory.active_attempt['forward_action_horizon'] = max(1, math.ceil(
                 (path['distance'] - 1e-6) / self.camera.forward_step))
             self.memory.active_attempt['forward_actions'] = 0
