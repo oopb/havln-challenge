@@ -182,6 +182,29 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
+        if call.get('tool') in ('navigate_relative','navigate_local','navigate_to_pixel'):
+            turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
+            forwards=actions.count('MOVE_FORWARD')
+            pending=bool(result.get('pending_target') is not None or
+                         (result.get('remaining_path') or {}).get('status')=='IN_PROGRESS')
+            result['movement_intent_feedback']=dict(
+                turn_actions_executed=turns,forward_actions_executed=forwards,
+                only_turns_executed=turns>0 and forwards==0,
+                desired_forward_motion_not_yet_attempted=(
+                    turns>0 and forwards==0 and pending),
+                waypoint_pending=pending,
+                waypoint_id=result.get('waypoint_id') or (
+                    result.get('remaining_path') or {}).get('path_id'),
+                was_forward_attempted=forwards>0,
+                registered_translation_known=(
+                    'unknown' if forwards else 'no_forward_attempt'),
+                interpretation=(
+                    'turn_only_not_a_failed_forward_attempt'
+                    if turns>0 and forwards==0 else
+                    'forward_action_requires_sensor_receipts'
+                    if forwards else 'no_atomic_motion'),
+                note='Return to the agent without canceling a valid pending route; '
+                     'every subsequent MOVE still requires fresh sensor checks')
         result=self.finalize_result(result,before,observation_before,call)
         try:
             Draft7Validator(tool_result_schema()).validate(result)
