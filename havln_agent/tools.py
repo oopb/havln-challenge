@@ -169,7 +169,10 @@ class ToolExecutor:
         if actions and result['status'] not in ('OK','PARTIAL','TARGET_REACHED','FINISHED','EXECUTED','NO_NEW_INFORMATION'):
             result.update(interrupted_status=result['status'],status='PARTIAL')
         args=call.get('args',{})
-        requested=args.get('max_atomic_steps',0)
+        # Navigation has NO per-tool atomic budget: count actual authorized
+        # simulator actions instead of pretending the model requested a cap.
+        requested=len(actions) if call.get('tool') in (
+            'navigate_relative','navigate_to_pixel','navigate_local') else 0
         if call.get('tool')=='turn_and_observe':
             requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='observe_for_goal':
@@ -687,9 +690,15 @@ class ToolExecutor:
                         alert['reason'], motion_alert=alert)
             if self.done:
                 return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
-        # A bounded Episode may be exhausted before the finite selected route
-        # ends. Never interpret this as success; scheduler will terminate and
-        # the final STOP action remains reserved.
+        # A route can reach its endpoint on the LAST permitted non-STOP
+        # action. Confirm arrival before reporting global budget exhaustion.
+        attempt = self.memory.active_attempt
+        if not (attempt and attempt.get('unknown_motion_seen')):
+            if self.motion_controller.next_action() is None:
+                return self._navigation_feedback(path, checked, 'TARGET_REACHED',
+                    'original_endpoint_reached')
+        # The episode budget is the ONLY action-count bound; STOP is reserved.
+        # Unknown translation cannot fabricate a completed route.
         return self._navigation_feedback(path, checked, 'PARTIAL',
             'episode_action_budget_exhausted',
             remaining_episode_actions=max(0,
