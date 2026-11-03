@@ -276,8 +276,12 @@ def navigation_context(runtime):
             local_anchor_observation_id=pose.get('local_anchor_observation_id')),
         current_view=view,legal_look=[look for look,delta in [('up',runtime.camera.tilt_angle),('down',-runtime.camera.tilt_angle)]
             if abs(runtime.pitch_deg+delta)<=60],
-        local_geometry=[fields(d,('angle_degrees','motion_state','reason','clearance')) for d in
-            sorted(memory.current.get('directions',[]),key=lambda d:abs(d['angle_degrees']))[:7]],
+        local_geometry=[dict(fields(d,('angle_degrees','motion_state','reason')),
+            clearance_m=(d.get('clearance') if d.get('motion_state') in
+                ('EXECUTABLE','BLOCKED') else None),
+            clearance_is_measured=d.get('motion_state') in ('EXECUTABLE','BLOCKED'))
+            for d in sorted(memory.current.get('directions',[]),
+                key=lambda d:abs(d['angle_degrees']))[:7]],
         local_geometry_scope=local_geometry_measurement_scope(
             memory.current.get('directions', []), runtime.camera.turn_angle),
         memory_hints=hints,dynamic_hints=memory.dynamic_summaries(memory.current_place_id)[-2:],
@@ -374,7 +378,8 @@ def navigation_context(runtime):
     stagnation=observation_stagnation(memory,coverage_pose)
     plausible_directions=[dict(relative_turn_deg=d.get('angle_degrees'),
                                current_snapshot_status=d.get('motion_state'),
-                               clearance_m=d.get('clearance'))
+                               clearance_m=(d.get('clearance') if
+                                   d.get('motion_state')=='EXECUTABLE' else None))
         for d in memory.current.get('directions',())
         if d.get('motion_state')!='BLOCKED'][:7]
     stagnation['currently_plausible_local_bearings']=plausible_directions
