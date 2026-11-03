@@ -14,7 +14,8 @@ from havln_agent.local_exploration import (
     last_block, local_coverage, predicted_scan, same_stance, covered_view,
     multi_pitch_coverage, observation_stagnation)
 from havln_agent.runtime import AgentRuntime
-from havln_agent.contexts import navigation_context, tool_summary
+from havln_agent.contexts import (
+    navigation_context, tool_summary, local_geometry_measurement_scope)
 from havln_agent.active_observation import ObservationController
 
 
@@ -195,6 +196,29 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(multi_pitch_coverage(self.mem,pose(90,pitch=0),15,30)[
             'unique_heading_pitch_cells'],2)
 
+    def test_front_only_geometry_does_not_claim_the_whole_circle_blocked(self):
+        scope = local_geometry_measurement_scope(
+            [dict(angle_degrees=0, motion_state='BLOCKED', reason='wall')], 15)
+        self.assertEqual(scope['sampled_relative_bearings_deg'], [0.])
+        self.assertEqual(scope['explicitly_blocked_relative_bearings_deg'], [0.])
+        self.assertEqual(scope['confirmed_executable_relative_bearings_deg'], [])
+        self.assertEqual(scope['unmeasured_yaw_bin_count'], 23)
+        self.assertEqual(scope['unmeasured_relative_bearing_ranges_deg'],
+                         [[-180., -15.], [15., 165.]])
+        self.assertFalse(scope['full_circle_sampled'])
+        self.assertTrue(scope['sampled_evidence_is_not_future_motion_permission'])
+
+    def test_sampled_uncertainty_is_not_classified_as_collision(self):
+        scope = local_geometry_measurement_scope([
+            dict(angle_degrees=0, motion_state='NEEDS_VIEW', reason='unknown_depth'),
+            dict(angle_degrees=15, motion_state='EXECUTABLE')], 15)
+        self.assertEqual(scope['explicitly_blocked_relative_bearings_deg'], [])
+        self.assertEqual(scope['sampled_unconfirmed'], [
+            dict(relative_bearing_deg=0., motion_state='NEEDS_VIEW',
+                 reason='unknown_depth')])
+        self.assertEqual(scope['confirmed_executable_relative_bearings_deg'], [15.])
+        self.assertEqual(scope['unmeasured_yaw_bin_count'], 22)
+
     def test_pending_unknown_waypoint_does_not_claim_current_feasibility(self):
         self.mem.active_attempt=dict(unknown_motion_seen=True,
             forward_actions=1,forward_action_horizon=3)
@@ -222,6 +246,9 @@ class ExplorationTests(unittest.TestCase):
                          'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
         self.assertIn('observation_coverage',result)
         self.assertIn('observation_stagnation',result)
+        self.assertEqual(result['local_geometry_scope']['sampled_relative_bearings_deg'], [0.])
+        self.assertEqual(result['local_geometry_scope']['unmeasured_yaw_bin_count'], 23)
+        self.assertFalse(result['local_geometry_scope']['full_circle_sampled'])
 
     def test_safety_veto_is_not_mistaken_for_action_quota(self):
         self.mem.active_attempt=dict(unknown_motion_seen=False)
