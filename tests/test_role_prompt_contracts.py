@@ -15,6 +15,7 @@ class CapturingClient:
     def complete(self, role, purpose, system, context, schema, **kwargs):
         self.role, self.purpose = role, purpose
         self.system, self.context, self.schema = system, context, schema
+        self.system_history = getattr(self, 'system_history', []) + [system]
         self.kwargs = kwargs
         return self.response
 
@@ -66,14 +67,64 @@ class PromptContractTests(unittest.TestCase):
                        same_stance_observation_calls=10,
                        low_information_calls=9))):
             NavigationAgent(runtime).decide()
-        self.assertIn('OBSERVATION-LOOP INTERVENTION',client.system)
-        self.assertIn('You choose the bearing',client.system)
+        self.assertIn('OBSERVATION-LOOP DECISION CHECKPOINT',client.system)
+        self.assertIn('YOU choose the direction',client.system)
         self.assertIn('not',client.system.lower())
         self.assertIn('safety',client.system.lower())
         self.assertIn('navigate_relative',client.system)
         runtime.event.assert_called_once()
         self.assertFalse(runtime.event.call_args.kwargs['physically_forced'])
         self.assertEqual(client.role,'navigation_agent')
+
+    def test_observation_intervention_is_one_shot_per_stance(self):
+        client=CapturingClient(dict(tool='inspect_geometry',args={}))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value={'inspect_geometry':{
+                'parameters':dict(type='object',properties={},
+                    required=[],additionalProperties=False),
+                'description':'measure geometry','permission':'READ_ONLY'}}),
+            memory=SimpleNamespace(keyframes={}),event=Mock())
+        def state():
+            return dict(task_selection=dict(current_subgoal_index=0),
+                pose=dict(motion_epoch=0,place_id='P0',
+                    position_xz_m_est=[0.,0.]),
+                observation_stagnation=dict(
+                    intervention='BLOCKED_ACTIONABILITY_REASSESSMENT',
+                    same_stance_observation_calls=16,
+                    low_information_calls=15))
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   side_effect=lambda _: state()):
+            agent=NavigationAgent(runtime)
+            agent.decide()
+            agent.decide()
+        self.assertIn('NO EXECUTABLE BEARING',client.system_history[0])
+        self.assertNotIn('NO EXECUTABLE BEARING',client.system_history[1])
+        self.assertEqual(runtime.event.call_count,1)
+        self.assertIn('max_atomic_steps is a TOTAL limit',client.system)
+
+    def test_turn_only_pending_route_is_explained_without_forced_execution(self):
+        client=CapturingClient(dict(tool='navigate_local',
+            args=dict(waypoint_id='direct_0040',max_atomic_steps=3)))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value={'navigate_local':{
+                'parameters':dict(type='object',properties={},
+                    required=[],additionalProperties=False),
+                'description':'continue finite waypoint','permission':'NAVIGATION'}}),
+            memory=SimpleNamespace(keyframes={}),event=Mock())
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=dict(
+                       pending_motion_continuity=dict(
+                           waypoint_id='direct_0040',
+                           remaining_turn_actions_est=2,
+                           first_forward_requires_atomic_actions=3),
+                       observation_stagnation=dict(
+                           intervention='PENDING_TURN_ONLY_MOTION_REVIEW',
+                           same_stance_observation_calls=8,
+                           low_information_calls=7))):
+            NavigationAgent(runtime).decide()
+        self.assertIn('MOVEMENT CONTINUITY',client.system)
+        self.assertIn('zero MOVE_FORWARD',client.system)
+        runtime.event.assert_not_called()
 
     def test_normal_observation_prompt_remains_original_baseline(self):
         client=CapturingClient(dict(tool='inspect_geometry',args={}))
@@ -87,7 +138,7 @@ class PromptContractTests(unittest.TestCase):
                    return_value=dict(observation_stagnation=dict(
                        repeated_low_information=False))):
             NavigationAgent(runtime).decide()
-        self.assertNotIn('OBSERVATION-LOOP INTERVENTION',client.system)
+        self.assertNotIn('OBSERVATION-LOOP DECISION CHECKPOINT',client.system)
         self.assertIn('Prefer a measured goal-approaching direction',client.system)
 
     def test_task_review_never_asks_model_to_generate_predicates(self):
