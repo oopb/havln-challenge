@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from havln_agent.local_exploration import (
-    last_block, local_coverage, predicted_scan, same_stance, covered_view)
+    last_block, local_coverage, predicted_scan, same_stance, covered_view,
+    multi_pitch_coverage, observation_stagnation)
 from havln_agent.runtime import AgentRuntime
 from havln_agent.contexts import navigation_context, tool_summary
 from havln_agent.active_observation import ObservationController
@@ -139,6 +140,81 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(same_stance(pose(),pose(z=.5)))
         self.assertIsNone(covered_view(self.mem.observations,
             pose(105,epoch=1),0,105,-60,15))
+
+    def test_multi_pitch_coverage_preserves_absolute_angles_at_same_stance(self):
+        # No separate mutable map: infer coverage from actual public views.
+        self.mem.observations=[
+            record('h90',90,pitch=0,step=9),
+            record('h90repeat',90,pitch=0,step=10),
+            record('down90',90,pitch=-30,step=11),
+            record('down120',120,pitch=-30,step=12),
+            record('other_epoch',180,pitch=-30,step=13,epoch=1),
+            record('other_location',135,pitch=-30,step=14,z=.5)]
+        self.mem.observations[1]['revisited_static_view']=True
+        coverage=multi_pitch_coverage(self.mem,pose(90,pitch=0),15,30)
+        self.assertEqual(coverage['unique_heading_pitch_cells'],3)
+        self.assertEqual(coverage['repeated_samples'],1)
+        levels={x['pitch_deg']:x for x in coverage['observed_pitch_levels']}
+        self.assertEqual(levels[0]['observed_headings_deg'],[90.0])
+        self.assertEqual(levels[-30]['observed_headings_deg'],[90.0,120.0])
+        self.assertEqual(levels[0]['repeated_observation_samples'],1)
+        self.assertEqual(coverage['current_pitch_checked_headings_deg'],[90.0])
+        self.assertFalse(coverage['measurement'].endswith('path_clearance') is False)
+
+    def test_repeated_look_and_waypoint_queries_trigger_information_intervention(self):
+        self.mem.actions=[dict(action='TURN_LEFT',step=i) for i in range(12)]
+        self.mem.observations=[]
+        self.mem.tool_ledger=[]
+        for i in range(10):
+            obs=record('obs_loop_%d' % i,90,pitch=(0 if i%2 else -30),
+                       step=i+1,motion='NEEDS_VIEW')
+            obs['new_visual_information']=False
+            obs['revisited_static_view']=bool(i>1)
+            self.mem.observations.append(obs)
+            self.mem.tool_ledger.append(dict(
+                call=dict(tool='turn_and_observe' if i%2 else
+                    'get_waypoint_candidates'),
+                result=dict(status='NO_NEW_INFORMATION',
+                    end_observation_id=obs['observation_id'],paths=[])))
+        self.mem.current=self.mem.observations[-1]
+        focus=observation_stagnation(self.mem,pose(90,pitch=0))
+        self.assertTrue(focus['repeated_low_information'])
+        self.assertEqual(focus['low_information_calls'],10)
+        self.assertEqual(focus['same_stance_observation_calls'],10)
+        # A measured translation or reset changes location and clears
+        # the same-stance observation-loop warning.
+        self.assertFalse(observation_stagnation(self.mem,pose(90,z=.6))[
+            'repeated_low_information'])
+        self.assertFalse(observation_stagnation(self.mem,pose(90,epoch=2))[
+            'repeated_low_information'])
+
+    def test_pending_unknown_waypoint_does_not_claim_current_feasibility(self):
+        self.mem.active_attempt=dict(unknown_motion_seen=True,
+            forward_actions=1,forward_action_horizon=3)
+        self.mem.tool_ledger.append(dict(
+            call=dict(tool='navigate_local',args=dict(waypoint_id='path_old')),
+            result=dict(tool='navigate_local',waypoint_id='path_old',
+                status='NEEDS_VIEW',reason='unknown_depth_or_fov',
+                end_observation_id='obs_0120')))
+        runtime=SimpleNamespace(memory=self.mem,
+            motion_controller=SimpleNamespace(pose=lambda:pose(120),
+                target=(1.,1.),next_action=lambda:'MOVE_FORWARD'),
+            active_subgoal=dict(action='descend',target='stairs'),
+            active_waypoint_id='path_old',pitch_deg=-60,
+            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
+            config=dict(max_steps=150,max_scene_age_seconds=300),
+            paths={})
+        with patch('havln_agent.contexts.turn_evidence',
+                   return_value=dict(requirement=None)):
+            result=navigation_context(runtime)
+        waypoint=result['local_navigation']
+        self.assertEqual(waypoint['status'],'IN_PROGRESS')
+        self.assertFalse(waypoint['endpoint_estimate_valid'])
+        self.assertEqual(waypoint['last_failure_reason'],'unknown_depth_or_fov')
+        self.assertEqual(waypoint['execution_feasibility'],
+                         'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
+        self.assertIn('observation_coverage',result)
+        self.assertIn('observation_stagnation',result)
 
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
