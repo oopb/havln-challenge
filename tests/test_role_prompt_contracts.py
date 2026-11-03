@@ -53,7 +53,7 @@ class PromptContractTests(unittest.TestCase):
 
     def test_observation_stagnation_requests_model_authored_direction_without_forced_motion(self):
         client=CapturingClient(dict(tool='navigate_relative',
-            args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=3)))
+            args=dict(turn_deg=30,distance_m=.5)))
         runtime=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value={'navigate_relative':{
                 'parameters':dict(type='object',properties={},
@@ -100,7 +100,7 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn('NO EXECUTABLE BEARING',client.system_history[0])
         self.assertNotIn('NO EXECUTABLE BEARING',client.system_history[1])
         self.assertEqual(runtime.event.call_count,1)
-        self.assertIn('max_atomic_steps is a TOTAL limit',client.system)
+        self.assertIn('DO NOT take max_atomic_steps',client.system)
         # Same stance/subgoal but NEW plan revision must permit a new
         # checkpoint, because the semantic route requirement may have changed.
         runtime.plan_revision=2
@@ -110,29 +110,23 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn('NO EXECUTABLE BEARING',client.system_history[-1])
         self.assertEqual(runtime.event.call_count,2)
 
-    def test_turn_only_pending_route_is_explained_without_forced_execution(self):
+    def test_navigation_prompt_explains_continuous_finite_motion(self):
         client=CapturingClient(dict(tool='navigate_local',
-            args=dict(waypoint_id='direct_0040',max_atomic_steps=3)))
+            args=dict(waypoint_id='direct_0040')))
         runtime=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value={'navigate_local':{
                 'parameters':dict(type='object',properties={},
                     required=[],additionalProperties=False),
-                'description':'continue finite waypoint','permission':'NAVIGATION'}}),
+                'description':'continuous finite waypoint','permission':'NAVIGATION'}}),
             memory=SimpleNamespace(keyframes={}),event=Mock())
         with patch('havln_agent.navigation_agent.navigation_context',
-                   return_value=dict(
-                       pending_motion_continuity=dict(
-                           waypoint_id='direct_0040',
-                           remaining_turn_actions_est=2,
-                           first_forward_requires_atomic_actions=3),
-                       observation_stagnation=dict(
-                           intervention='PENDING_TURN_ONLY_MOTION_REVIEW',
-                           same_stance_observation_calls=8,
-                           low_information_calls=7))):
+                   return_value=dict(observation_stagnation=dict(
+                       repeated_low_information=False))):
             NavigationAgent(runtime).decide()
-        self.assertIn('MOVEMENT CONTINUITY',client.system)
-        self.assertIn('zero MOVE_FORWARD',client.system)
-        self.assertIn('multiple bounded',client.system)
+        self.assertIn('DO NOT take max_atomic_steps',client.system)
+        self.assertIn('continuously',client.system)
+        self.assertNotIn('multiple bounded navigate_local batches',client.system)
+        self.assertNotIn('MOVEMENT CONTINUITY',client.system)
         runtime.event.assert_not_called()
 
     def test_normal_observation_prompt_remains_original_baseline(self):
