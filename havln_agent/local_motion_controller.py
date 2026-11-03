@@ -4,7 +4,6 @@ import math
 import time
 
 from .spatial import angle_delta, relative_pose_error
-from .safety import forward_probe
 
 
 class LocalMotionController:
@@ -90,10 +89,6 @@ class LocalMotionController:
                     suggestion=suggestion, information_options=['turn_and_observe', 'analyze_scene',
                         'assess_entry', 'ground_landmark', 'inspect_geometry'], **extra)
 
-    @staticmethod
-    def next_step_state(geometry):
-        return forward_probe(geometry)
-
     def validate(self, runtime, path, resume=False, uncertain_straight=False):
         r = runtime
         source, pose = path['source'], self.pose()
@@ -132,40 +127,26 @@ class LocalMotionController:
         else:
             angle, distance = angle_delta(math.atan2(-dx, dz), pose['heading']), math.hypot(dx, dz)
         turn_only = abs(angle) > math.radians(self.camera.turn_angle)/2
-        geometry = r.geometry()
-        # Keep the calibrated body sweep's visibility horizon; only one atomic
-        # displacement is authorized, even if the selected endpoint is further.
-        # Turning is not forward translation. After the real TURN, a new RGB-D
-        # view must certify the actual straight-ahead 0-degree body sweep.
-        diagnostic = (dict(scope='turn_only_no_forward_permission') if turn_only else
-                      geometry.diagnose(0, self.camera.forward_step))
+        # Geometry is never run by routine path validation. Preserve pose and
+        # step-size checks; only an explicit geometry tool diagnoses obstacles.
+        diagnostic = dict(scope='model_requested_geometry_only',
+            status='NOT_CHECKED',collision_clearance_m=None)
         next_action = ('TURN_LEFT' if angle > 0 else 'TURN_RIGHT') if turn_only else 'MOVE_FORWARD'
         validation = dict(source=r.source(), geometry=diagnostic,
             relative_motion_only=uncertain_straight,
             endpoint_estimate_valid=not uncertain_straight,
             next_atomic_action=next_action,
-            validated_forward_bearing_deg=(0 if not turn_only else None),
-            requires_post_turn_recheck=turn_only,
-            scope='next_atomic_step_only', dynamic_safety='per_forward_step_required')
+            validated_forward_bearing_deg=None,
+            requires_post_turn_recheck=False,
+            forward_evidence_state='NOT_CHECKED',
+            scope='next_atomic_step_only', geometry_policy='explicit_model_tool_only')
         path['last_validation'] = validation
-        if not turn_only:
-            check = self.next_step_state(geometry)
-            if check['state'] == 'BLOCKED':
-                return dict(status='BLOCKED', reason=check['reason'],
-                    suggestion='inspect_geometry_if_obstacle_cause_is_unclear',
-                    information_options=['inspect_geometry','turn_and_observe'],
-                    safety=dict(diagnostic,terrain_evidence=check['support'],
-                                check_mode=check.get('check_mode')),
-                    validation=validation, original_target=list(endpoint))
-            # Unconfirmed visibility is not an obstacle. The executor still
-            # refreshes RGB-D for each actual MOVE_FORWARD.
-            validation['forward_evidence_state'] = check['state']
-            validation['forward_uncertainty_reason'] = check.get('reason')
         segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
         segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],
             endpoint_xz_m=[pose['x']-math.sin(pose['heading'])*segment_distance,
                            pose['z']+math.cos(pose['heading'])*segment_distance],
-            distance_m=segment_distance, turn_only=turn_only, source=r.source(), requires_live_safety=True)
+            distance_m=segment_distance, turn_only=turn_only, source=r.source(),
+            geometry_checked=False)
         value = dict(status='OK', candidate=dict(path, angle=angle, distance=segment_distance),
             original_target=list(endpoint), executable_segment=segment, validation=validation)
         path['execution_status'] = 'REVALIDATED'
