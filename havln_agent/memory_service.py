@@ -244,7 +244,7 @@ class MemoryService(MemoryRecords):
             total_forward_actions=len(motions),
             recent_forward_motion=motions[-6:],
             last_progress_motion=successes[-1] if successes else None,
-            visual_target_memory=[copy.deepcopy(v) for v in self.visual_targets
+            visual_target_memory=[copy.deepcopy(v) for v in getattr(self,'visual_targets',[])
                 if v['subgoal_index']==goal_index][-3:],
             last_motion=motions[-1] if motions else None,
             recent_failed_waypoints=failures,
@@ -291,7 +291,7 @@ class MemoryService(MemoryRecords):
             status=v['status'],goal=v['goal'],absolute_heading_deg=v['absolute_heading_deg'],
             approach_candidates=copy.deepcopy(v['approach_candidates']),
             source_observation_ids=v['source_observation_ids'],
-            evidence_state=v['evidence_state']) for v in self.visual_targets]
+            evidence_state=v['evidence_state']) for v in getattr(self,'visual_targets',[])]
         items += list(reversed(self.dynamic_summaries(place_id)))
         def score(item):
             local=item.get('place_id',item.get('from_place'))==place_id
@@ -341,11 +341,11 @@ class MemoryService(MemoryRecords):
 
     def stats(self):
         return dict(super().stats(),places=len(self.places),landmarks=len(self.landmarks),
-            visual_targets=len(self.visual_targets),routes=len(self.routes))
+            visual_targets=len(getattr(self,'visual_targets',[])),routes=len(self.routes))
 
     def snapshot(self):
         return dict(super().snapshot(),current_place_id=self.current_place_id,places=list(self.places.values()),
             keyframes=list(self.keyframes.values()),landmarks=list(self.landmarks.values()),routes=self._routes(),
             dynamic_records=copy.deepcopy(self.dynamic),dynamic=self.dynamic_summaries(),hypotheses=self.notes,
-            visual_targets=copy.deepcopy(self.visual_targets),
+            visual_targets=copy.deepcopy(getattr(self,'visual_targets',[])),
             navigation_summary=self.navigation_summary())
