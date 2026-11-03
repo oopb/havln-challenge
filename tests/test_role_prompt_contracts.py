@@ -97,9 +97,10 @@ class PromptContractTests(unittest.TestCase):
             agent=NavigationAgent(runtime)
             agent.decide()
             agent.decide()
-        self.assertIn('NO EXECUTABLE BEARING',client.system_history[0])
-        self.assertNotIn('NO EXECUTABLE BEARING',client.system_history[1])
+        self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[0])
+        self.assertNotIn('NO CONFIRMED SAMPLED BEARING',client.system_history[1])
         self.assertEqual(runtime.event.call_count,1)
+        self.assertIn('other headings are UNMEASURED', client.system_history[0])
         self.assertIn('DO NOT take max_atomic_steps',client.system)
         # Same stance/subgoal but NEW plan revision must permit a new
         # checkpoint, because the semantic route requirement may have changed.
@@ -107,7 +108,7 @@ class PromptContractTests(unittest.TestCase):
         with patch('havln_agent.navigation_agent.navigation_context',
                    side_effect=lambda _: state()):
             agent.decide()
-        self.assertIn('NO EXECUTABLE BEARING',client.system_history[-1])
+        self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[-1])
         self.assertEqual(runtime.event.call_count,2)
 
     def test_navigation_prompt_explains_continuous_finite_motion(self):
