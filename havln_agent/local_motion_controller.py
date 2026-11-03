@@ -157,11 +157,10 @@ class LocalMotionController:
                     safety=dict(diagnostic,terrain_evidence=check['support'],
                                 check_mode=check.get('check_mode')),
                     validation=validation, original_target=list(endpoint))
-            if check['state'] == 'NEEDS_VIEW':
-                return self.needs_view(check['reason'],
-                    safety=dict(diagnostic,terrain_evidence=check['support'],
-                                check_mode=check.get('check_mode')),
-                    validation=validation, original_target=list(endpoint))
+            # Unconfirmed visibility is not an obstacle. The executor still
+            # refreshes RGB-D for each actual MOVE_FORWARD.
+            validation['forward_evidence_state'] = check['state']
+            validation['forward_uncertainty_reason'] = check.get('reason')
         segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
         segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],
             endpoint_xz_m=[pose['x']-math.sin(pose['heading'])*segment_distance,
