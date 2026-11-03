@@ -103,6 +103,36 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertEqual(outcome['executed_motion'],
             ['TURN_LEFT','TURN_LEFT','MOVE_FORWARD','MOVE_FORWARD'])
 
+    def test_episode_budget_is_the_only_action_count_limit(self):
+        r=runtime()
+        r.config['max_steps']=3  # Two navigation actions + one STOP.
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            partial=r._navigate_relative(0,.75)
+        self.assertEqual(partial['status'],'PARTIAL')
+        self.assertEqual(partial['reason'],'episode_action_budget_exhausted')
+        self.assertEqual([x['action'] for x in r.memory.actions],
+                         ['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(len(r.memory.actions),r.config['max_steps']-1)
+        # No more physical forward actions can be issued, even to continue
+        # the model's otherwise valid pending route.
+        self.assertEqual(r._step('MOVE_FORWARD')['status'],'BUDGET_LIMIT')
+
+    def test_arrival_on_final_allowed_action_is_success(self):
+        r=runtime()
+        r.config['max_steps']=3  # Exactly enough for 0.5m + reserved STOP.
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            arrived=r._navigate_relative(0,.5)
+        self.assertEqual(arrived['status'],'TARGET_REACHED')
+        self.assertEqual(arrived['reason'],'original_endpoint_reached')
+        self.assertEqual(len(r.memory.actions),2)
+        self.assertIsNone(r.motion_controller.target)
+
     def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
         r=runtime()
         unknown=dict(status='UNKNOWN',
