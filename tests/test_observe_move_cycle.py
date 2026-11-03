@@ -30,7 +30,7 @@ class ObserveMoveTests(unittest.TestCase):
         with patch('havln_agent.runtime.ToolExecutor.dispatch',
                    return_value=dict(status='TARGET_REACHED')) as run:
             answer=r.dispatch(dict(tool='navigate_local',
-                                   args=dict(waypoint_id='wp_0',max_atomic_steps=2)),decision)
+                                   args=dict(waypoint_id='wp_0')),decision)
             self.assertEqual(answer['status'],'TARGET_REACHED')
             self.assertEqual(r.navigation_mode,'OBSERVE')
             self.assertEqual(r.phase,'NAVIGATING')
@@ -113,7 +113,7 @@ class ObserveMoveTests(unittest.TestCase):
         with patch('havln_agent.runtime.ToolExecutor.dispatch',
                    return_value=dict(status='PARTIAL')):
             r.dispatch(dict(tool='navigate_local',
-                            args=dict(waypoint_id='wp_0',max_atomic_steps=2)),
+                            args=dict(waypoint_id='wp_0')),
                        decision)
         self.assertEqual(events[-1],('navigation_mode_changed','OBSERVE','NAVIGATING'))
 
