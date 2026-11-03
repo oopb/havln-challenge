@@ -251,7 +251,7 @@ def navigation_context(runtime):
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             turn_and_observe_max_deg=runtime.camera.turn_angle *
-                min(runtime.config['tool_max_actions'],
+                min(runtime.config.get('tool_max_actions',3),
                     max(1,runtime.config['max_steps']-1-len(memory.actions))),
             unknown_depth_is_obstacle=False,
             motion_veto='confirmed_measured_obstacle_only',
