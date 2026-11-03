@@ -256,9 +256,9 @@ class AgentRuntime(ToolExecutor):
         return value
 
     def _prepare_forward(self):
-        geometry = self.geometry()
-        if geometry.human_status['unlocalized']:
-            return self.motion_controller.needs_view('human_localization_unverified')
+        # A nonlocalized visual human hypothesis is not evidence of occupancy
+        # in the next body sweep. Measured occupancy remains a motion veto.
+        return None
 
     def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
                           checkpoint_degrees=30, look='none', force_recheck=False):
