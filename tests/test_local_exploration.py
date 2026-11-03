@@ -87,7 +87,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertIsNotNone(last_block(self.mem,pose(120)))
         self.mem.tool_ledger.append(dict(call_id='tool_turn_only',
             call=dict(tool='navigate_local'),
-            result=dict(status='PARTIAL',reason='tool_action_limit',
+            result=dict(status='PARTIAL',reason='episode_action_budget_exhausted',
                         executed_motion=['TURN_LEFT','TURN_LEFT'])))
         self.assertIsNotNone(last_block(self.mem,pose(120)))
         self.mem.tool_ledger.append(dict(call_id='tool_moved',
@@ -223,14 +223,8 @@ class ExplorationTests(unittest.TestCase):
         self.assertIn('observation_coverage',result)
         self.assertIn('observation_stagnation',result)
 
-    def test_turn_only_safety_veto_not_misreported_as_budget_resume(self):
-        # A post-TURN collision is a fresh safety veto, unlike PARTIAL
-        # tool_action_limit. Both may have a still pending waypoint.
+    def test_safety_veto_is_not_mistaken_for_action_quota(self):
         self.mem.active_attempt=dict(unknown_motion_seen=False)
-        feedback=dict(turn_only_no_forward_attempt=True,
-            same_waypoint_pending=True,endpoint_estimate_valid=True,
-            waypoint_id='direct_0040',executed_turn_actions=1,
-            min_atomic_actions_until_first_forward_attempt=2)
         r=SimpleNamespace(memory=self.mem,
             motion_controller=SimpleNamespace(
                 pose=lambda:pose(120),target=(1.,1.),
@@ -242,31 +236,25 @@ class ExplorationTests(unittest.TestCase):
                         max_scene_age_seconds=300),paths={})
         self.mem.tool_ledger.append(dict(
             call=dict(tool='navigate_relative',
-                args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=3)),
+                args=dict(turn_deg=30,distance_m=.5)),
             result=dict(tool='navigate_relative',waypoint_id='direct_0040',
                 status='PARTIAL',interrupted_status='BLOCKED',
                 reason='occupied_next_step',
                 end_observation_id='obs_0120',
-                movement_intent_feedback=feedback)))
+                movement_intent_feedback=dict(
+                    turn_only_no_forward_attempt=True,
+                    same_waypoint_pending=True,endpoint_estimate_valid=True,
+                    waypoint_id='direct_0040',executed_turn_actions=1))))
         with patch('havln_agent.contexts.turn_evidence',
                    return_value=dict(requirement=None)):
-            blocked=navigation_context(r)
-        self.assertNotIn('pending_motion_continuity',blocked)
-        self.assertEqual(blocked['recent_motion_intent']['status'],'BLOCKED')
-        self.assertEqual(blocked['local_navigation']['execution_feasibility'],
+            state=navigation_context(r)
+        self.assertNotIn('pending_motion_continuity',state)
+        self.assertEqual(state['recent_motion_intent']['status'],'BLOCKED')
+        self.assertEqual(state['local_navigation']['execution_feasibility'],
                          'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
-        # Change ONLY the reason to the true action-limit case:
-        self.mem.tool_ledger[-1]['result'].update(status='PARTIAL',
-            interrupted_status=None,reason='tool_action_limit')
-        with patch('havln_agent.contexts.turn_evidence',
-                   return_value=dict(requirement=None)):
-            partial=navigation_context(r)
-        self.assertEqual(partial['pending_motion_continuity']['waypoint_id'],
-                         'direct_0040')
-        self.assertEqual(
-            partial['pending_motion_continuity']['first_forward_requires_atomic_actions'],2)
-        self.assertEqual(
-            partial['pending_motion_continuity']['current_batch_action_limit'],3)
+        self.assertIsNone(state['action_calibration']['per_tool_atomic_action_cap'])
+        self.assertEqual(state['action_calibration']['navigation_execution_policy'],
+            'continuous_until_route_or_safety_or_episode_budget')
 
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
