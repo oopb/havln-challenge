@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 from havln_agent.local_exploration import (
     last_block, local_coverage, predicted_scan, same_stance, covered_view,
-    multi_pitch_coverage, observation_stagnation)
+    multi_pitch_coverage, panorama_coverage, observation_stagnation)
 from havln_agent.runtime import AgentRuntime
 from havln_agent.contexts import (
     navigation_context, tool_summary, local_geometry_measurement_scope)
@@ -161,6 +161,51 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(levels[0]['repeated_observation_samples'],1)
         self.assertEqual(coverage['current_pitch_checked_headings_deg'],[90.0])
         self.assertFalse(coverage['measurement'].endswith('path_clearance') is False)
+
+    def test_panorama_detects_full_circle_with_30_degree_view_spacing(self):
+        # 12 calibrated observations can visually cover 360 degrees even
+        # though only 12 out of 24 precise 15-degree headings were sampled.
+        self.mem.observations=[
+            record('around_%02d' % a, a, pitch=0,
+                   motion='EXECUTABLE' if a==90 else 'BLOCKED')
+            for a in range(0, 360, 30)]
+        full=panorama_coverage(self.mem,pose(0,pitch=0),15,90)
+        self.assertTrue(full['all_azimuths_observed'])
+        self.assertEqual(full['covered_yaw_bins'],24)
+        self.assertEqual(full['total_yaw_bins'],24)
+        self.assertEqual(len(full['observed_viewpoints']),12)
+        self.assertFalse(full['motion_authorized'])
+        self.assertEqual(full['observed_viewpoints'][3]['relative_turn_deg_from_current'],90)
+        self.assertEqual(full['observed_viewpoints'][3]['historical_front_state'],'EXECUTABLE')
+        self.assertTrue(full['historical_humans_are_not_current_safety_evidence'])
+        # Strict local_coverage is an exact heading list, not visual HFOV.
+        self.mem.current=self.mem.observations[-1]
+        self.assertFalse(local_coverage(self.mem,pose(0,pitch=0),15,24)[
+            'all_headings_checked'])
+
+    def test_panorama_no_false_completion_for_partial_or_other_stance(self):
+        self.mem.observations=[
+            record('partial_%02d' % a,a,pitch=0) for a in range(0,270,30)]
+        partial=panorama_coverage(self.mem,pose(0,pitch=0),15,90)
+        self.assertFalse(partial['all_azimuths_observed'])
+        self.assertGreater(partial['covered_yaw_bins'],0)
+        # The same appearance at a new measured location/odometry epoch
+        # does not become a 360-degree scan of the *new* location.
+        self.assertEqual(panorama_coverage(self.mem,pose(0,z=.5,pitch=0),
+                                          15,90)['covered_yaw_bins'],0)
+        self.assertEqual(panorama_coverage(self.mem,pose(0,epoch=1,pitch=0),
+                                          15,90)['covered_yaw_bins'],0)
+        self.mem.task.current_subgoal_index=1
+        self.assertEqual(panorama_coverage(self.mem,pose(0,pitch=0),
+                                          15,90)['covered_yaw_bins'],0)
+
+    def test_panorama_does_not_count_repeated_one_heading_as_360(self):
+        self.mem.observations=[
+            record('repeat_%02d' % a,90,pitch=(0 if a%2 else -30))
+            for a in range(50)]
+        full=panorama_coverage(self.mem,pose(90,pitch=0),15,90)
+        self.assertFalse(full['all_azimuths_observed'])
+        self.assertEqual(len(full['observed_viewpoints']),1)
 
     def test_repeated_look_and_waypoint_queries_trigger_information_intervention(self):
         self.mem.actions=[dict(action='TURN_LEFT',step=i) for i in range(12)]
