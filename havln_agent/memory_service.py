@@ -129,9 +129,10 @@ class MemoryService(MemoryRecords):
         # Make target evidence searchable by observation ID, unlike ephemeral
         # panorama answers that previously left landmarks/groundings empty.
         label=goal if isinstance(goal,dict) else {}
-        self.note_semantics(dict(observation_id=identifier),[
-            str(label.get('target') or label.get('landmark') or
-                'navigation_target') + ': ' + visual['visible_evidence'][:300]])
+        if record['status'] == 'VISIBLE':
+            self.note_semantics(dict(observation_id=identifier),[
+                str(label.get('target') or label.get('landmark') or
+                    'navigation_target') + ': ' + visual['visible_evidence'][:300]])
         self.event('panorama_target_recorded',target_id=record['id'],
                    source_observation_ids=record['source_observation_ids'],
                    target_status=record['status'])
