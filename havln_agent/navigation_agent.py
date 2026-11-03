@@ -61,7 +61,7 @@ OBSERVE_PROMPT = (
     'a blank currently_plausible_local_bearings list does NOT mean there is '
     'no viable direction anywhere. Distinguish a measured BLOCKED direction '
     'from a measured UNCONFIRMED/unknown direction. Turning changes the live '
-    'sampled heading; the next forward does NOT run a geometry probe. '
+    'sampled heading; the next forward does NOT run a geometry probe. You are responsible for safety risk assessment and may call inspect_geometry before moving. '
     'Treat goal_alignment, estimated distance and direction compatibility '
     'as descriptive evidence. A detour that temporarily moves away from '
     'a landmark can be appropriate. Do not require complete grounding, '
