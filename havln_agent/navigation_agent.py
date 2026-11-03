@@ -19,9 +19,9 @@ COMMON_PROMPT = (
     'Return exactly ONE JSON object containing one registered tool and args, '
     'plus optional evidence-linked memory_delta. Wait for the tool result. '
     'Do not invent observations, movement, target coordinates or completion. '
-    'Each MOVE uses fresh RGB-D to detect affirmative obstacles. Unknown '
+    'Each MOVE uses fresh RGB-D for odometry AFTER movement. Unknown '
     'depth, unmeasured FOV and unlocalized visual hypotheses do NOT prove '
-    'collision and must not automatically veto a model-selected movement. '
+    'collision; only explicit model calls to inspect_geometry or get_waypoint_candidates invoke obstacle/terrain detection. '
     'A local TARGET_REACHED is not semantic task completion. Read '
     'historical_motion_evidence even after motion_epoch changes; an epoch '
     'invalidates old *coordinates*, not historical verified RGB-D movement. '
@@ -36,7 +36,7 @@ OBSERVE_PROMPT = (
     'MODE: OBSERVE. Choose the NEXT finite local movement target, not a '
     'complete global route. A navigate_local/navigate_relative/navigate_to_pixel '
     'call executes the model-selected TURNs and forward segment continuously '
-    'until arrival, live safety/pose interruption, or global Episode budget; '
+    'until arrival, pose/sensor interruption, or global Episode budget; '
     'then returns control to OBSERVE with new RGB-D feedback. '
     'FIRST inspect navigation_memory, last_tool, candidate_waypoints, '
     'local_navigation and current target evidence. Preserve useful progress. '
@@ -49,7 +49,7 @@ OBSERVE_PROMPT = (
     'a relative bearing and desired distance directly (the executor quantizes '
     'to the real action increments), or use '
     'navigate_to_pixel with a normalized RGB-D image target and movement distance. '
-    'Do not invent free space: the executor checks current depth for every forward. '
+    'Do not invent free space: the executor never invokes geometry automatically. '
 
     'You decide whether a direction serves the task using the instruction, '
     'visual hints, current depth, waypoint candidates, recent motion, and memory. '
@@ -61,19 +61,19 @@ OBSERVE_PROMPT = (
     'a blank currently_plausible_local_bearings list does NOT mean there is '
     'no viable direction anywhere. Distinguish a measured BLOCKED direction '
     'from a measured UNCONFIRMED/unknown direction. Turning changes the live '
-    'sampled heading; each next forward still requires new depth checks. '
+    'sampled heading; the next forward does NOT run a geometry probe. '
     'Treat goal_alignment, estimated distance and direction compatibility '
     'as descriptive evidence. A detour that temporarily moves away from '
     'a landmark can be appropriate. Do not require complete grounding, '
     'a particular scene category, entry point or monotonic distance decrease '
-    'before choosing a short MOVE. The local controller alone checks live '
-    'depth, human occupancy and physical action validity. Never bypass '
+    'before choosing a short MOVE. A model-requested inspect_geometry tool checks '
+    'depth and human occupancy. Never bypass '
     'a measured collision or invent geometric clearance. '
     'Registered RGB-D translation is ESTIMATED, not simulator ground truth. '
-    'If fast depth detects a suspected obstacle, pause MOVE and call '
+    'When visually uncertain about obstacles or terrain, proactively call '
     'inspect_geometry when detailed terrain or obstacle confirmation is '
     'needed. Full geometry diagnosis is a tool you invoke ON DEMAND, '
-    'not an automatic permission gate before every forward step. '
+    'never an automatic permission gate before forward steps. '
     'BLOCKED means an observed obstacle requires a different direction. '
     'UNCONFIRMED is NOT BLOCKED; you may move toward it or seek more evidence. '
     'NEEDS_VIEW from a semantic tool means obtaining a specific missing view. '
@@ -105,8 +105,8 @@ OBSERVE_PROMPT = (
     'Navigation tools DO NOT take max_atomic_steps or a per-call action '
     'budget. Provide only a target direction, distance, or waypoint ID; '
     'the executor completes all needed turns before attempting forward. '
-    'Every forward receives fresh depth, terrain and people checks. '
-    'Safety/pose interruption returns control for YOUR next decision. '
+    'Every forward uses public RGB-D for motion estimation, NOT collision/terrain/people approval. '
+    'Pose/no-motion/budget interruption returns control for YOUR next decision. '
 )
 
 # This is a model-visible *decision focus*, not a tool whitelist or a hidden
@@ -115,14 +115,14 @@ OBSERVE_PROMPT = (
 OBSERVATION_INTERVENTION_PROMPT = (
     'OBSERVATION-LOOP DECISION CHECKPOINT (issued ONCE per task/stance): '
     'Existing yaw/pitch views have produced little actionable information. '
-    'The current geometry contains a plausible local bearing, but this is '
+    'Historical views may suggest a plausible bearing, but this is '
     'NOT lasting forward permission. Choose a task-relevant short movement '
     'when evidence supports it, OR use a different purposeful action if '
     'the available evidence is insufficient. YOU choose the direction, '
     'route, target and whether new observations are genuinely needed. '
     'Repeating the same absolute view without changed evidence is unlikely '
-    'to help. Any MOVE_FORWARD still requires current RGB-D, terrain and '
-    'human safety checks. Do NOT fabricate a free corridor. '
+    'to help. You may explicitly call inspect_geometry for terrain and '
+    'human observations. Do NOT fabricate a free corridor. '
 )
 BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'OBSERVATION-LOOP / NO CONFIRMED SAMPLED BEARING (issued ONCE per task/stance): '
@@ -133,14 +133,14 @@ BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'strategy yourself: a genuinely different local goal/detour, a specific '
     'live geometry or view test that could change the decision, a semantic '
     'task revision, or an explicitly evidence-backed movement direction '
-    'for the safety controller to test. Do not merely toggle between already '
+    'for the simulator to execute. Do not merely toggle between already '
     'seen pitch levels or arbitrarily change relative headings. The model '
-    'retains full planning authority and the executor retains physical veto. '
+    'retains full planning authority; geometry is an explicit tool only. '
 )
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
-    'LocalMotionController checks fresh RGB-D for each forward action, '
-    'continues to target arrival or an actual safety/pose/episode interruption. '
+    'LocalMotionController uses post-action RGB-D odometry for each forward action, '
+    'continues to target arrival or a pose/no-motion/episode interruption. '
     'The next NavigationAgent decision is always OBSERVE.'
 )
 
@@ -192,7 +192,7 @@ class NavigationAgent:
             and getattr(self,'_panorama_committed_signature',None)!=signature
             and 'navigate_relative' in runtime.registry)
         # This is a temporary tool-choice contract, NOT an autonomous move:
-        # the LLM picks a bearing/distance and live safety still has the veto.
+        # the LLM picks a bearing/distance; geometry is model-requested only.
         offered_tools=(
             {'navigate_relative':runtime.registry['navigate_relative']}
             if full_circle_commit else runtime.registry)
@@ -244,7 +244,8 @@ class NavigationAgent:
                     reviewed_frame_ids=[v['observation_id'] for v in reviewed_views],
                     observed_yaw_bins=panorama.get('covered_yaw_bins'),
                     physically_forced=False,
-                    live_safety_revalidation_required=True)
+                    live_safety_revalidation_required=False,
+                    geometry_autorun=False)
         if first_checkpoint:
             self._intervention_signature=signature
             if hasattr(runtime,'event'):
