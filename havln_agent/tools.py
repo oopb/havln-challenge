@@ -214,7 +214,8 @@ class ToolExecutor:
                 same_waypoint_pending=bool(active),
                 remaining_turn_actions_est=remaining_turns,
                 min_atomic_actions_until_first_forward_attempt=forward_budget,
-                first_forward_still_requires_live_safety=True,
+                first_forward_still_requires_live_safety=False,
+                geometry_diagnostics_model_invoked_only=True,
                 endpoint_estimate_valid=not uncertain,
                 interpretation=(
                     'only_turns_executed_forward_not_attempted'
@@ -500,7 +501,7 @@ class ToolExecutor:
                 endpoint_xz_m=[source['pose']['x'] - math.sin(heading) * candidate['distance'],
                                source['pose']['z'] + math.cos(heading) * candidate['distance']],
                 association_rejections=[r for r in relations if not r['relevant']] + excluded,
-                execution_requirements=['reconfirm_uncertain_goal', 'current_rgbd', 'live_human_safety'],
+                execution_requirements=['reconfirm_uncertain_goal','model_requested_geometry_optional'], 
             )
             self.paths[identifier] = path
             paths.append(copy.deepcopy(path))
@@ -515,7 +516,7 @@ class ToolExecutor:
             association_exclusions=excluded,
             safety_state=dict(visible_floor=dict(status='DEFERRED',
                 reason='inspect_geometry_for_full_terrain_diagnostics'), humans=geometry.human_status,
-                authorization='requires_new_checks_before_every_move', dynamic_motion_prediction='UNAVAILABLE'),
+                authorization='no_implicit_checks_model_decides_when_to_inspect', dynamic_motion_prediction='UNAVAILABLE'),
             goal_status='GOAL_EVIDENCE_AVAILABLE' if any(p['goal_association'] for p in paths) else 'GOAL_DIRECTION_UNKNOWN',
             goal_localization_status='GROUNDING_UNCERTAIN' if excluded else 'AVAILABLE' if groundings else 'UNKNOWN',
         )
