@@ -187,6 +187,12 @@ def observation_stagnation(memory, pose, window=24):
         final = observations.get(result.get('end_observation_id'))
         if not final or not same_stance(final.get('pose'), pose):
             continue
+        # Coverage remains useful across goals, but an observation-loop
+        # intervention belongs to the CURRENT semantic milestone only.
+        task = getattr(memory, 'task', None)
+        if (task is not None and final.get('subgoal') !=
+                getattr(task, 'current_subgoal_index', None)):
+            continue
         # Do not interpret previous physical locations as current stagnation.
         if final.get('step', -1) <= last_forward:
             continue

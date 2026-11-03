@@ -187,6 +187,13 @@ class ExplorationTests(unittest.TestCase):
             'repeated_low_information'])
         self.assertFalse(observation_stagnation(self.mem,pose(90,epoch=2))[
             'repeated_low_information'])
+        # A new semantic goal at the SAME physical stance may reuse old
+        # camera coverage but must not inherit the old goal's stall alert.
+        self.mem.task.current_subgoal_index=1
+        self.assertFalse(observation_stagnation(self.mem,pose(90,pitch=0))[
+            'repeated_low_information'])
+        self.assertEqual(multi_pitch_coverage(self.mem,pose(90,pitch=0),15,30)[
+            'unique_heading_pitch_cells'],2)
 
     def test_pending_unknown_waypoint_does_not_claim_current_feasibility(self):
         self.mem.active_attempt=dict(unknown_motion_seen=True,
