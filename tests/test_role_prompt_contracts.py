@@ -101,6 +101,14 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn('NO EXECUTABLE BEARING',client.system_history[1])
         self.assertEqual(runtime.event.call_count,1)
         self.assertIn('max_atomic_steps is a TOTAL limit',client.system)
+        # Same stance/subgoal but NEW plan revision must permit a new
+        # checkpoint, because the semantic route requirement may have changed.
+        runtime.plan_revision=2
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   side_effect=lambda _: state()):
+            agent.decide()
+        self.assertIn('NO EXECUTABLE BEARING',client.system_history[-1])
+        self.assertEqual(runtime.event.call_count,2)
 
     def test_turn_only_pending_route_is_explained_without_forced_execution(self):
         client=CapturingClient(dict(tool='navigate_local',
@@ -124,6 +132,7 @@ class PromptContractTests(unittest.TestCase):
             NavigationAgent(runtime).decide()
         self.assertIn('MOVEMENT CONTINUITY',client.system)
         self.assertIn('zero MOVE_FORWARD',client.system)
+        self.assertIn('multiple bounded',client.system)
         runtime.event.assert_not_called()
 
     def test_normal_observation_prompt_remains_original_baseline(self):
