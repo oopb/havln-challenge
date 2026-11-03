@@ -156,7 +156,7 @@ def tool_summary(result):
             best_candidate=result.get('best_candidate'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
-            note='visual_candidates_are_hypotheses; live_geometry_required_for_motion')
+            note='visual_candidates_are_hypotheses; geometry_is_explicit_model_tool_not_motion_gate')
     if 'alternatives' in result:value['alternatives']=result['alternatives']
     if 'view_directions' in result:value['view_directions']=result['view_directions'][:6]
     if 'scan' in result:
