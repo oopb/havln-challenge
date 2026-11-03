@@ -94,8 +94,8 @@ directions from repeated relative turns. `turn_and_observe` and
 `observe_for_goal` return `NO_NEW_INFORMATION` for redundant camera
 sweeps instead of consuming atomic actions. An intentional
 `turn_and_observe(purpose="dynamic_recheck")` can revisit a potentially
-dynamic obstruction, rate-limited by sector; all motor actions still use fresh
-Depth/body/terrain/human safety. See
+dynamic obstruction. Collision/terrain geometry is now **model-invoked only**;
+normal motor actions no longer call a depth-body safety shield automatically. See
 [post-obstacle exploration](docs/post_block_exploration.md).
 
 
@@ -120,8 +120,8 @@ The original run directory remains intact on the server.
 
 
 **Odometry recovery:** If one forward RGB-D registration fails, the controller
-keeps a strictly bounded short straight segment with fresh geometry / human /
-terrain checks before each further step. Distributed low-residual static matches
+keeps a bounded short straight segment, preserving post-action RGB-D odometry
+without automatically running any geometry/human/terrain veto. Distributed low-residual static matches
 can now recover an otherwise-rejected metric translation; if still unresolved
 at the segment horizon, the tool reports an UNKNOWN remaining distance and
 establishes a new *local-only* observation anchor. It never invents the lost
@@ -133,8 +133,28 @@ translation or calls the endpoint reached. See
 controller turns in 15-degree Habitat actions, asks VLM only every 30/45 degrees,
 and returns a localized visual hypothesis or a completed-sweep report. It never
 moves forward and does not turn historical person/terrain evidence into a safety
-permit. See [active observation protocol](docs/active_observation.md).
+permit. Goal checkpoints send one live RGB image to VLM and do NOT trigger
+a geometry probe. See [active observation protocol](docs/active_observation.md).
 
+
+### Geometry mode: model-invoked only
+
+The API navigation agent now executes model-selected finite MOVE/OBSERVE actions
+without hidden automatic `Geometry.diagnose`, `forward_probe`, terrain fitting,
+or human-occupancy vetoes. `inspect_geometry` and `get_waypoint_candidates`
+run measured geometry only when NavigationAgent explicitly calls those tools;
+`ground_landmark` still permits model-requested RGB-D coordinate projection.
+Measured obstacle evidence is advisory to the model, not an automatic executor
+gate. Passive camera refreshes and `observe_for_goal` visual checkpoints do
+not perform collision probes.
+
+The Habitat simulator still enforces its own action validity and physics.
+Executed MOVE_FORWARD actions still yield real RGB-D receipts for odometry,
+stalls, pose uncertainty, task progress, and the global episode budget. For
+stair landing verification, an explicit `inspect_geometry` immediately after
+a registered level forward can contribute measured post-step terrain evidence.
+**This is a simulation-only experimental policy; it would not be a safe
+physical-robot default**, especially around moving people.
 
 ### Live terminal progress for API Agent runs
 
