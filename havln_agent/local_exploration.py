@@ -93,6 +93,141 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
                      'all headings at current pitch have been checked; change observation height or route strategy, not repeat sweep'))
 
 
+
+def multi_pitch_coverage(memory, pose, turn_degrees=15, pitch_degrees=30):
+    """Compact camera coverage from AUTHENTIC public observations at this stance.
+
+    Stored observations are the source of truth: no second mutable heading map.
+    Spatial identity uses the measured x/y/z and motion_epoch, not a static
+    room label. Every yaw/pitch is absolute in the current odometry frame.
+    Historical visibility NEVER grants fresh collision or human clearance.
+    """
+    observations = getattr(memory, 'observations', ())
+    bins = {}
+    for record in observations:
+        prior = record.get('pose') or {}
+        if not same_stance(prior, pose):
+            continue
+        yaw = bearing_from_pose(prior)
+        pitch = float(record.get('pitch_deg', prior.get('pitch_deg', 0)))
+        yaw_bin = round(yaw / turn_degrees) % max(1, round(360 / turn_degrees))
+        pitch_bin = round(pitch / pitch_degrees) * pitch_degrees
+        key = (pitch_bin, yaw_bin)
+        cell = bins.setdefault(key, dict(
+            pitch_deg=pitch_bin,
+            heading_deg=wrap_heading(yaw_bin * turn_degrees),
+            samples=0, revisits=0, last_observation_id=None,
+            newest_static_information=False))
+        cell['samples'] += 1
+        if record.get('revisited_static_view', False):
+            cell['revisits'] += 1
+        cell['last_observation_id'] = record.get('observation_id')
+        cell['newest_static_information'] = bool(
+            record.get('new_visual_information', True))
+    by_pitch = {}
+    for cell in bins.values():
+        by_pitch.setdefault(cell['pitch_deg'], []).append(cell)
+    levels = []
+    for pitch, cells in sorted(by_pitch.items()):
+        cells.sort(key=lambda c: c['heading_deg'])
+        levels.append(dict(
+            pitch_deg=pitch,
+            observed_headings_deg=[c['heading_deg'] for c in cells],
+            distinct_headings=len(cells),
+            repeated_observation_samples=sum(max(0, c['samples'] - 1)
+                                             for c in cells),
+            recent_revisited_headings_deg=[
+                c['heading_deg'] for c in cells if c['revisits']],
+            recent_sample_observation_ids=[
+                c['last_observation_id'] for c in cells[-3:]]))
+    total = sum(c['samples'] for c in bins.values())
+    current_pitch = round(float(pose.get('pitch_deg', 0)) /
+                          pitch_degrees) * pitch_degrees
+    seen_current = {c['heading_deg']
+                    for c in by_pitch.get(current_pitch, [])}
+    return dict(
+        reference='estimated_same_stance_and_motion_epoch',
+        absolute_yaw_convention='degrees_0_to_360',
+        pose_epoch=pose.get('motion_epoch', 0),
+        current_absolute_heading_deg=bearing_from_pose(pose),
+        current_pitch_deg=pose.get('pitch_deg', 0),
+        heading_bin_deg=turn_degrees, pitch_bin_deg=pitch_degrees,
+        observed_pitch_levels=levels,
+        total_observation_samples=total,
+        unique_heading_pitch_cells=len(bins),
+        repeated_samples=max(0, total - len(bins)),
+        current_pitch_checked_headings_deg=sorted(seen_current),
+        measurement='historical_public_RGBD_only_not_live_path_clearance')
+
+
+def observation_stagnation(memory, pose, window=24):
+    """Summarize repeated information-poor observations; no forbidden actions.
+
+    Unlike the action/observation-ID liveness guard, a LOOK_UP followed by
+    LOOK_DOWN at a known stance is not considered useful progress merely
+    because it consumed two atomic actions and produced new IDs.
+    """
+    observations = {o['observation_id']: o
+                    for o in getattr(memory, 'observations', ())}
+    actions = getattr(memory, 'actions', ())
+    last_forward = max((a.get('step', i) for i, a in enumerate(actions)
+                        if a.get('action') == 'MOVE_FORWARD'), default=-1)
+    observation_tools = {
+        'turn_and_observe', 'observe_for_goal',
+        'get_waypoint_candidates', 'inspect_geometry',
+        'analyze_scene', 'ground_landmark', 'compare_views'}
+    sampled = []
+    for entry in reversed(getattr(memory, 'tool_ledger', ())):
+        if len(sampled) >= window:
+            break
+        result = entry.get('result') or {}
+        tool = (entry.get('call') or {}).get('tool')
+        if tool not in observation_tools:
+            continue
+        final = observations.get(result.get('end_observation_id'))
+        if not final or not same_stance(final.get('pose'), pose):
+            continue
+        # Do not interpret previous physical locations as current stagnation.
+        if final.get('step', -1) <= last_forward:
+            continue
+        status = result.get('status')
+        low_gain = (status == 'NO_NEW_INFORMATION'
+                    or result.get('outcome') == 'REPEATED_SEARCH_NO_NEW_VIEW'
+                    or result.get('reason') in (
+                        'scan_completed_without_new_static_view',
+                        'local_view_coverage_exhausted_with_unknown_geometry',
+                        'no_new_relative_view_candidates'))
+        if tool in ('turn_and_observe', 'observe_for_goal'):
+            low_gain = low_gain or bool(
+                final.get('revisited_static_view', False))
+        elif tool == 'get_waypoint_candidates':
+            # Repeated NEEDS_VIEW and no executable candidate is not a new
+            # physically usable route; still not a safety prohibition.
+            low_gain = low_gain or (status == 'NEEDS_VIEW'
+                and not any(p.get('first_step') == 'EXECUTABLE'
+                            for p in result.get('paths', ())))
+        sampled.append(dict(
+            tool=tool, status=status, low_information=bool(low_gain),
+            observation_id=final['observation_id'],
+            heading_deg=bearing_from_pose(final['pose']),
+            pitch_deg=final.get('pitch_deg',
+                                final['pose'].get('pitch_deg', 0))))
+    low = sum(x['low_information'] for x in sampled)
+    repeatedly_unproductive = len(sampled) >= 8 and low >= 6
+    return dict(
+        same_stance_observation_calls=len(sampled),
+        low_information_calls=low,
+        observations_since_last_forward=len(sampled),
+        repeated_low_information=bool(repeatedly_unproductive),
+        recent_attempts=list(reversed(sampled[:6])),
+        no_new_route_from_repeated_scans=bool(repeatedly_unproductive),
+        interpretation=('same_stance_observation_loop_no_new_actionable_evidence'
+                        if repeatedly_unproductive else 'normal_observation'),
+        decision_authority='NavigationAgent',
+        no_forced_physical_action=True)
+
+
+
 def predicted_scan(memory, pose, delta_degrees, look, turn_degrees=15, tilt_degrees=30):
     """Classify intended TURN/LOOK camera frames before spending atomic actions."""
     steps = round(abs(delta_degrees)/turn_degrees)
