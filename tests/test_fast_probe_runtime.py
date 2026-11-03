@@ -1,8 +1,4 @@
-"""Real Geometry and ToolExecutor forward-path regression for on-demand terrain.
-
-The low-cost body sweep is allowed in normal navigation. Full terrain support
-is reserved for on-demand inspect_geometry and post-move LEVEL landing evidence.
-"""
+"""Geometry is an explicit tool, never an automatic forward/observation gate."""
 import time
 import unittest
 from types import SimpleNamespace
@@ -84,26 +80,24 @@ class FastProbeRuntimeTests(unittest.TestCase):
         measurement=dict(status='ESTIMATED',vertical_motion=motion_direction,
                          translation_m=dict(x_right=0,y_up=-0.1,z_forward=0.25),
                          uncertainty_m=0.02)
-        with patch('havln_agent.tools.estimate_translation',return_value=measurement), \
-             patch('havln_agent.tools.landing_support',
-                   return_value=dict(status='SUPPORTED')) as land:
+        with patch('havln_agent.tools.estimate_translation',return_value=measurement):
             result=runner._step('MOVE_FORWARD')
         self.assertEqual(result['status'],'EXECUTED')
         self.assertEqual(result['feedback']['landing_support']['status'],
-                         'SUPPORTED' if landing_expected else 'NOT_EVALUATED')
-        self.assertEqual(land.call_count,1 if landing_expected else 0)
+                         'NOT_EVALUATED')
         if motion_direction == 'UP':
             self.assertTrue(result['feedback']['semantic_direction_mismatch'])
             self.assertNotIn('motion_alert',result['feedback'])
-        geometry.movement_probe.assert_called_once_with(0.0)
+        runner.geometry.assert_not_called()
+        geometry.movement_probe.assert_not_called()
         self.assertEqual(runner.record_step.call_args.args[0]['safety']['scope'],
-                         'current_depth_next_step_body_only')
+                         'geometry_not_automatically_checked')
 
     def test_downward_motion_does_not_trigger_auto_terrain_fit(self):
         self.run_forward('DOWN',False)
 
-    def test_stair_landing_level_motion_keeps_required_completion_evidence(self):
-        self.run_forward('LEVEL',True)
+    def test_stair_landing_level_motion_defers_terrain_until_inspection(self):
+        self.run_forward('LEVEL',False)
 
     def test_motion_opposite_to_task_is_not_auto_motion_alert(self):
         self.run_forward('UP',False)
