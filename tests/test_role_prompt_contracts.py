@@ -50,6 +50,46 @@ class PromptContractTests(unittest.TestCase):
         self.assertNotIn("LOOK_DOWN and assess/ground the entrance", client.system)
         self.assertTrue(client.kwargs["retry_safe"])
 
+    def test_observation_stagnation_requests_model_authored_direction_without_forced_motion(self):
+        client=CapturingClient(dict(tool='navigate_relative',
+            args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=3)))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value={'navigate_relative':{
+                'parameters':dict(type='object',properties={},
+                                  required=[],additionalProperties=False),
+                'description':'model chooses a short bearing',
+                'permission':'NAVIGATION'}}),
+            memory=SimpleNamespace(keyframes={}),event=Mock())
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=dict(observation_stagnation=dict(
+                       intervention='DIRECTIONAL_ACTION_DECISION_REQUIRED',
+                       same_stance_observation_calls=10,
+                       low_information_calls=9))):
+            NavigationAgent(runtime).decide()
+        self.assertIn('OBSERVATION-LOOP INTERVENTION',client.system)
+        self.assertIn('YOU choose',client.system)
+        self.assertIn('not',client.system.lower())
+        self.assertIn('safety',client.system.lower())
+        self.assertIn('navigate_relative',client.system)
+        runtime.event.assert_called_once()
+        self.assertFalse(runtime.event.call_args.kwargs['physically_forced'])
+        self.assertEqual(client.role,'navigation_agent')
+
+    def test_normal_observation_prompt_remains_original_baseline(self):
+        client=CapturingClient(dict(tool='inspect_geometry',args={}))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value={'inspect_geometry':{
+                'parameters':dict(type='object',properties={},
+                                  required=[],additionalProperties=False),
+                'description':'measure depth', 'permission':'READ_ONLY'}}),
+            memory=SimpleNamespace(keyframes={}))
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=dict(observation_stagnation=dict(
+                       repeated_low_information=False))):
+            NavigationAgent(runtime).decide()
+        self.assertNotIn('OBSERVATION-LOOP INTERVENTION',client.system)
+        self.assertIn('Prefer a measured goal-approaching direction',client.system)
+
     def test_task_review_never_asks_model_to_generate_predicates(self):
         client = CapturingClient(dict(intent="continue", subgoal="Descend stairs"))
         goal = dict(action="Descent to the bottom of the stairs", target="landing",
