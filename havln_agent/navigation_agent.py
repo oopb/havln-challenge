@@ -19,7 +19,9 @@ COMMON_PROMPT = (
     'Return exactly ONE JSON object containing one registered tool and args, '
     'plus optional evidence-linked memory_delta. Wait for the tool result. '
     'Do not invent observations, movement, target coordinates or completion. '
-    'Each MOVE requires the local controller to check fresh RGB-D geometry. '
+    'Each MOVE uses current RGB-D to detect affirmative obstacles. Unknown '
+    'depth, unmeasured FOV and unlocalized visual hypotheses do NOT prove '
+    'collision and must not automatically veto a model-selected movement. '
     'A local TARGET_REACHED is not semantic task completion. Read '
     'historical_motion_evidence even after motion_epoch changes; an epoch '
     'invalidates old *coordinates*, not historical verified RGB-D movement. '
@@ -58,7 +60,7 @@ OBSERVE_PROMPT = (
     'Read local_geometry_scope: unmeasured yaw bins are UNKNOWN, not blocked; '
     'a blank currently_plausible_local_bearings list does NOT mean there is '
     'no viable direction anywhere. Distinguish a measured BLOCKED direction '
-    'from a measured NEEDS_VIEW/unknown direction. Turning changes the live '
+    'from a measured UNCONFIRMED/unknown direction. Turning changes the live '
     'sampled heading; each next forward still requires new depth checks. '
     'Treat goal_alignment, estimated distance and direction compatibility '
     'as descriptive evidence. A detour that temporarily moves away from '
@@ -72,8 +74,10 @@ OBSERVE_PROMPT = (
     'inspect_geometry when detailed terrain or obstacle confirmation is '
     'needed. Full geometry diagnosis is a tool you invoke ON DEMAND, '
     'not an automatic permission gate before every forward step. '
-    'BLOCKED means inspect another candidate direction. NEEDS_VIEW means obtain '
-    'the specific missing camera view. REQUIRES_ATTENTION means reanchor using '
+    'BLOCKED means an observed obstacle requires a different direction. '
+    'UNCONFIRMED is NOT BLOCKED; you may move toward it or seek more evidence. '
+    'NEEDS_VIEW from a semantic tool means obtaining a specific missing view. '
+    'REQUIRES_ATTENTION means reanchor using '
     'current RGB-D and refresh geometry/grounding. Camera-only view directions '
     'are not executable movement waypoints. '
     'Treat NO_NEW_INFORMATION and REPEATED_SEARCH_NO_NEW_VIEW as evidence of '
@@ -86,8 +90,18 @@ OBSERVE_PROMPT = (
     'to choose a movement. Avoid repeated static scans and rediscovering an '
     'already identified target. A completed short waypoint is a movement '
     'receipt, not a reason to restart the entire semantic search. '
-    'After each MOVE, choose the next short segment using the new observation '
-    'and retained memory; continue the same subgoal. '
+    'After a successful MOVE, explicitly compare the just-completed heading, '
+    'registered vertical/forward progress, target memory and next-step depth. '
+    'If the previous direction still serves the goal and no obstacle was '
+    'observed, consider continuing that same heading instead of restarting '
+    'a full static scan. A 0.25m atomic forward action is NOT the maximum '
+    'distance_m for navigate_relative: choose the finite 0.25-3.0m segment '
+    'appropriate to current evidence (multiple atomic steps run continuously). '
+    'You still decide whether to continue, turn, inspect or revise the goal. '
+    'turn_and_observe is a tiny calibrated camera tool: its current maximum '
+    'absolute angle is action_calibration.turn_and_observe_max_deg; DO NOT '
+    'request a 90/150/180 degree single camera-only turn unless its registered '
+    'schema explicitly permits it. Use observe_for_goal for planned sweeps. '
     'Navigation tools DO NOT take max_atomic_steps or a per-call action '
     'budget. Provide only a target direction, distance, or waypoint ID; '
     'the executor completes all needed turns before attempting forward. '
@@ -140,6 +154,13 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         runtime.registry = runtime.make_registry()
         def validate(value):
+            # Some low-cost providers obey only the envelope/tool names and
+            # ignore per-tool argument schemas. Reject malformed angle/args
+            # during the decision so the model can repair instead of burning
+            # cycles on INVALID_ARGUMENTS from ToolExecutor.
+            if not Draft7Validator(navigation_schema(runtime.registry)).is_valid(value):
+                raise APIError('navigation_tool_arguments_violate_registered_schema',
+                               category='structured_field')
             known = set(runtime.memory.keyframes)
             if any(not set(item['source_observation_ids']) <= known
                    for item in value.get('memory_delta', [])):
