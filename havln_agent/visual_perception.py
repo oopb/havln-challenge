@@ -32,6 +32,38 @@ def semantic_cache_context(value):
             if key not in ('observation_id','captured_at','pose','episode_id')}
 
 
+PANORAMA_VISUAL_SCHEMA = object_schema(dict(
+    selected_observation_id=dict(type='string', minLength=1),
+    visible_evidence=TEXT,
+    uncertainty=TEXT,
+    visual_cues=dict(type='array', minItems=1, maxItems=5,
+                     items=dict(type='string', minLength=1, maxLength=250)),
+    alternative_observation_ids=dict(type='array', maxItems=3,
+                                     uniqueItems=True, items=dict(type='string', minLength=1))))
+
+# Separate from routine scene analysis: compare *recorded* azimuth images
+# without mistaking apparent empty floor for verified robot clearance.
+PANORAMA_VISUAL_PROMPT = (
+    'PANORAMIC VISUAL MEMORY REVIEW. You see saved RGB images captured '
+    'at the same estimated robot stance while it turned through a full circle. '
+    'The supplied views[] entries align ONE-TO-ONE to the images IN ORDER. '
+    'Each view identifies observation_id, image_index, absolute camera yaw, '
+    'signed relative yaw from the robot CURRENT heading, pitch and historical '
+    'front depth state. Read those actual angles; do NOT infer them from image '
+    'appearance and do not swap left/right or reinterpret pitch as yaw. '
+    'Use the current navigation instruction and failures to identify WHICH '
+    'visible corridor, stair entry, door or approach region is the best next '
+    'short MOVEMENT HYPOTHESIS. Select EXACTLY ONE supplied observation_id, '
+    'even if all available views are ambiguous, and disclose uncertainty. '
+    'Return concrete visual cues and up to three alternatives among supplied '
+    'observation IDs. Do NOT invent a visible opening or use old people/depth '
+    'to certify current walkability. You are the eyes, not the motion executor: '
+    'this is historical semantic evidence only. The NavigationAgent will choose '
+    'the final movement bearing and distance; a live safety controller will '
+    'independently validate each forward step. Return ONE JSON object.'
+)
+
+
 class VisualPerception:
     def __init__(self,runtime):
         self.runtime=runtime
@@ -55,6 +87,41 @@ class VisualPerception:
                 retry[3]=dict(original[3],format_feedback=dict(error=detail[:350],
                     instruction='Regenerate ONE complete schema-valid JSON object. Every key must occur once. No duplicate or conflicting fields.'))
                 args=tuple(retry)
+
+    def panorama_direction_evidence(self, frames, task_context):
+        """Select a visually promising saved view, not a collision certificate.
+
+        Frames are (real Observation, metadata) pairs, ordered exactly as
+        sent in the multimodal API request. No synthetic or guessed image is
+        ever presented. The IDs/relative yaws are computed by the harness.
+        """
+        if not frames:
+            raise APIError('panorama_historical_frames_unavailable',
+                           category='structured_field')
+        views=[dict(info, image_index=i) for i, (_,info) in enumerate(frames)]
+        identifiers={v['observation_id'] for v in views}
+        if len(identifiers)!=len(views):
+            raise APIError('panorama_duplicate_observation_id',
+                           category='structured_field')
+        context=dict(mode='panorama_visual_memory',
+                     task=task_context['task'],
+                     current_heading_deg=task_context['current_heading_deg'],
+                     recent_route_failures=task_context.get('recent_route_failures'),
+                     current_navigation_memory=task_context.get('navigation_memory'),
+                     views=views,
+                     all_images_are_historical=True,
+                     live_motion_clearance=False)
+        def validate(value):
+            if (value['selected_observation_id'] not in identifiers
+                    or any(x not in identifiers
+                        for x in value['alternative_observation_ids'])):
+                raise APIError('panorama_selected_id_must_match_provided_images',
+                               category='structured_field')
+        return self.complete(
+            'visual_perception','panorama_direction_evidence',
+            PANORAMA_VISUAL_PROMPT,context,PANORAMA_VISUAL_SCHEMA,
+            image_url=[image_url(obs,max_edge=640) for obs,_ in frames],
+            cache=False,validate=validate)
 
     def scene(self,observation,source,question):
         task=self.runtime.memory.task

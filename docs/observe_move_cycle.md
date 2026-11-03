@@ -194,3 +194,12 @@ NavigationAgent specifies the bearing and desired short travel distance, or an e
 ### Current sampled geometry versus unmeasured directions
 
 `local_geometry` is only the current RGB-D diagnostic's **sampled relative bearings** (often solely `angle_degrees=0` straight ahead). `local_geometry_scope` names sampled headings, confirmed-executable headings, explicitly BLOCKED headings, measured-but-unconfirmed headings (e.g. NEEDS_VIEW), and compact **unmeasured** yaw-bin ranges. An empty executable list is **not** a proof that the full 360° is blocked. The separate historical observation-coverage map is evidence of camera visitation, not live clearance. The NavigationAgent may freely choose a different bearing or measurement; each attempted forward step is still safety-checked from the latest RGB-D.
+
+
+### Full-circle memory-image decision (separate multimodal prompts)
+
+The full-azimuth checkpoint now has two separate model calls. **Panoramic visual memory:** VisualPerception receives up to 12 authentic saved RGB observations from the same estimated stance/epoch/subgoal, ordered with a matching metadata row for each image: observation ID, absolute heading, signed turn from the *current* robot heading (positive left), camera pitch, and historical frontal geometry. Each image is resized only for transmission; the original diagnostic RGB-D record remains unchanged. A dedicated image-review prompt identifies the most promising view and visible evidence, not current free space.
+
+**Dedicated navigation decision:** NavigationAgent receives the VLM's selected observation ID, visual evidence and uncertainty, per-image relative angles, the current instruction, task, and previous navigation failures. This request uses a standalone prompt and only the finite `navigate_relative(turn_deg, distance_m)` tool. The NavigationAgent chooses the bearing and distance itself; the executor performs the turns and rechecks live depth/terrain/people before forward motion. A historical image or VLM suggestion cannot bypass an actual collision veto.
+
+The VLM review is cached in memory only across a structured-output retry for the *same* episode/plan/stance and selected observation IDs. Events include reviewed image IDs and angular offsets for audit. Normal decisions, and orientation-only milestones, are unaffected. The visual endpoint must support multiple image inputs; a text-only visual model cannot perform this evidence review. The NavigationAgent endpoint can remain text-only.
