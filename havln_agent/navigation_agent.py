@@ -19,7 +19,7 @@ COMMON_PROMPT = (
     'Return exactly ONE JSON object containing one registered tool and args, '
     'plus optional evidence-linked memory_delta. Wait for the tool result. '
     'Do not invent observations, movement, target coordinates or completion. '
-    'Each MOVE uses current RGB-D to detect affirmative obstacles. Unknown '
+    'Each MOVE uses fresh RGB-D to detect affirmative obstacles. Unknown '
     'depth, unmeasured FOV and unlocalized visual hypotheses do NOT prove '
     'collision and must not automatically veto a model-selected movement. '
     'A local TARGET_REACHED is not semantic task completion. Read '
