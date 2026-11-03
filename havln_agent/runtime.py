@@ -550,7 +550,7 @@ class AgentRuntime(ToolExecutor):
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
-    def _navigate_relative(self, turn_deg, distance_m, max_atomic_steps, _source=None):
+    def _navigate_relative(self, turn_deg, distance_m, _source=None):
         """Direct model intent, without a preselected semantic candidate.
 
         The bearing is relative to the current heading, not a global pose or
@@ -597,13 +597,13 @@ class AgentRuntime(ToolExecutor):
         # get_waypoint_candidates. Register the proposal, not a clearance
         # certificate. Live checks still establish execution status.
         self.memory.note_candidates([path])
-        result = self._navigate_local(path_id, max_atomic_steps)
+        result = self._navigate_local(path_id)
         return dict(result, waypoint_id=path_id,
                     requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='live_per_atomic_action_only'))
 
-    def _navigate_to_pixel(self, u, v, distance_m, max_atomic_steps):
+    def _navigate_to_pixel(self, u, v, distance_m):
         """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
         if not (math.isfinite(u) and math.isfinite(v) and
                 0 <= u <= 1 and 0 <= v <= 1):
@@ -630,7 +630,7 @@ class AgentRuntime(ToolExecutor):
         if abs(turn_deg) > 180:
             return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
         pixel_source = self.source()
-        result = self._navigate_relative(turn_deg,distance_m,max_atomic_steps,
+        result = self._navigate_relative(turn_deg,distance_m,
                                          _source=pixel_source)
         return dict(result, pixel_target=dict(u=u,v=v,
             source_observation_id=pixel_source['observation_id'],
@@ -639,7 +639,7 @@ class AgentRuntime(ToolExecutor):
             selected_turn_deg=turn_deg,
             interpretation='direction_hint_only_pixel_not_walkability_certificate'))
 
-    def _navigate_local(self, waypoint_id, max_atomic_steps):
+    def _navigate_local(self, waypoint_id):
         path = self.paths.get(waypoint_id)
         if path is None:
             return dict(status='INVALID_TARGET', reason='unknown_waypoint_id')
@@ -664,7 +664,7 @@ class AgentRuntime(ToolExecutor):
         if path['type']=='EXPLORATION_WAYPOINT':
             self.motion_policy = 'LOCAL_TERRAIN'
         try:
-            result = self._execute_waypoint(target, max_atomic_steps)
+            result = self._execute_waypoint(target)
             self.active_waypoint_id = (waypoint_id if self.motion_controller.target is not None else None)
             return dict(result,waypoint_type=path['type'],waypoint_arrival_completes_task=False)
         finally:
