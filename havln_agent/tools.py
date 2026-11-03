@@ -17,7 +17,7 @@ from .progress import verify_progress, current_visual_evidence
 from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
 from .motion import estimate_translation, landing_support
-from .spatial import goal_estimate
+from .spatial import goal_estimate, angle_delta
 
 
 class ToolExecutor:
@@ -183,6 +183,48 @@ class ToolExecutor:
             executed_actions=len(actions),executed_motion=actions,start_observation_id=observation_before,
             end_observation_id=self.memory.current['observation_id'],seconds=time.monotonic()-started,
             request_context=context)
+        if call.get('tool') in ('navigate_relative','navigate_to_pixel','navigate_local'):
+            turns=sum(a in ('TURN_LEFT','TURN_RIGHT') for a in actions)
+            forwards=actions.count('MOVE_FORWARD')
+            pending_id=result.get('waypoint_id') or args.get('waypoint_id')
+            active=(pending_id is not None and
+                pending_id == getattr(self,'active_waypoint_id',None)
+                and self.motion_controller.target is not None)
+            attempt=self.memory.active_attempt or {}
+            uncertain=bool(attempt.get('unknown_motion_seen'))
+            remaining_turns=None
+            forward_budget=None
+            if active and not uncertain:
+                target=self.motion_controller.target
+                pose=self.motion_controller.pose()
+                dx,dz=target[0]-pose['x'],target[1]-pose['z']
+                if math.hypot(dx,dz)>=self.camera.forward_step*.6:
+                    heading_error=abs(angle_delta(
+                        math.atan2(-dx,dz),pose['heading']))
+                    stride=math.radians(self.camera.turn_angle)
+                    remaining_turns=max(0,math.ceil(
+                        heading_error/stride-.5-1e-8))
+                    forward_budget=remaining_turns+1
+            result['movement_intent_feedback']=dict(
+                executed_turn_actions=turns,
+                executed_forward_actions=forwards,
+                turn_only_no_forward_attempt=bool(turns and not forwards),
+                actual_forward_attempted=bool(forwards),
+                requested_forward_distance_m=(
+                    (result.get('requested_motion') or {}).get('distance_m')
+                    or args.get('distance_m')),
+                waypoint_id=pending_id,
+                same_waypoint_pending=bool(active),
+                remaining_turn_actions_est=remaining_turns,
+                min_atomic_actions_until_first_forward_attempt=forward_budget,
+                first_forward_still_requires_live_safety=True,
+                endpoint_estimate_valid=not uncertain,
+                interpretation=(
+                    'only_turns_executed_forward_not_attempted'
+                    if turns and not forwards else
+                    'forward_was_attempted_registration_may_still_be_unknown'
+                    if forwards else 'no_atomic_motion_executed'),
+                model_decides_to_resume_replan_or_observe=True)
         result=self.finalize_result(result,before,observation_before,call)
         try:
             Draft7Validator(tool_result_schema()).validate(result)
