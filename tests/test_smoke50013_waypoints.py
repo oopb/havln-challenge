@@ -43,15 +43,15 @@ class WaypointLoopTests(unittest.TestCase):
         self.assertTrue(all(p["first_step"]=="EXECUTABLE" for p in paths))
         self.assertTrue(all(p["requires_post_turn_recheck"] for p in paths))
 
-    def test_confirmed_blocked_waypoint_does_not_start_motion(self):
+    def test_historical_blocked_preview_does_not_veto_new_model_route(self):
         executor=ToolExecutor.__new__(ToolExecutor)
         executor.paths={"p0":dict(id="p0",first_step="BLOCKED",
                                   execution_status="PROPOSED")}
-        executor._revalidate_path=Mock(side_effect=AssertionError("must not execute"))
-        rejected=executor._execute_waypoint("p0")
-        self.assertEqual(rejected["status"],"BLOCKED")
-        self.assertEqual(rejected["reason"],"measured_obstacle_in_waypoint")
-        executor._revalidate_path.assert_not_called()
+        executor._revalidate_path=Mock(return_value=dict(
+            status='STALE_TARGET',reason='synthetic_pose_error'))
+        result=executor._execute_waypoint("p0")
+        self.assertEqual(result["status"],'STALE_TARGET')
+        executor._revalidate_path.assert_called_once()
 
     def test_runtime_returns_camera_views_separately_and_no_routes(self):
         r=AgentRuntime.__new__(AgentRuntime)
