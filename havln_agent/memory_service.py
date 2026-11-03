@@ -128,8 +128,9 @@ class MemoryService(MemoryRecords):
         self.visual_targets.append(record)
         # Make target evidence searchable by observation ID, unlike ephemeral
         # panorama answers that previously left landmarks/groundings empty.
+        label=goal if isinstance(goal,dict) else {}
         self.note_semantics(dict(observation_id=identifier),[
-            str((goal or {}).get('target') or (goal or {}).get('landmark') or
+            str(label.get('target') or label.get('landmark') or
                 'navigation_target') + ': ' + visual['visible_evidence'][:300]])
         self.event('panorama_target_recorded',target_id=record['id'],
                    source_observation_ids=record['source_observation_ids'],
@@ -330,7 +331,7 @@ class MemoryService(MemoryRecords):
                 visual_analyses=copy.deepcopy([v for v in self.scene_history if v['source']['observation_id']==record_id]),
                 grounding_ids=[g['grounding_id'] for g in self.groundings if g['source']['observation_id']==record_id])
         for values,key in [(self.tool_ledger,'call_id'),(self.groundings,'grounding_id'),
-                           (self.visual_targets,'id')]: 
+                           (self.visual_targets,'id')]:
             value=next((v for v in values if v[key]==record_id),None)
             if value is not None:return dict(detail_requested=True,record=copy.deepcopy(value))
         if record_id.startswith('task_') and record_id[5:].isdigit():
