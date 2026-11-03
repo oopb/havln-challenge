@@ -141,7 +141,8 @@ def decide_with_panorama(agent, context, signature, validate, offered_tools):
             allowed_tool='navigate_relative',
             images_reviewed_by='visual_perception',
             frame_yaws_relative_to_current_pose=True,
-            historical_RGB_not_motion_permission=True),
+            historical_RGB_not_motion_permission=True,
+            geometry_autorun=False),
         **({'format_feedback':context['format_feedback']}
            if 'format_feedback' in context else {}))
     response=runtime.client.complete(
