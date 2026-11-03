@@ -112,7 +112,7 @@ NavigationAgent chooses among short candidates using task, visual evidence, obse
 ## Model-control runtime v2
 
 **Strategy authority**: NavigationAgent can issue `navigate_relative(turn_deg,
-distance_m, max_atomic_steps)`, quantized by the executor into calibrated turn increments and 0.25m
+distance_m)`, quantized by the executor into calibrated turn increments and 0.25m
 step multiples (0.25 to 3m). It can alternatively issue
 `navigate_to_pixel(u,v,distance_m)` for a current RGB-D
 pixel bearing. A pixel supplies only a bearing hypothesis, not permission
@@ -190,3 +190,7 @@ evidence, not a fictitious requirement to pass the foyer behind the agent.
 ### Continuous finite navigation (no max_atomic_steps)
 
 NavigationAgent specifies the bearing and desired short travel distance, or an existing waypoint ID. The executor completes all needed calibrated TURN actions and then steps forward, refreshing RGB-D geometry, terrain and human safety at **each** forward step. No per-call atomic-action count truncates navigation. Execution returns on route arrival, sensor/safety/pose interruption, environment termination, or the overall Episode action budget (one STOP slot reserved). `runtime.tool_max_actions` applies to camera-only observation tools and does **not** limit navigation. A route is not a semantic completion certificate.
+
+### Current sampled geometry versus unmeasured directions
+
+`local_geometry` is only the current RGB-D diagnostic's **sampled relative bearings** (often solely `angle_degrees=0` straight ahead). `local_geometry_scope` names sampled headings, confirmed-executable headings, explicitly BLOCKED headings, measured-but-unconfirmed headings (e.g. NEEDS_VIEW), and compact **unmeasured** yaw-bin ranges. An empty executable list is **not** a proof that the full 360° is blocked. The separate historical observation-coverage map is evidence of camera visitation, not live clearance. The NavigationAgent may freely choose a different bearing or measurement; each attempted forward step is still safety-checked from the latest RGB-D.
