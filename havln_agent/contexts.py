@@ -254,9 +254,11 @@ def navigation_context(runtime):
                 min(runtime.config.get('tool_max_actions',3),
                     max(1,runtime.config['max_steps']-1-len(memory.actions))),
             unknown_depth_is_obstacle=False,
-            motion_veto='confirmed_measured_obstacle_only',
+            geometry_policy='only_explicit_inspect_geometry_or_get_waypoint_candidates',
+            geometry_autorun_during_move=False,
+            motion_veto='simulator_action_legality_and_pose_tracking_only',
             direct_segment_max_m=3.0,
-            navigation_execution_policy='continuous_until_route_or_safety_or_episode_budget',
+            navigation_execution_policy='continuous_until_route_or_pose_or_episode_budget',
             per_tool_atomic_action_cap=None,
             remaining_episode_atomic_actions=max(
                 0,runtime.config['max_steps']-1-len(memory.actions))),
@@ -308,7 +310,7 @@ def navigation_context(runtime):
     if recent:
         result['candidate_waypoints']=recent
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
-    result['motion_tools_note']='navigate_relative and navigate_to_pixel do not require a pre-generated waypoint; all forward actions use live collision probes'
+    result['motion_tools_note']='navigate_relative and navigate_to_pixel never run an implicit collision probe; geometry is measured only when the model explicitly calls inspect_geometry or get_waypoint_candidates. RGB-D estimates movement after executing each action.'
     if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
         target=runtime.motion_controller.target
         attempt=memory.active_attempt or {}
