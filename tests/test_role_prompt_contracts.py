@@ -67,7 +67,7 @@ class PromptContractTests(unittest.TestCase):
                        low_information_calls=9))):
             NavigationAgent(runtime).decide()
         self.assertIn('OBSERVATION-LOOP INTERVENTION',client.system)
-        self.assertIn('YOU choose',client.system)
+        self.assertIn('You choose the bearing',client.system)
         self.assertIn('not',client.system.lower())
         self.assertIn('safety',client.system.lower())
         self.assertIn('navigate_relative',client.system)
