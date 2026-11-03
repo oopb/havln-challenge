@@ -38,7 +38,7 @@ class RelativeMotionTests(unittest.TestCase):
         camera=SimpleNamespace(forward_step=.25, turn_angle=15)
         executor=ToolExecutor.__new__(ToolExecutor)
         executor.camera=camera
-        executor.config=dict(max_depth_age_seconds=3)
+        executor.config=dict(max_depth_age_seconds=3,max_steps=128)
         executor.motion_controller=LocalMotionController(camera)
         controller=executor.motion_controller
         origin=controller.pose()
@@ -55,7 +55,7 @@ class RelativeMotionTests(unittest.TestCase):
         geom=CurrentGeometry()
         executor.geometry=lambda:geom
         memory=SimpleNamespace(current=dict(observation_id='obs_0000'),
-            active_attempt=None,task=SimpleNamespace(current_subgoal_index=0),
+            active_attempt=None,actions=[],task=SimpleNamespace(current_subgoal_index=0),
             note_validation=Mock())
         def start_attempt(chosen, pose):
             memory.active_attempt=dict(target=chosen,interruptions=[])
@@ -68,7 +68,7 @@ class RelativeMotionTests(unittest.TestCase):
             status='OK',original_target=[0.,.5],
             executable_segment=dict(path_id='p0')))
         results=list(outcomes or ['UNKNOWN','ESTIMATED'])
-        actions=[]
+        actions=memory.actions
         def execute_action(action):
             actions.append(action)
             index=len(actions)
@@ -97,7 +97,7 @@ class RelativeMotionTests(unittest.TestCase):
 
     def test_unknown_first_move_allows_one_more_checked_forward_then_reanchors(self):
         r,path,actions,geometry=self.agent()
-        result=r._execute_waypoint('p0',2)
+        result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(geometry.diagnose_calls,1)
         self.assertEqual(result['status'],'REQUIRES_ATTENTION')
@@ -115,23 +115,19 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(r.motion_controller.pose()['coordinate_scope'],
                          'reanchored_local_relative')
 
-    def test_unknown_motion_one_step_continues_same_waypoint_next_call(self):
+    def test_unknown_motion_finishes_intent_without_second_model_call(self):
         r,path,actions,geometry=self.agent()
-        first=r._execute_waypoint('p0',1)
-        self.assertEqual(first['status'],'PARTIAL')
-        self.assertEqual(first['recovery']['mode'],'CONTINUE_BOUNDED_RELATIVE_MOTION')
-        self.assertIsNotNone(r.motion_controller.target)
-        self.assertTrue(r.memory.active_attempt['unknown_motion_seen'])
-        self.assertIsNone(first['remaining_distance'])
-        self.assertFalse(first['endpoint_estimate_valid'])
-        second=r._execute_waypoint('current',1)
+        result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
-        self.assertEqual(second['status'],'REQUIRES_ATTENTION')
-        self.assertEqual(second['recovery']['executed_forward_actions'],2)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['recovery']['executed_forward_actions'],2)
+        self.assertEqual(result['recovery']['mode'],'REANCHOR_CURRENT_RGBD')
+        self.assertIsNone(r.motion_controller.target)
+        self.assertFalse(result['endpoint_estimate_valid'])
 
     def test_fresh_blocked_geometry_still_denies_second_move(self):
         r,path,actions,geometry=self.agent(blocked_after=1)
-        result=r._execute_waypoint('p0',2)
+        result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD'])
         self.assertEqual(result['status'],'BLOCKED')
         self.assertEqual(result['reason'],'occupied_next_step')
@@ -139,16 +135,22 @@ class RelativeMotionTests(unittest.TestCase):
 
     def test_relative_motion_cannot_steer_to_stale_global_endpoint(self):
         r,path,actions,geometry=self.agent()
-        first=r._execute_waypoint('p0',1)
+        # Simulate a previously accepted unknown-motion segment that the
+        # environment interrupted, then an external change in heading.
+        r.motion_controller.target=(0.,.5)
+        r.memory.active_attempt=dict(target=path,interruptions=[],
+            unknown_motion_seen=True,forward_actions=1,
+            forward_action_horizon=2,unknown_observation_ids=['obs_0001'])
+        r.motion_controller.accept_feedback('MOVE_FORWARD',dict(status='UNKNOWN'))
         r.motion_controller.accept_feedback('TURN_LEFT',None)
-        result=r._execute_waypoint('current',1)
-        self.assertEqual(actions,['MOVE_FORWARD'])
+        result=r._execute_waypoint('current')
+        self.assertEqual(actions,[])
         self.assertEqual(result['status'],'REQUIRES_ATTENTION')
         self.assertEqual(result['reason'],'relative_motion_heading_changed')
 
     def test_normal_measured_steps_still_reach_target(self):
         r,path,actions,geometry=self.agent(outcomes=['ESTIMATED','ESTIMATED'])
-        result=r._execute_waypoint('p0',2)
+        result=r._execute_waypoint('p0')
         self.assertEqual(result['status'],'TARGET_REACHED')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(r.motion_controller.motion_epoch,0)
@@ -218,7 +220,7 @@ class RelativeMotionTests(unittest.TestCase):
         r._revalidate_path.return_value=dict(
             status='OK',original_target=[0.,.25],
             executable_segment=dict(path_id='p0'))
-        result=r._execute_waypoint('p0',2)
+        result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD'])
         self.assertEqual(result['status'],'REQUIRES_ATTENTION')
         self.assertFalse(result['target_reached'])

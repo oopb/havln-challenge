@@ -29,9 +29,11 @@ COMMON_PROMPT = (
     'just because exploration is slow. '
 )
 OBSERVE_PROMPT = (
-    'MODE: OBSERVE. Decide the NEXT short movement toward the current subgoal, '
-    'not a complete global route. A navigate_local tool call executes a bounded '
-    'MOVE batch and then returns control to OBSERVE with new RGB-D feedback. '
+    'MODE: OBSERVE. Choose the NEXT finite local movement target, not a '
+    'complete global route. A navigate_local/navigate_relative/navigate_to_pixel '
+    'call executes the model-selected TURNs and forward segment continuously '
+    'until arrival, live safety/pose interruption, or global Episode budget; '
+    'then returns control to OBSERVE with new RGB-D feedback. '
     'FIRST inspect navigation_memory, last_tool, candidate_waypoints, '
     'local_navigation and current target evidence. Preserve useful progress. '
     'If an IN_PROGRESS waypoint remains useful, you may navigate_local using the SAME '
@@ -77,13 +79,11 @@ OBSERVE_PROMPT = (
     'receipt, not a reason to restart the entire semantic search. '
     'After each MOVE, choose the next short segment using the new observation '
     'and retained memory; continue the same subgoal. '
-    'max_atomic_steps is a TOTAL limit shared by TURN and MOVE_FORWARD: '
-    'with 15-degree TURN increments, a requested 30-degree turn needs two '
-    'atomic turns BEFORE a forward action can be attempted. Choosing '
-    'max_atomic_steps=1 for such a motion executes only a TURN, not forward. '
-    'A PARTIAL tool_action_limit with only TURN receipts preserves a pending '
-    'waypoint; resume SAME waypoint if still suitable instead of starting '
-    'a new relative direction. '
+    'Navigation tools DO NOT take max_atomic_steps or a per-call action '
+    'budget. Provide only a target direction, distance, or waypoint ID; '
+    'the executor completes all needed turns before attempting forward. '
+    'Every forward receives fresh depth, terrain and people checks. '
+    'Safety/pose interruption returns control for YOUR next decision. '
 )
 
 # This is a model-visible *decision focus*, not a tool whitelist or a hidden
@@ -113,29 +113,11 @@ BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'seen pitch levels or arbitrarily change relative headings. The model '
     'retains full planning authority and the executor retains physical veto. '
 )
-PENDING_TURN_ONLY_MOTION_PROMPT = (
-    'MOVEMENT CONTINUITY: The latest navigate_* result executed only TURN '
-    'actions; zero MOVE_FORWARD actions were attempted. The original finite '
-    'waypoint may still be pending. max_atomic_steps counts BOTH TURN and '
-    'MOVE_FORWARD: for example 30 degrees at 15 degrees per step requires '
-    'two TURNs and at least one additional authorized action to first attempt '
-    'forward. Read pending_motion_continuity, including the remaining turns '
-    'and min_atomic_actions_until_first_forward_attempt. If the original '
-    'target still serves the task, use navigate_local with the SAME waypoint '
-    'ID and a suitable bounded action budget; if the number of TURN actions '
-    'exceeds max_atomic_actions_per_tool, continue in multiple bounded '
-    'navigate_local batches. Never request more than the tool allows. '
-    'Otherwise deliberately choose a different route or observation. '
-    'Do not redefine a new relative MOVE '
-    'merely because the last batch exhausted its turning budget. Live safety '
-    'checks still apply to every forward attempt. '
-)
-
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
     'LocalMotionController checks fresh RGB-D for each forward action, '
-    'executes up to the requested atomic-action budget and stops on obstruction '
-    'or attention. The next NavigationAgent decision is always OBSERVE.'
+    'continues to target arrival or an actual safety/pose/episode interruption. '
+    'The next NavigationAgent decision is always OBSERVE.'
 )
 
 class NavigationAgent:
@@ -157,7 +139,6 @@ class NavigationAgent:
                        **({'format_feedback': format_feedback} if format_feedback else {}))
         stagnation=context.get('observation_stagnation') or {}
         advisory=stagnation.get('intervention')
-        pending=bool(context.get('pending_motion_continuity'))
         # A one-shot strategic checkpoint must not be repeated every turn
         # while the physical stance is unchanged. A later new subgoal/stance
         # can legitimately receive a new checkpoint.
@@ -179,12 +160,11 @@ class NavigationAgent:
             else BLOCKED_OBSERVATION_INTERVENTION_PROMPT
                 if first_checkpoint and advisory=='BLOCKED_ACTIONABILITY_REASSESSMENT'
             else '')
-        continuity_prompt=PENDING_TURN_ONLY_MOTION_PROMPT if pending else ''
         if advisory and not first_checkpoint:
             stagnation['intervention_delivery']='previously_issued_or_pending_route'
         result=runtime.client.complete(
             'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt + continuity_prompt,
+            COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt,
             context, navigation_schema(runtime.registry), validate=validate,
             format_retry=int(bool(format_feedback)), retry_safe=True,
             protocol=compact_navigation_protocol(runtime.registry),

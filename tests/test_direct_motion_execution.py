@@ -61,69 +61,77 @@ def runtime():
 
 
 class DirectMovementExecutionTests(unittest.TestCase):
-    def test_turn_move_pause_observe_resume_and_validate_route(self):
+    def test_one_model_call_completes_all_turns_and_forward_steps(self):
         r=runtime()
         motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
             translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
             uncertainty_m=.01)
+        # Previously a 30-degree turn used up the per-call limit; now a
+        # single finite 0.5m route must complete without asking for a resume.
         with patch('havln_agent.tools.estimate_translation',return_value=motion):
-            result=r._navigate_relative(30,.5,3)
-            self.assertEqual(result['status'],'PARTIAL')
-            self.assertEqual([x['action'] for x in r.memory.actions],
-                             ['TURN_LEFT','TURN_LEFT','MOVE_FORWARD'])
-            pid=result['waypoint_id']
-            self.assertEqual(r.active_waypoint_id,pid)
-            self.assertEqual(r.memory.routes[pid]['evidence_state'],
-                             'geometry_supported')
-            # Arrival at a NEW RGB-D view invalidates old collision
-            # authorization; a registered route becomes CANDIDATE again.
-            self.assertEqual(r.memory.routes[pid]['state'],'CANDIDATE')
-            self.assertEqual(r.memory.routes[pid]['traversability'],'UNKNOWN')
-            self.assertEqual(r.motion_controller.target is not None,True)
-            # The model may observe without cancelling its bounded local route.
-            r._step('TURN_LEFT')
-            self.assertEqual(r.active_waypoint_id,pid)
-            completed=r._navigate_local(pid,3)
-        self.assertEqual(completed['status'],'TARGET_REACHED')
+            result=r._navigate_relative(30,.5)
+        self.assertEqual(result['status'],'TARGET_REACHED')
+        self.assertEqual([x['action'] for x in r.memory.actions],
+                         ['TURN_LEFT','TURN_LEFT','MOVE_FORWARD','MOVE_FORWARD'])
         self.assertIsNone(r.motion_controller.target)
         self.assertIsNone(r.active_waypoint_id)
-        self.assertEqual([a['action'] for a in r.memory.actions].count('MOVE_FORWARD'),2)
-        self.assertEqual([a['action'] for a in r.memory.actions].count('TURN_RIGHT'),1)
+        self.assertEqual(result['requested_motion']['quantized_distance_m'],.5)
+        self.assertFalse(result['waypoint_arrival_completes_task'])
 
-    def test_turn_only_tool_budget_preserves_waypoint_and_reports_first_forward_budget(self):
+    def test_registry_navigation_has_no_atomic_action_limit(self):
         r=runtime()
         r.client=SimpleNamespace(trace_context={})
         r.current_decision_id='nav_unit_test'
         r.navigation_mode='OBSERVE'
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
         binding=dict(plan_revision=r.plan_revision,
             subgoal_id=r.active_subgoal_id,
             observation_id=r.memory.current['observation_id'],
             actor='navigation_agent')
-        # TURN=30 deg needs two 15-deg turns. A one-action request must NOT
-        # silently issue a forward or be recorded as a failed forward.
-        first=r.execute(dict(tool='navigate_relative',
-            args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=1)),binding)
-        motion=first['movement_intent_feedback']
-        self.assertEqual(first['status'],'PARTIAL')
-        self.assertEqual(first['reason'],'tool_action_limit')
-        self.assertEqual(first['executed_motion'],['TURN_LEFT'])
-        self.assertTrue(motion['turn_only_no_forward_attempt'])
-        self.assertFalse(motion['actual_forward_attempted'])
-        self.assertEqual(motion['remaining_turn_actions_est'],1)
-        self.assertEqual(motion['min_atomic_actions_until_first_forward_attempt'],2)
-        self.assertTrue(motion['same_waypoint_pending'])
-        waypoint=first['waypoint_id']
-        self.assertEqual(r.active_waypoint_id,waypoint)
-        measured=dict(status='ESTIMATED',vertical_motion='LEVEL',
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            outcome=r.execute(dict(tool='navigate_relative',
+                args=dict(turn_deg=30,distance_m=.5)),binding)
+        self.assertEqual(outcome['status'],'TARGET_REACHED')
+        self.assertEqual(outcome['executed_actions'],4)
+        self.assertEqual(outcome['requested_actions'],4)
+        self.assertEqual(outcome['movement_intent_feedback'][
+            'executed_forward_actions'],2)
+        self.assertFalse(outcome['movement_intent_feedback'][
+            'same_waypoint_pending'])
+        self.assertEqual(outcome['executed_motion'],
+            ['TURN_LEFT','TURN_LEFT','MOVE_FORWARD','MOVE_FORWARD'])
+
+    def test_episode_budget_is_the_only_action_count_limit(self):
+        r=runtime()
+        r.config['max_steps']=3  # Two navigation actions + one STOP.
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
             translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
             uncertainty_m=.01)
-        binding['observation_id']=r.memory.current['observation_id']
-        with patch('havln_agent.tools.estimate_translation',return_value=measured):
-            continued=r.execute(dict(tool='navigate_local',
-                args=dict(waypoint_id=waypoint,max_atomic_steps=3)),binding)
-        self.assertIn('MOVE_FORWARD',continued['executed_motion'])
-        self.assertEqual(continued['movement_intent_feedback'][
-            'waypoint_id'],waypoint)
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            partial=r._navigate_relative(0,.75)
+        self.assertEqual(partial['status'],'PARTIAL')
+        self.assertEqual(partial['reason'],'episode_action_budget_exhausted')
+        self.assertEqual([x['action'] for x in r.memory.actions],
+                         ['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(len(r.memory.actions),r.config['max_steps']-1)
+        # No more physical forward actions can be issued, even to continue
+        # the model's otherwise valid pending route.
+        self.assertEqual(r._step('MOVE_FORWARD')['status'],'BUDGET_LIMIT')
+
+    def test_arrival_on_final_allowed_action_is_success(self):
+        r=runtime()
+        r.config['max_steps']=3  # Exactly enough for 0.5m + reserved STOP.
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
+        with patch('havln_agent.tools.estimate_translation',return_value=motion):
+            arrived=r._navigate_relative(0,.5)
+        self.assertEqual(arrived['status'],'TARGET_REACHED')
+        self.assertEqual(arrived['reason'],'original_endpoint_reached')
+        self.assertEqual(len(r.memory.actions),2)
+        self.assertIsNone(r.motion_controller.target)
 
     def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
         r=runtime()
@@ -132,7 +140,7 @@ class DirectMovementExecutionTests(unittest.TestCase):
         # The test fixture returns byte-identical RGB and depth frames, as
         # observed in 13 real forward actions in evaluation episode 4.
         with patch('havln_agent.tools.estimate_translation',return_value=unknown):
-            result=r._navigate_relative(0,.75,3)
+            result=r._navigate_relative(0,.75)
         self.assertEqual(len(r.memory.actions),1)
         self.assertEqual(r.memory.actions[0]['action'],'MOVE_FORWARD')
         feedback=r.memory.actions[0]['result']
@@ -158,7 +166,7 @@ class DirectMovementExecutionTests(unittest.TestCase):
     def test_direct_route_starts_unverified_before_first_live_probe(self):
         r=runtime()
         r._navigate_local=Mock(return_value=dict(status='PARTIAL'))
-        result=r._navigate_relative(-45,.75,1)
+        result=r._navigate_relative(-45,.75)
         route=r.memory.routes[result['waypoint_id']]
         self.assertEqual(route['evidence_state'],'model_motion_proposal_unverified')
         self.assertEqual(route['traversability'],'UNKNOWN')

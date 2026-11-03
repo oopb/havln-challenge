@@ -48,7 +48,7 @@ class WaypointLoopTests(unittest.TestCase):
         executor.paths={"p0":dict(id="p0",first_step="NEEDS_VIEW",
                                   execution_status="PROPOSED")}
         executor._revalidate_path=Mock(side_effect=AssertionError("must not execute"))
-        rejected=executor._execute_waypoint("p0",max_actions=3)
+        rejected=executor._execute_waypoint("p0")
         self.assertEqual(rejected["status"],"NEEDS_VIEW")
         self.assertIn("waypoint_requires_view",rejected["reason"])
         executor._revalidate_path.assert_not_called()

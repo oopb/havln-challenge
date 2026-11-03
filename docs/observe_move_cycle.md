@@ -4,7 +4,7 @@ Keep TaskPlanner's ordered semantic subgoals. NavigationAgent runs **only in OBS
 it examines the latest RGB-D geometry, current or remembered VLM target evidence,
 and a concise navigation history, then chooses exactly one tool. Visual/geometry
 tools may refine the next short move; a `navigate_local` call performs **MOVE**
-of up to three atomic actions using the existing LocalMotionController. The
+following a model-selected finite route using the existing LocalMotionController. The
 runtime then returns to OBSERVE for the next local decision. There is no separate
 route-level planner, route ID, or new navigation tool.
 
@@ -114,7 +114,7 @@ NavigationAgent chooses among short candidates using task, visual evidence, obse
 **Strategy authority**: NavigationAgent can issue `navigate_relative(turn_deg,
 distance_m, max_atomic_steps)`, quantized by the executor into calibrated turn increments and 0.25m
 step multiples (0.25 to 3m). It can alternatively issue
-`navigate_to_pixel(u,v,distance_m,max_atomic_steps)` for a current RGB-D
+`navigate_to_pixel(u,v,distance_m)` for a current RGB-D
 pixel bearing. A pixel supplies only a bearing hypothesis, not permission
 to navigate to the pixel's physical surface. The executor creates a
 resumable local waypoint ID and rechecks fresh depth/human occupancy
@@ -186,3 +186,7 @@ cross-epoch metric exit-from-entry distance. Task evidence conditions use the
 actual cited source sentence, not a planner paraphrase: a standalone right turn
 requires orientation evidence; entering the foyer requires translation/target
 evidence, not a fictitious requirement to pass the foyer behind the agent.
+
+### Continuous finite navigation (no max_atomic_steps)
+
+NavigationAgent specifies the bearing and desired short travel distance, or an existing waypoint ID. The executor completes all needed calibrated TURN actions and then steps forward, refreshing RGB-D geometry, terrain and human safety at **each** forward step. No per-call atomic-action count truncates navigation. Execution returns on route arrival, sensor/safety/pose interruption, environment termination, or the overall Episode action budget (one STOP slot reserved). `runtime.tool_max_actions` applies to camera-only observation tools and does **not** limit navigation. A route is not a semantic completion certificate.

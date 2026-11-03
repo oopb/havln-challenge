@@ -75,9 +75,9 @@ class ModelDrivenDirectionTests(unittest.TestCase):
             first_step='EXECUTABLE',goal_association=[],
             source=dict(subgoal=0,pose=pose))}
         r._execute_waypoint=Mock(return_value=dict(status='TARGET_REACHED'))
-        result=r._navigate_local('wp_0',max_atomic_steps=2)
+        result=r._navigate_local('wp_0')
         self.assertEqual(result['status'],'TARGET_REACHED')
-        r._execute_waypoint.assert_called_once_with('wp_0',2)
+        r._execute_waypoint.assert_called_once_with('wp_0')
 
 
 if __name__=='__main__':
