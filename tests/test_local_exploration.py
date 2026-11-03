@@ -327,7 +327,7 @@ class ExplorationTests(unittest.TestCase):
                          'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
         self.assertIsNone(state['action_calibration']['per_tool_atomic_action_cap'])
         self.assertEqual(state['action_calibration']['navigation_execution_policy'],
-            'continuous_until_route_or_safety_or_episode_budget')
+            'continuous_until_route_or_pose_or_episode_budget')
 
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
