@@ -2,6 +2,7 @@
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -88,6 +89,41 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertIsNone(r.active_waypoint_id)
         self.assertEqual([a['action'] for a in r.memory.actions].count('MOVE_FORWARD'),2)
         self.assertEqual([a['action'] for a in r.memory.actions].count('TURN_RIGHT'),1)
+
+    def test_turn_only_tool_budget_preserves_waypoint_and_reports_first_forward_budget(self):
+        r=runtime()
+        r.client=SimpleNamespace(trace_context={})
+        r.current_decision_id='nav_unit_test'
+        r.navigation_mode='OBSERVE'
+        binding=dict(plan_revision=r.plan_revision,
+            subgoal_id=r.active_subgoal_id,
+            observation_id=r.memory.current['observation_id'],
+            actor='navigation_agent')
+        # TURN=30 deg needs two 15-deg turns. A one-action request must NOT
+        # silently issue a forward or be recorded as a failed forward.
+        first=r.execute(dict(tool='navigate_relative',
+            args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=1)),binding)
+        motion=first['movement_intent_feedback']
+        self.assertEqual(first['status'],'PARTIAL')
+        self.assertEqual(first['reason'],'tool_action_limit')
+        self.assertEqual(first['executed_motion'],['TURN_LEFT'])
+        self.assertTrue(motion['turn_only_no_forward_attempt'])
+        self.assertFalse(motion['actual_forward_attempted'])
+        self.assertEqual(motion['remaining_turn_actions_est'],1)
+        self.assertEqual(motion['min_atomic_actions_until_first_forward_attempt'],2)
+        self.assertTrue(motion['same_waypoint_pending'])
+        waypoint=first['waypoint_id']
+        self.assertEqual(r.active_waypoint_id,waypoint)
+        measured=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
+        binding['observation_id']=r.memory.current['observation_id']
+        with patch('havln_agent.tools.estimate_translation',return_value=measured):
+            continued=r.execute(dict(tool='navigate_local',
+                args=dict(waypoint_id=waypoint,max_atomic_steps=3)),binding)
+        self.assertIn('MOVE_FORWARD',continued['executed_motion'])
+        self.assertEqual(continued['movement_intent_feedback'][
+            'waypoint_id'],waypoint)
 
     def test_identical_rgbd_after_forward_interrupts_instead_of_repeating(self):
         r=runtime()
