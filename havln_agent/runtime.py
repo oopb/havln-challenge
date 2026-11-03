@@ -457,7 +457,7 @@ class AgentRuntime(ToolExecutor):
                         goal_status='EXPLORATION_ONLY',
                         objective=dict(purpose='explore',goal='obtain a better view for the current subgoal',
                             completes_language_goal=False),
-                        execution_requirements=['model_selected_motion','RGBD_odometry_feedback']
+                        execution_requirements=['model_selected_motion','RGBD_odometry_feedback'])
             else:
                 # Missing / partial grounding does not forbid short motion.
                 # Include both known-clear and unconfirmed, nonblocked hypotheses.
