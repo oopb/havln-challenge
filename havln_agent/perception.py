@@ -355,9 +355,13 @@ def normalize_scene(scene):
     return dict(scene, uncertain_humanoids=uncertain, static_obstacles=static)
 
 
-def image_url(observation):
+def image_url(observation, max_edge=None):
+    """Encode real RGB; optionally bound panoramas without changing sensor history."""
     buffer = io.BytesIO()
-    Image.fromarray(observation.rgb).save(buffer, format='PNG')
+    frame = Image.fromarray(observation.rgb)
+    if max_edge is not None and max(frame.size) > max_edge:
+        frame.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    frame.save(buffer, format='PNG')
     return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
 
 
