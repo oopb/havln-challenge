@@ -129,8 +129,13 @@ class MemoryService(MemoryRecords):
     def note_validation(self, path, value):
         route=self.routes.get(path['id'])
         if route and value['status']=='OK' and not value['executable_segment']['turn_only']:
-            route.update(state='EXECUTABLE',evidence_state='geometry_supported',traversability='FREE',
-                source_observation_ids=[self.current['observation_id']],validated_at=self.runtime.observation.captured_at)
+            evidence=(value.get('validation') or {}).get('forward_evidence_state')
+            route.update(state='EXECUTABLE' if evidence=='EXECUTABLE' else 'CANDIDATE',
+                evidence_state='geometry_supported' if evidence=='EXECUTABLE'
+                    else 'depth_unconfirmed_motion_hypothesis',
+                traversability='FREE' if evidence=='EXECUTABLE' else 'UNKNOWN',
+                source_observation_ids=[self.current['observation_id']],
+                validated_at=self.runtime.observation.captured_at)
 
     def note_motion(self):
         observations={o['observation_id']:o for o in self.observations}
