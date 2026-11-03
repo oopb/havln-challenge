@@ -39,7 +39,16 @@ PANORAMA_VISUAL_SCHEMA = object_schema(dict(
     visual_cues=dict(type='array', minItems=1, maxItems=5,
                      items=dict(type='string', minLength=1, maxLength=250)),
     alternative_observation_ids=dict(type='array', maxItems=3,
-                                     uniqueItems=True, items=dict(type='string', minLength=1))))
+                                     uniqueItems=True, items=dict(type='string', minLength=1)),
+    target_status=dict(enum=['VISIBLE','CUE_ONLY','AMBIGUOUS','NOT_FOUND']),
+    target_region=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
+        items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
+    approach_candidates=dict(type='array',maxItems=3,items=object_schema(dict(
+        observation_id=dict(type='string',minLength=1),
+        kind=dict(enum=['ENTRY','APPROACH','DETOUR','UNKNOWN']),
+        confidence=dict(enum=['low','medium','high']),
+        evidence=TEXT))),
+    missing_evidence=TEXT))
 
 # Separate from routine scene analysis: compare *recorded* azimuth images
 # without mistaking apparent empty floor for verified robot clearance.
@@ -53,14 +62,21 @@ PANORAMA_VISUAL_PROMPT = (
     'appearance and do not swap left/right or reinterpret pitch as yaw. '
     'Use the current navigation instruction and failures to identify WHICH '
     'visible corridor, stair entry, door or approach region is the best next '
-    'short MOVEMENT HYPOTHESIS. Select EXACTLY ONE supplied observation_id, '
-    'even if all available views are ambiguous, and disclose uncertainty. '
-    'Return concrete visual cues and up to three alternatives among supplied '
-    'observation IDs. Do NOT invent a visible opening or use old people/depth '
-    'to certify current walkability. You are the eyes, not the motion executor: '
-    'this is historical semantic evidence only. The NavigationAgent will choose '
-    'the final movement bearing and distance; a live safety controller will '
-    'independently validate each forward step. Return ONE JSON object.'
+    'short MOVEMENT HYPOTHESIS. Distinguish the VISIBLE GOAL (for example a '
+    'railing or lower floor) from an ACTUAL APPROACH/ENTRY, which may be at '
+    'another bearing. Identify target_status and a normalized target_region '
+    'only when localized in an image; otherwise use null. Compare remembered '
+    'successful forward/downward motion headings with visual approach clues. '
+    'Return 0-3 approach_candidates whose observation_ids are real supplied '
+    'frames, with ENTRY/APPROACH/DETOUR/UNKNOWN, confidence and concrete evidence. '
+    'Do not claim an entry is known merely because a staircase is visible. '
+    'Even if no view proves an entry, choose EXACTLY ONE real observation_id '
+    'as an information/approach hypothesis and mark AMBIGUOUS or NOT_FOUND; '
+    'describe missing_evidence (including needed look_down when appropriate). '
+    'Missing depth, UNKNOWN and NEEDS_VIEW are uncertainty, NOT observed '
+    'obstacles; only clear current obstacle evidence can veto a real move. '
+    'Historical views are semantic hints, not current collision certificates. '
+    'You are the eyes, not the motion executor. Return ONE JSON object.'
 )
 
 
@@ -114,7 +130,9 @@ class VisualPerception:
         def validate(value):
             if (value['selected_observation_id'] not in identifiers
                     or any(x not in identifiers
-                        for x in value['alternative_observation_ids'])):
+                        for x in value['alternative_observation_ids'])
+                    or any(x['observation_id'] not in identifiers
+                        for x in value.get('approach_candidates',()))):
                 raise APIError('panorama_selected_id_must_match_provided_images',
                                category='structured_field')
         return self.complete(
