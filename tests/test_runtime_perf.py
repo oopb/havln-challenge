@@ -92,6 +92,7 @@ class RuntimePerformanceTests(unittest.TestCase):
         runner.motion_policy='LEVEL_ONLY'
         runner.config=dict(max_steps=128,max_depth_age_seconds=5.0)
         runner.observation=frame
+        runner.camera=SimpleNamespace(forward_step=.25)
         runner.refresh=Mock()
         runner._prepare_forward=Mock(return_value=None)
         runner.geometry=Mock(side_effect=AssertionError('geometry is tool-only'))
