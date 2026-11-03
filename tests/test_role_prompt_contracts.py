@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from havln_agent.navigation_agent import NavigationAgent
+from havln_agent.api_client import APIError
 from havln_agent.task_planner import TaskPlanner
 from havln_agent import perception, grounding
 
@@ -110,6 +111,110 @@ class PromptContractTests(unittest.TestCase):
             agent.decide()
         self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[-1])
         self.assertEqual(runtime.event.call_count,2)
+
+    def test_full_panorama_requires_model_selected_finite_forward_attempt_once(self):
+        moving=dict(description='Model selects bearing and distance',
+            permission='NAVIGATION',
+            parameters=dict(type='object',
+                properties=dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
+                                distance_m=dict(type='number',minimum=.25,maximum=3.)),
+                required=['turn_deg','distance_m'],additionalProperties=False))
+        observation=dict(description='Camera-only turn',permission='NAVIGATION',
+            parameters=dict(type='object',properties={},
+                required=[],additionalProperties=False))
+        client=CapturingClient(dict(tool='navigate_relative',
+            args=dict(turn_deg=-60,distance_m=.5)))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value=dict(
+                navigate_relative=moving,turn_and_observe=observation)),
+            memory=SimpleNamespace(keyframes={},episode_id='ep-a'),
+            plan_revision=1,event=Mock())
+        state=dict(task_selection=dict(current_subgoal_index=0),
+            pose=dict(motion_epoch=0,place_id='P0',position_xz_m_est=[0.,0.]),
+            panoramic_observation=dict(all_azimuths_observed=True,
+                                      covered_yaw_bins=24),
+            observation_stagnation=dict(repeated_low_information=True,
+                intervention='BLOCKED_ACTIONABILITY_REASSESSMENT',
+                same_stance_observation_calls=24,low_information_calls=8))
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=state):
+            agent=NavigationAgent(runtime)
+            selected=agent.decide()
+            self.assertEqual(selected['args']['turn_deg'],-60)
+            self.assertIn('FULL-360 OBSERVATION COMPLETE',client.system_history[0])
+            self.assertEqual(len(client.schema['oneOf']),1)
+            self.assertEqual(client.schema['oneOf'][0]['properties']['tool']['const'],
+                             'navigate_relative')
+            self.assertEqual(client.context['panorama_commitment']['allowed_tool'],
+                             'navigate_relative')
+            runtime.event.assert_called_once()
+            self.assertEqual(runtime.event.call_args.args[0],
+                             'panorama_direction_committed')
+            self.assertFalse(runtime.event.call_args.kwargs['physically_forced'])
+            agent.decide()
+            self.assertNotIn('FULL-360 OBSERVATION COMPLETE',client.system_history[1])
+            self.assertEqual(len(client.schema['oneOf']),2)
+            self.assertEqual(runtime.event.call_count,1)
+            # Re-arm on a genuine new task/plan at the same location, not
+            # on another model turn with identical physical and task evidence.
+            runtime.plan_revision=2
+            agent.decide()
+            self.assertIn('FULL-360 OBSERVATION COMPLETE',client.system_history[-1])
+            self.assertEqual(runtime.event.call_count,2)
+
+    def test_panorama_rejects_cheap_model_turn_loop_without_consuming_checkpoint(self):
+        schema=dict(type='object',properties=dict(
+            turn_deg=dict(type='number',minimum=-180,maximum=180),
+            distance_m=dict(type='number',minimum=.25,maximum=3)),
+            required=['turn_deg','distance_m'],additionalProperties=False)
+        client=CapturingClient(dict(tool='turn_and_observe',
+            args=dict(relative_turn_deg=60,look='none')))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value=dict(
+                navigate_relative=dict(description='MOVE',permission='NAVIGATION',
+                    parameters=schema),
+                turn_and_observe=dict(description='LOOK',permission='NAVIGATION',
+                    parameters=dict(type='object',properties={},
+                        additionalProperties=False)))),
+            memory=SimpleNamespace(keyframes={},episode_id='ep-a'),
+            event=Mock())
+        state=dict(panoramic_observation=dict(all_azimuths_observed=True),
+            task_selection=dict(current_subgoal_index=0),
+            pose=dict(motion_epoch=0,place_id='P0',position_xz_m_est=[0,0]))
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=state):
+            agent=NavigationAgent(runtime)
+            with self.assertRaises(APIError):
+                agent.decide()
+            runtime.event.assert_not_called()
+            client.response=dict(tool='navigate_relative',
+                                 args=dict(turn_deg=30,distance_m=.25))
+            agent.decide()
+            self.assertEqual(runtime.event.call_count,1)
+
+    def test_orientation_only_goal_does_not_require_unrelated_translation(self):
+        client=CapturingClient(dict(tool='verify_subgoal',
+                                    args=dict(claim='subgoal_completed',evidence='turn',
+                                              observation_ids=['obs1'])))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value=dict(
+                navigate_relative=dict(description='MOVE',permission='NAVIGATION',
+                    parameters=dict(type='object',properties={},
+                                    additionalProperties=False)),
+                verify_subgoal=dict(description='Verify turn',permission='READ_ONLY',
+                    parameters=dict(type='object',properties={},
+                                    additionalProperties=False)))),
+            memory=SimpleNamespace(keyframes={},episode_id='ep-a'),event=Mock())
+        state=dict(panoramic_observation=dict(all_azimuths_observed=True),
+                   orientation=dict(requirement='turn_left'),
+                   task_selection=dict(current_subgoal_index=0),
+                   pose=dict(motion_epoch=0,position_xz_m_est=[0,0]))
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=state):
+            NavigationAgent(runtime).decide()
+        self.assertNotIn('FULL-360 OBSERVATION COMPLETE',client.system)
+        self.assertEqual(len(client.schema['oneOf']),2)
+        runtime.event.assert_not_called()
 
     def test_navigation_prompt_explains_continuous_finite_motion(self):
         client=CapturingClient(dict(tool='navigate_local',
