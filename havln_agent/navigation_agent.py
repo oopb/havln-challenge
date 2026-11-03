@@ -181,6 +181,11 @@ class NavigationAgent:
                    task.get('current_subgoal_index'),
                    pose.get('motion_epoch'),pose.get('place_id'),
                    tuple(round(float(v),1) for v in xy))
+        if (panorama.get('all_azimuths_observed')
+                and getattr(self,'_panorama_committed_signature',None)==signature):
+            # One model-authored route attempt has already been issued at
+            # this stance: don't issue a second, conflicting stall advisory.
+            advisory=None
         full_circle_commit=(
             bool(panorama.get('all_azimuths_observed')) and not orientation
             and getattr(self,'_panorama_committed_signature',None)!=signature
