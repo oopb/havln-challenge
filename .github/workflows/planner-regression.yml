@@ -8,6 +8,7 @@ on:
       - "tests/test_runtime_perf.py"
       - "tests/test_navigation_loop.py"
       - "tests/test_role_prompt_contracts.py"
+      - "tests/test_panorama_memory_images.py"
       - "tests/test_api_embedded_json.py"
       - "tests/test_smoke50012_feedback.py"
       - "tests/test_terminal_progress.py"
@@ -60,6 +61,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_navigation_loop.py' -v
       - name: Check role prompt contracts
         run: python -m unittest discover -s tests -p 'test_role_prompt_contracts.py' -v
+      - name: Check authentic panorama RGB frames and relative yaw binding
+        run: python -m unittest discover -s tests -p 'test_panorama_memory_images.py' -v
       - name: Check strict unambiguous JSON output normalization
         run: python -m unittest discover -s tests -p 'test_api_embedded_json.py' -v
       - name: Check measured collision and repeated-view regressions
