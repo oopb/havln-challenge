@@ -54,6 +54,8 @@ class PanoramaMemoryTests(unittest.TestCase):
             navigation_memory=dict(failures=['blocked']),
             recent_route_failures=dict(reason='occupied_next_step')))
         self.assertEqual(result['selected_observation_id'],'obs0')
+        self.assertIn('target_status',args_schema:=client.requests[0][0][4]['properties'])
+        self.assertIn('approach_candidates',args_schema)
         args,kwargs=client.requests[0]
         self.assertEqual(args[0:2],('visual_perception','panorama_direction_evidence'))
         self.assertEqual([x['observation_id'] for x in args[3]['views']],
@@ -73,6 +75,9 @@ class PanoramaMemoryTests(unittest.TestCase):
         with self.assertRaises(APIError):
             kwargs['validate'](dict(result,
                 alternative_observation_ids=['never_observed']))
+        with self.assertRaises(APIError):
+            kwargs['validate'](dict(result,approach_candidates=[dict(
+                observation_id='invented',kind='ENTRY',confidence='high',evidence='fake')]))
 
     def test_saved_yaw_diversity_and_no_synthetic_frames(self):
         panorama=dict(observed_viewpoints=[
