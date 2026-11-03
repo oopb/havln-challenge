@@ -1,8 +1,7 @@
 """Regression: an UNKNOWN RGB-D translation must not immediately drop a short route.
 
-No simulator ground truth is used. Every continuing forward action requires new
-live geometry. Even at the commanded horizon, arrival is NEVER claimed without
-measured pose evidence.
+No simulator ground truth is used. Geometry is optional and model-invoked;
+even at the commanded horizon, arrival is never claimed without measured pose.
 """
 import math
 import time
@@ -99,7 +98,7 @@ class RelativeMotionTests(unittest.TestCase):
         r,path,actions,geometry=self.agent()
         result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
-        self.assertEqual(geometry.diagnose_calls,1)
+        self.assertEqual(geometry.diagnose_calls,0)
         self.assertEqual(result['status'],'REQUIRES_ATTENTION')
         self.assertEqual(result['reason'],
             'relative_forward_horizon_exhausted_without_verified_pose')
@@ -125,13 +124,14 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertIsNone(r.motion_controller.target)
         self.assertFalse(result['endpoint_estimate_valid'])
 
-    def test_fresh_blocked_geometry_still_denies_second_move(self):
+    def test_geometry_does_not_automatically_veto_model_selected_forward(self):
         r,path,actions,geometry=self.agent(blocked_after=1)
         result=r._execute_waypoint('p0')
-        self.assertEqual(actions,['MOVE_FORWARD'])
-        self.assertEqual(result['status'],'BLOCKED')
-        self.assertEqual(result['reason'],'occupied_next_step')
-        self.assertEqual(path['execution_status'],'BLOCKED')
+        self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(geometry.diagnose_calls,0)
+        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['reason'],
+                         'relative_forward_horizon_exhausted_without_verified_pose')
 
     def test_relative_motion_cannot_steer_to_stale_global_endpoint(self):
         r,path,actions,geometry=self.agent()

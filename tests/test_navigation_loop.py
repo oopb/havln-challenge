@@ -55,7 +55,7 @@ class NavigationLoopTests(unittest.TestCase):
                                  15)
         self.assertEqual(relation["direction_compatibility"], "CONFIRMED")
 
-    def test_turn_rechecks_real_forward_bearing_before_motion(self):
+    def test_turn_and_forward_validation_do_not_run_geometry_implicitly(self):
         camera = SimpleNamespace(turn_angle=15, forward_step=.25)
         controller = LocalMotionController(camera)
         path = dict(id="path_test", angle=math.radians(15), distance=.5,
@@ -72,7 +72,7 @@ class NavigationLoopTests(unittest.TestCase):
         first = controller.validate(runtime, path)
         self.assertEqual(first["status"], "OK")
         self.assertEqual(first["validation"]["next_atomic_action"], "TURN_LEFT")
-        self.assertTrue(first["validation"]["requires_post_turn_recheck"])
+        self.assertFalse(first["validation"]["requires_post_turn_recheck"])
         g.diagnose.assert_not_called()
         g.assess_step.assert_not_called()
 
@@ -81,9 +81,11 @@ class NavigationLoopTests(unittest.TestCase):
         second = controller.validate(runtime, path, resume=True)
         self.assertEqual(second["status"], "OK")
         self.assertEqual(second["validation"]["next_atomic_action"], "MOVE_FORWARD")
-        self.assertEqual(second["validation"]["validated_forward_bearing_deg"], 0)
-        g.assess_step.assert_called_once_with()
-        g.diagnose.assert_called_once_with(0, .25)
+        self.assertIsNone(second["validation"]["validated_forward_bearing_deg"])
+        self.assertEqual(second["validation"]["forward_evidence_state"], 'NOT_CHECKED')
+        runtime.geometry.assert_not_called()
+        g.assess_step.assert_not_called()
+        g.diagnose.assert_not_called()
 
     def test_unverified_motion_invalidates_pending_target_not_a_collision(self):
         executor = ToolExecutor.__new__(ToolExecutor)

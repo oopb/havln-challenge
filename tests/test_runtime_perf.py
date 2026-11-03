@@ -78,27 +78,45 @@ class RuntimePerformanceTests(unittest.TestCase):
                                  "no_forward_displacement")
 
 
-    def test_move_forward_still_requires_live_geometry_approval(self):
+    def test_forward_executes_without_implicit_geometry(self):
         import time
-        now = time.monotonic()
-        frame = SimpleNamespace(captured_at=now)
-        executor = ToolExecutor.__new__(ToolExecutor)
-        executor.done = False
-        executor.config = dict(max_steps=500, max_depth_age_seconds=5.0)
-        executor.memory = SimpleNamespace(actions=[], event=Mock())
-        executor.observation = frame
-        executor.refresh = Mock()
-        executor._prepare_forward = Mock(return_value=None)
-        blocked = dict(state="BLOCKED", reason="occupied_next_step",
-                       depth=dict(clearance=0.0), support=dict(status="UNKNOWN"))
-        geometry = SimpleNamespace(assess_step=Mock(return_value=blocked))
-        executor.geometry = Mock(return_value=geometry)
-        executor.step_callback = Mock(side_effect=AssertionError("unsafe forward was executed"))
-        result = executor._step("MOVE_FORWARD")
-        self.assertEqual(result["status"], "BLOCKED")
-        self.assertEqual(result["reason"], "occupied_next_step")
-        geometry.assess_step.assert_called_once_with()
-        executor.step_callback.assert_not_called()
+        now=time.monotonic()
+        frame=SimpleNamespace(rgb=np.zeros((8,8,3),dtype=np.uint8),
+            depth=np.ones((8,8),dtype=np.float32),captured_at=now,pitch_deg=0.)
+        runner=ToolExecutor.__new__(ToolExecutor)
+        runner.done=False
+        runner.stop_reason=None
+        runner.tool_id='tool_test'
+        runner.active_subgoal_id='sg_0'
+        runner.context_version='test'
+        runner.motion_policy='LEVEL_ONLY'
+        runner.config=dict(max_steps=128,max_depth_age_seconds=5.0)
+        runner.observation=frame
+        runner.camera=SimpleNamespace(forward_step=.25)
+        runner.refresh=Mock()
+        runner._prepare_forward=Mock(return_value=None)
+        runner.geometry=Mock(side_effect=AssertionError('geometry is tool-only'))
+        runner.step_callback=Mock(return_value=(frame,False))
+        runner.motion_controller=SimpleNamespace(
+            pose=Mock(return_value=dict(heading=0.)),
+            accept_feedback=Mock())
+        runner.memory=SimpleNamespace(actions=[],active_attempt=None,
+            scene_memory=None,current=dict(observation_id='obs_0000'),event=Mock())
+        runner.memory.record_action=Mock(side_effect=lambda action,pose,feedback:
+            runner.memory.actions.append(dict(action=action,result=feedback)))
+        runner.accept_observation=Mock()
+        runner.record_step=Mock()
+        with patch('havln_agent.tools.estimate_translation',
+                   return_value=dict(status='UNKNOWN',reason='no_matches')), \
+             patch('havln_agent.tools.frame_info',return_value={}):
+            result=runner._step('MOVE_FORWARD')
+        self.assertEqual(result['status'],'EXECUTED')
+        runner.step_callback.assert_called_once_with('MOVE_FORWARD')
+        runner.geometry.assert_not_called()
+        self.assertEqual(runner.record_step.call_args.args[0]['safety']['scope'],
+                         'geometry_not_automatically_checked')
+        self.assertEqual(runner.memory.actions[0]['result']['landing_support']['status'],
+                         'NOT_EVALUATED')
 
     def test_inflight_api_marker_reports_phase_without_credentials(self):
         client = APIClient.__new__(APIClient)

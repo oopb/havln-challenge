@@ -12,7 +12,7 @@ import time
 from .observation import array_hash
 from .grounding import project_grounding
 from .progress import current_visual_evidence, stair_motion_direction
-from .motion import registered_action
+from .motion import registered_action, landing_support
 from .tools import ToolExecutor
 from .safety import forward_probe
 from .waypoint import rank_candidates
@@ -101,24 +101,8 @@ class AgentRuntime(ToolExecutor):
             origin = scene['source'].get('semantic_source_observation_id', scene['source']['observation_id'])
             scene['source'].update(current, semantic_source_observation_id=origin,
                 revalidated_at=current['captured_at'])
-        # Exact current RGB reconfirms a box's semantic referent; metric facts
-        # must be projected again whenever the live Depth changes.
-        latest = {}
-        for grounding in self.memory.groundings:
-            latest[grounding['target']] = grounding
-        for grounding in latest.values():
-            source = grounding['source']
-            if (source.get('image_scope', 'current') == 'current'
-                    and all(source[k] == current[k] for k in ('rgb_hash', 'pose'))
-                    and source['depth_hash'] != current['depth_hash']):
-                bound = dict(current, image_scope='current', semantic_source_observation_id=
-                    source.get('semantic_source_observation_id', source['observation_id']))
-                value = project_grounding(grounding['semantic'], super().geometry(), grounding['target'], bound)
-                value['grounding_id'] = 'ground_%04d' % len(self.memory.groundings)
-                self.memory.groundings.append(value)
-                self.memory.note_semantics(bound, [grounding['target']+': '+value['semantic']['evidence']])
-                self.event('grounding_reprojected', source='current_depth', grounding_id=value['grounding_id'],
-                    semantic_source_observation_id=bound['semantic_source_observation_id'])
+        # Passive refresh never reprojects geometry. The model may explicitly
+        # re-ground its target when depth or viewpoint changes.
 
     def set_navigation_mode(self, mode, reason, **detail):
         if mode not in ('OBSERVE', 'MOVE'):
@@ -358,11 +342,30 @@ class AgentRuntime(ToolExecutor):
             directions.append(dict(bearing_deg=degrees,status=item['state'],reason=item['reason'],
                 clearance_m=item['depth']['clearance'],support=item['support']['status']))
         alternatives=[d for d in directions if d['status']=='EXECUTABLE']
+        # Model-requested geometry: keep measurements only for this frame.
+        self.memory.current['directions']=[dict(angle_degrees=d['bearing_deg'],
+            motion_state=d['status'],reason=d['reason'],clearance=d['clearance_m'])
+            for d in directions]
+        # Landing analysis is now opt-in, not an automatic MOVE side effect.
+        latest=self.memory.actions[-1] if self.memory.actions else None
+        landing=None
+        if (latest and latest.get('action')=='MOVE_FORWARD'
+                and (latest.get('result') or {}).get('observation_after')==self.memory.current['observation_id']
+                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('status')=='ESTIMATED'
+                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('vertical_motion')=='LEVEL'
+                and getattr(self,'semantic_motion_policy',self.motion_policy)
+                    in ('ASCEND_STAIRS','DESCEND_STAIRS')):
+            landing=landing_support(geometry)
+            latest['result']['landing_support']=dict(landing,
+                evidence_source='model_requested_inspect_geometry',
+                inspection_observation_id=self.memory.current['observation_id'])
         front=dict(check['depth']);front['depth_state']=front.pop('path_state')
         value=dict(status=check['state'],reason=check['reason'],
             geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
                 terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
-            alternatives=alternatives,information_options=['get_waypoint_candidates','turn_and_observe'])
+            alternatives=alternatives,landing_support=landing,
+            geometry_invocation='explicit_model_requested_inspect_geometry',
+            information_options=['get_waypoint_candidates','turn_and_observe'])
         value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
             self.camera.turn_angle,round(360/self.camera.turn_angle))
         if alternatives:
@@ -454,7 +457,7 @@ class AgentRuntime(ToolExecutor):
                         goal_status='EXPLORATION_ONLY',
                         objective=dict(purpose='explore',goal='obtain a better view for the current subgoal',
                             completes_language_goal=False),
-                        execution_requirements=['current_rgbd','live_human_safety','next_step_depth_collision_probe'])
+                        execution_requirements=['model_selected_motion','RGBD_odometry_feedback'])
             else:
                 # Missing / partial grounding does not forbid short motion.
                 # Include both known-clear and unconfirmed, nonblocked hypotheses.
@@ -475,7 +478,6 @@ class AgentRuntime(ToolExecutor):
             # Do not replace a model-visible candidate with a fixed straight
             # choice. If useful, straight remains in the ranked options.
             geometry = self.geometry()
-            next_step = self.motion_controller.next_step_state(geometry)
             for path in offered:
                 path.update(bearing_deg=math.degrees(path['angle']), range_m=path['distance'],
                     source_observation_id=path['source']['observation_id'],
@@ -590,8 +592,8 @@ class AgentRuntime(ToolExecutor):
             geometric_status='NOT_YET_VALIDATED',
             endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
                            source['pose']['z'] + math.cos(heading)*actual_distance])
-        # No invented collision permission: _execute_waypoint + _step will run
-        # current live checks at the actual heading immediately before motion.
+        # No automatic collision check: geometry is used only when the model
+        # explicitly requests its inspection tool.
         self.paths[path_id] = path
         # Direct routes were absent from spatial memory because they skip
         # get_waypoint_candidates. Register the proposal, not a clearance
@@ -643,9 +645,6 @@ class AgentRuntime(ToolExecutor):
         path = self.paths.get(waypoint_id)
         if path is None:
             return dict(status='INVALID_TARGET', reason='unknown_waypoint_id')
-        if path.get('first_step') != 'EXECUTABLE' and self.motion_controller.target is None:
-            return dict(status='NEEDS_VIEW', reason='waypoint_has_no_executable_first_step',
-                suggestion='turn_to_observe_and_regenerate_waypoints_before_navigate_local')
         if path['source']['subgoal'] != self.memory.task.current_subgoal_index:
             return dict(status='STALE_TARGET', reason='language_goal_changed')
         # Target localization is a hint, not an independent motion veto.

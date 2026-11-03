@@ -16,7 +16,7 @@ from .perception import Geometry, Observation
 from .progress import verify_progress, current_visual_evidence
 from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
-from .motion import estimate_translation, landing_support
+from .motion import estimate_translation
 from .spatial import goal_estimate, angle_delta
 
 
@@ -91,20 +91,14 @@ class ToolExecutor:
         previous_frame, previous = self.observation, self.memory.current
         self.observation = observation
         pose = self.motion_controller.pose()
-        # Refreshes must not eagerly evaluate every TURN direction. The
-        # explicit get_waypoint_candidates tool performs multi-bearing probes.
-        # Keep only the live forward-body summary for observation memory.
+        # Passive RGB-D capture does NOT run geometry or collision detection.
+        # Only a model-requested inspect_geometry/get_waypoint_candidates
+        # tool can produce measured directional diagnostics.
         unchanged = (previous is not None and previous_frame is not None
             and previous['pose'] == pose
             and array_hash(previous_frame.rgb) == array_hash(observation.rgb)
             and array_hash(previous_frame.depth) == array_hash(observation.depth))
-        if unchanged:
-            diagnostics = previous.get('directions', [])
-        else:
-            check = forward_probe(self.geometry())
-            diagnostics = [dict(check['depth'], angle_degrees=0.0,
-                motion_state=check['state'], reason=check['reason'],
-                terrain_support=check['support'])]
+        diagnostics = previous.get('directions', []) if unchanged else []
         record = self.memory.observe(observation, pose, diagnostics)
         if self.record_observation and record is not previous:
             self.record_observation(record, observation)
@@ -220,7 +214,8 @@ class ToolExecutor:
                 same_waypoint_pending=bool(active),
                 remaining_turn_actions_est=remaining_turns,
                 min_atomic_actions_until_first_forward_attempt=forward_budget,
-                first_forward_still_requires_live_safety=True,
+                first_forward_still_requires_live_safety=False,
+                geometry_diagnostics_model_invoked_only=True,
                 endpoint_estimate_valid=not uncertain,
                 interpretation=(
                     'only_turns_executed_forward_not_attempted'
@@ -264,26 +259,17 @@ class ToolExecutor:
             pending = self._prepare_forward()
             if pending:
                 return pending
-        # A turn/look/STOP has no forward body sweep. Computing 13 waypoint
-        # terrain reviews here used to burn CPU even for STOP. Candidates are
-        # created by get_waypoint_candidates, not by the atomic executor.
-        geometry = self.geometry() if action == 'MOVE_FORWARD' else None
+        # Motion execution does not implicitly invoke Geometry, terrain,
+        # collision probes or human occupancy checks. Those are information
+        # tools that NavigationAgent chooses to request explicitly.
         diagnostics, candidates = [], []
-        safety_check = forward_probe(geometry) if geometry is not None else None
-        front = safety_check['depth'] if safety_check is not None else None
-        # Reuse the ONE already computed live depth report. Do not run the
-        # same body sweep again via check_action() before executing the step.
-        rejected = bool(safety_check and safety_check['state'] == 'BLOCKED')
-        reason = (safety_check.get('reason') or 'confirmed_obstacle') if rejected else None
-        if rejected:
-            self.memory.event('safety_rejected',requested_action=action,reason=reason,geometry=front)
-            return dict(status=safety_check['state'],reason=reason,safety=dict(front,
-                execution_allowed=False,execution_reason=reason,terrain_evidence=safety_check['support']))
+        geometry, safety_check, front = None, None, None
         before, before_record = self.observation, dict(self.memory.current)
         pose = self.motion_controller.pose()
         checked_at = time.monotonic()
         after, done = self.step_callback(action)
-        motion = estimate_translation(before, after, self.camera, geometry.human_mask) \
+        # RGB-D registration is odometry feedback, not collision permission.
+        motion = estimate_translation(before, after, self.camera) \
             if action == 'MOVE_FORWARD' else None
         changed_depth = array_hash(after.depth) != array_hash(before.depth)
         changed_rgb = array_hash(after.rgb) != array_hash(before.rgb)
@@ -298,16 +284,11 @@ class ToolExecutor:
             observation_before=before_record['observation_id'],
             observation_after=None,
             rgbd_motion=motion,
-            # Only level translation on a stair subgoal needs landing-plane
-            # evidence for semantic completion. No full terrain fit is used
-            # to approve the forward action (already executed above).
-            landing_support=(landing_support(Geometry(after, self.camera, self.config['safety_margin']))
-                if action == 'MOVE_FORWARD' and motion and motion['status'] == 'ESTIMATED'
-                and motion['vertical_motion'] == 'LEVEL'
-                and getattr(self, 'semantic_motion_policy', self.motion_policy)
-                    in ('DESCEND_STAIRS','ASCEND_STAIRS')
-                else dict(status='NOT_EVALUATED', reason='not_a_stair_landing_candidate',
-                          terrain_certified=False) if action == 'MOVE_FORWARD' else None),
+            # Geometry/terrain landing evidence is available only through an
+            # explicit inspect_geometry call, not as an implicit MOVE side effect.
+            landing_support=(dict(status='NOT_EVALUATED',
+                reason='geometry_requires_model_requested_inspect_geometry',
+                terrain_certified=False) if action == 'MOVE_FORWARD' else None),
             goal_association=(self.memory.active_attempt['target'].get('goal_association', [])
                               if self.memory.active_attempt else []),
         )
@@ -369,20 +350,18 @@ class ToolExecutor:
             post_observation=frame_info(after, self.camera),
             observation_age_seconds=checked_at - before.captured_at,
             safety=dict(
-                status=('UNCONFIRMED_NO_OBSTACLE' if safety_check and
-                        safety_check['state'] == 'UNCONFIRMED' else 'APPROVED'),
+                status='NOT_CHECKED_MODEL_DIRECTED',
                 checked_action=action,
                 front=front,
                 captured_at=before.captured_at,
                 checked_at=checked_at,
-                scope=('current_depth_next_step_body_only' if geometry is not None
+                scope=('geometry_not_automatically_checked' if action == 'MOVE_FORWARD'
                        else 'no_forward_displacement'),
                 human_semantics=geometry.human_status if geometry is not None else None,
                 terrain_evidence=safety_check['support'] if safety_check is not None else None,
                 dynamic_motion_prediction='UNAVAILABLE',
-                evidence_first_policy=True,
-                unknown_is_not_collision=bool(safety_check and
-                    safety_check['state'] == 'UNCONFIRMED'),
+                geometry_invocation='explicit_model_tool_only',
+                physical_obstacle_proven=False,
             ),
             scene=self.memory.scene_memory['scene'] if self.memory.scene_memory else None,
             scene_matches_current_rgb=bool(
@@ -393,9 +372,9 @@ class ToolExecutor:
                 dict(stage='tool_request' if self.tool_id else 'termination', action=action,
                      reason='llm_requested_tool' if self.tool_id else self.stop_reason),
                 dict(
-                    stage='safety_shield',
+                    stage='geometry_policy',
                     action=action,
-                    reason='no_confirmed_obstacle' if action == 'MOVE_FORWARD' else 'turn_or_stop',
+                    reason='not_invoked_implicitly' if action == 'MOVE_FORWARD' else 'turn_or_stop',
                 ),
                 dict(stage='executor', action=action, reason='environment_step_completed'),
             ],
@@ -522,7 +501,7 @@ class ToolExecutor:
                 endpoint_xz_m=[source['pose']['x'] - math.sin(heading) * candidate['distance'],
                                source['pose']['z'] + math.cos(heading) * candidate['distance']],
                 association_rejections=[r for r in relations if not r['relevant']] + excluded,
-                execution_requirements=['reconfirm_uncertain_goal', 'current_rgbd', 'live_human_safety'],
+                execution_requirements=['reconfirm_uncertain_goal','model_requested_geometry_optional'], 
             )
             self.paths[identifier] = path
             paths.append(copy.deepcopy(path))
@@ -537,7 +516,7 @@ class ToolExecutor:
             association_exclusions=excluded,
             safety_state=dict(visible_floor=dict(status='DEFERRED',
                 reason='inspect_geometry_for_full_terrain_diagnostics'), humans=geometry.human_status,
-                authorization='requires_new_checks_before_every_move', dynamic_motion_prediction='UNAVAILABLE'),
+                authorization='no_implicit_checks_model_decides_when_to_inspect', dynamic_motion_prediction='UNAVAILABLE'),
             goal_status='GOAL_EVIDENCE_AVAILABLE' if any(p['goal_association'] for p in paths) else 'GOAL_DIRECTION_UNKNOWN',
             goal_localization_status='GROUNDING_UNCERTAIN' if excluded else 'AVAILABLE' if groundings else 'UNKNOWN',
         )
@@ -608,9 +587,6 @@ class ToolExecutor:
                 return dict(status='INVALID_TARGET', reason='unknown_tool_generated_path_id')
             if path.get('execution_status') == 'REQUIRES_ATTENTION':
                 return dict(status='REQUIRES_ATTENTION', reason='previous_motion_requires_new_local_path_or_cancellation')
-            if path.get('first_step') == 'BLOCKED':
-                return dict(status='BLOCKED', reason='measured_obstacle_in_waypoint',
-                    suggestion='choose_other_route_or_inspect_obstacle')
             checked = self._revalidate_path(path)
             if checked['status'] != 'OK':
                 return checked
@@ -636,7 +612,7 @@ class ToolExecutor:
                 return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
                     'previous_motion_requires_new_local_path_or_cancellation')
         # No per-call atomic action quota. A model-selected finite route
-        # executes until target arrival, fresh-sensor safety/pose interruption,
+        # executes until target arrival, fresh-sensor/pose interruption,
         # or the remaining Episode action budget (STOP reserved).
         # The global episode limit is the only hard action-count bound.
         for _ in range(max(0, self.config['max_steps'] - 1 - len(self.memory.actions))):
@@ -654,7 +630,7 @@ class ToolExecutor:
                         next_step='new_local_waypoints_from_current_rgbd_not_repeat_semantic_scan'))
             # After a failed visual translation, x/z are deliberately not
             # advanced. Continue only a straight, short-horizon intent under
-            # NEW depth and collision checks; do not steer toward stale x/z.
+            # NEW odometry observations; do not steer toward stale x/z.
             action = 'MOVE_FORWARD' if unverified else self.motion_controller.next_action()
             if action is None:
                 return self._navigation_feedback(path, checked, 'TARGET_REACHED', 'original_endpoint_reached')

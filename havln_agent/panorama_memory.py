@@ -23,10 +23,10 @@ PANORAMA_NAVIGATION_PROMPT = (
     'Submit only one navigate_relative(turn_deg, distance_m) with '
     '-180 <= turn_deg <= 180 and 0.25 <= distance_m <= 3.0. '
     'The executor will perform all needed turns then attempt forward and '
-    'check fresh RGB-D depth, terrain and people BEFORE every forward action. '
+    'use RGB-D only to estimate motion after each forward action; automatic geometry, terrain and human collision probes are disabled. '
     'Past EXECUTABLE does not mean currently safe; past BLOCKED might be stale. '
     'UNKNOWN/NEEDS_VIEW means unconfirmed, not a physical barrier. Only '
-    'affirmative current obstacle/occupied corridor evidence vetoes a step. '
+    'geometry checks are performed only when NavigationAgent explicitly requests an inspection tool. '
     'Distinguish a visible staircase/railing from its WALKABLE ENTRY; their '
     'bearings may differ. Compare approach_candidates and prior successful '
     'forward/downward movements before choosing a direction. A successful '
@@ -141,7 +141,8 @@ def decide_with_panorama(agent, context, signature, validate, offered_tools):
             allowed_tool='navigate_relative',
             images_reviewed_by='visual_perception',
             frame_yaws_relative_to_current_pose=True,
-            historical_RGB_not_motion_permission=True),
+            historical_RGB_not_motion_permission=True,
+            geometry_autorun=False),
         **({'format_feedback':context['format_feedback']}
            if 'format_feedback' in context else {}))
     response=runtime.client.complete(

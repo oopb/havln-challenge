@@ -36,7 +36,7 @@ class ObservationEfficiencyTests(unittest.TestCase):
         self.assertIs(rank_candidates([unrelated,relevant],'approach_landmark')[0],
                       relevant)
 
-    def test_observation_only_probes_front_and_reuses_identical_view(self):
+    def test_observation_never_probes_geometry_and_reuses_identical_view(self):
         fake=ToolExecutor.__new__(ToolExecutor)
         frame=Observation(np.zeros((16,16,3),dtype=np.uint8),
             np.full((16,16),2.,dtype=np.float32),'descend',time.monotonic())
@@ -55,15 +55,15 @@ class ObservationEfficiencyTests(unittest.TestCase):
         fake.frames={}
         fake.accept_observation(frame)
         diagnostic=fake.memory.observe.call_args.args[2]
-        self.assertEqual(len(diagnostic),1)
-        self.assertEqual(diagnostic[0]['angle_degrees'],0)
-        geo.movement_probe.assert_called_once_with(0)
+        self.assertEqual(diagnostic,[])
+        fake.geometry.assert_not_called()
+        geo.movement_probe.assert_not_called()
         # On unchanged view, no additional geometry pass is needed.
         from havln_agent.observation import array_hash
         record.update(rgb_hash=array_hash(frame.rgb),depth_hash=array_hash(frame.depth))
         fake.memory.current=record
         fake.accept_observation(frame)
-        geo.movement_probe.assert_called_once_with(0)
+        fake.geometry.assert_not_called()
         self.assertEqual(fake.memory.observe.call_count,2)
 
 
