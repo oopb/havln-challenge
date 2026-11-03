@@ -273,8 +273,8 @@ class ToolExecutor:
         front = safety_check['depth'] if safety_check is not None else None
         # Reuse the ONE already computed live depth report. Do not run the
         # same body sweep again via check_action() before executing the step.
-        rejected = bool(safety_check and safety_check['state'] != 'EXECUTABLE')
-        reason = (safety_check.get('reason') or 'depth_probe_not_executable') if rejected else None
+        rejected = bool(safety_check and safety_check['state'] == 'BLOCKED')
+        reason = (safety_check.get('reason') or 'confirmed_obstacle') if rejected else None
         if rejected:
             self.memory.event('safety_rejected',requested_action=action,reason=reason,geometry=front)
             return dict(status=safety_check['state'],reason=reason,safety=dict(front,
@@ -369,7 +369,8 @@ class ToolExecutor:
             post_observation=frame_info(after, self.camera),
             observation_age_seconds=checked_at - before.captured_at,
             safety=dict(
-                status='APPROVED',
+                status=('UNCONFIRMED_NO_OBSTACLE' if safety_check and
+                        safety_check['state'] == 'UNCONFIRMED' else 'APPROVED'),
                 checked_action=action,
                 front=front,
                 captured_at=before.captured_at,
@@ -379,6 +380,9 @@ class ToolExecutor:
                 human_semantics=geometry.human_status if geometry is not None else None,
                 terrain_evidence=safety_check['support'] if safety_check is not None else None,
                 dynamic_motion_prediction='UNAVAILABLE',
+                evidence_first_policy=True,
+                unknown_is_not_collision=bool(safety_check and
+                    safety_check['state'] == 'UNCONFIRMED'),
             ),
             scene=self.memory.scene_memory['scene'] if self.memory.scene_memory else None,
             scene_matches_current_rgb=bool(
@@ -391,7 +395,7 @@ class ToolExecutor:
                 dict(
                     stage='safety_shield',
                     action=action,
-                    reason='live_depth_approved' if action == 'MOVE_FORWARD' else 'turn_or_stop',
+                    reason='no_confirmed_obstacle' if action == 'MOVE_FORWARD' else 'turn_or_stop',
                 ),
                 dict(stage='executor', action=action, reason='environment_step_completed'),
             ],
@@ -604,9 +608,9 @@ class ToolExecutor:
                 return dict(status='INVALID_TARGET', reason='unknown_tool_generated_path_id')
             if path.get('execution_status') == 'REQUIRES_ATTENTION':
                 return dict(status='REQUIRES_ATTENTION', reason='previous_motion_requires_new_local_path_or_cancellation')
-            if path.get('first_step') != 'EXECUTABLE':
-                return dict(status='NEEDS_VIEW', reason='waypoint_requires_view_not_navigation',
-                    suggestion='use_turn_and_observe_then_inspect_geometry_before_requesting_new_waypoints')
+            if path.get('first_step') == 'BLOCKED':
+                return dict(status='BLOCKED', reason='measured_obstacle_in_waypoint',
+                    suggestion='choose_other_route_or_inspect_obstacle')
             checked = self._revalidate_path(path)
             if checked['status'] != 'OK':
                 return checked
