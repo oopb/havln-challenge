@@ -77,29 +77,55 @@ OBSERVE_PROMPT = (
     'receipt, not a reason to restart the entire semantic search. '
     'After each MOVE, choose the next short segment using the new observation '
     'and retained memory; continue the same subgoal. '
+    'max_atomic_steps is a TOTAL limit shared by TURN and MOVE_FORWARD: '
+    'with 15-degree TURN increments, a requested 30-degree turn needs two '
+    'atomic turns BEFORE a forward action can be attempted. Choosing '
+    'max_atomic_steps=1 for such a motion executes only a TURN, not forward. '
+    'A PARTIAL tool_action_limit with only TURN receipts preserves a pending '
+    'waypoint; resume SAME waypoint if still suitable instead of starting '
+    'a new relative direction. '
 )
 
 # This is a model-visible *decision focus*, not a tool whitelist or a hidden
 # physical control action. The agent still owns the bearing and can explain
 # missing live safety rather than inventing a safe corridor.
 OBSERVATION_INTERVENTION_PROMPT = (
-    'OBSERVATION-LOOP INTERVENTION: Repeated same-stance camera searches have '
-    'produced little new actionable information. The observation_coverage '
-    'context lists ABSOLUTE headings grouped by camera pitch; do not mistake '
-    'LOOK_UP then LOOK_DOWN for a new place or an unexplored direction. '
-    'YOUR NEXT DECISION MUST SELECT a concrete task-directed short movement '
-    'bearing and distance using navigate_relative/navigate_to_pixel, or '
-    'continue an actually usable waypoint with navigate_local. You choose '
-    'the bearing and retain full control over detours and semantic goals. '
-    'If no plausible direction has sufficient current evidence, you MUST '
-    'identify the exact safety or visibility blocker in decision_reason, '
-    'then select ONE distinct observation/geometry/plan action that could '
-    'actually resolve it. Do not merely repeat a prior horizontal/downward '
-    'camera toggle or waypoint-candidate query with unchanged evidence. '
-    'A historic EXECUTABLE sector is a clue, NEVER movement permission: '
-    'live RGB-D/body/human checks still decide physical action legality. '
-    'This checkpoint does NOT force a blind MOVE_FORWARD or forbid necessary '
-    'dynamic human rechecks. '
+    'OBSERVATION-LOOP DECISION CHECKPOINT (issued ONCE per task/stance): '
+    'Existing yaw/pitch views have produced little actionable information. '
+    'The current geometry contains a plausible local bearing, but this is '
+    'NOT lasting forward permission. Choose a task-relevant short movement '
+    'when evidence supports it, OR use a different purposeful action if '
+    'the available evidence is insufficient. YOU choose the direction, '
+    'route, target and whether new observations are genuinely needed. '
+    'Repeating the same absolute view without changed evidence is unlikely '
+    'to help. Any MOVE_FORWARD still requires current RGB-D, terrain and '
+    'human safety checks. Do NOT fabricate a free corridor. '
+)
+BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
+    'OBSERVATION-LOOP / NO EXECUTABLE BEARING (issued ONCE per task/stance): '
+    'Repeated same-stance observations have not established a current safe '
+    'forward bearing. Do NOT call a turning-only MOVE a successful forward '
+    'attempt, and do NOT invent clearance. Choose the next task-relevant '
+    'strategy yourself: a genuinely different local goal/detour, a specific '
+    'live geometry or view test that could change the decision, a semantic '
+    'task revision, or an explicitly evidence-backed movement direction '
+    'for the safety controller to test. Do not merely toggle between already '
+    'seen pitch levels or arbitrarily change relative headings. The model '
+    'retains full planning authority and the executor retains physical veto. '
+)
+PENDING_TURN_ONLY_MOTION_PROMPT = (
+    'MOVEMENT CONTINUITY: The latest navigate_* result executed only TURN '
+    'actions; zero MOVE_FORWARD actions were attempted. The original finite '
+    'waypoint may still be pending. max_atomic_steps counts BOTH TURN and '
+    'MOVE_FORWARD: for example 30 degrees at 15 degrees per step requires '
+    'two TURNs and at least one additional authorized action to first attempt '
+    'forward. Read pending_motion_continuity, including the remaining turns '
+    'and min_atomic_actions_until_first_forward_attempt. If the original '
+    'target still serves the task, use navigate_local with the SAME waypoint '
+    'ID and a suitable bounded action budget; otherwise deliberately choose '
+    'a different route or observation. Do not redefine a new relative MOVE '
+    'merely because the last batch exhausted its turning budget. Live safety '
+    'checks still apply to every forward attempt. '
 )
 
 MOVE_EXECUTION_RULES = (
@@ -126,19 +152,45 @@ class NavigationAgent:
                                category='structured_field')
         context = dict(navigation_context(runtime),
                        **({'format_feedback': format_feedback} if format_feedback else {}))
-        intervention=(context.get('observation_stagnation') or {}).get(
-            'intervention') == 'DIRECTIONAL_ACTION_DECISION_REQUIRED'
-        if intervention and hasattr(runtime, 'event'):
-            runtime.event('model_direction_intervention_requested',
-                source='navigation_agent',
-                observed_calls=context['observation_stagnation']['same_stance_observation_calls'],
-                low_information_calls=context['observation_stagnation']['low_information_calls'],
-                physically_forced=False)
-        return runtime.client.complete(
+        stagnation=context.get('observation_stagnation') or {}
+        advisory=stagnation.get('intervention')
+        pending=bool(context.get('pending_motion_continuity'))
+        # A one-shot strategic checkpoint must not be repeated every turn
+        # while the physical stance is unchanged. A later new subgoal/stance
+        # can legitimately receive a new checkpoint.
+        pose=context.get('pose') or {}
+        task=context.get('task_selection') or {}
+        xy=pose.get('position_xz_m_est') or ()
+        signature=(task.get('current_subgoal_index'),
+                   pose.get('motion_epoch'),pose.get('place_id'),
+                   tuple(round(float(v),1) for v in xy))
+        first_checkpoint=(
+            advisory in ('DIRECTIONAL_ACTION_DECISION_REQUIRED',
+                         'BLOCKED_ACTIONABILITY_REASSESSMENT')
+            and getattr(self,'_intervention_signature',None)!=signature)
+        advisory_prompt=(
+            OBSERVATION_INTERVENTION_PROMPT
+                if first_checkpoint and advisory=='DIRECTIONAL_ACTION_DECISION_REQUIRED'
+            else BLOCKED_OBSERVATION_INTERVENTION_PROMPT
+                if first_checkpoint and advisory=='BLOCKED_ACTIONABILITY_REASSESSMENT'
+            else '')
+        continuity_prompt=PENDING_TURN_ONLY_MOTION_PROMPT if pending else ''
+        if advisory and not first_checkpoint:
+            stagnation['intervention_delivery']='previously_issued_or_pending_route'
+        result=runtime.client.complete(
             'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT +
-                (OBSERVATION_INTERVENTION_PROMPT if intervention else ''),
+            COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt + continuity_prompt,
             context, navigation_schema(runtime.registry), validate=validate,
             format_retry=int(bool(format_feedback)), retry_safe=True,
             protocol=compact_navigation_protocol(runtime.registry),
             validation_schema=navigation_envelope(runtime.registry))
+        if first_checkpoint:
+            self._intervention_signature=signature
+            if hasattr(runtime,'event'):
+                runtime.event('model_direction_intervention_requested',
+                    source='navigation_agent',
+                    intervention=advisory,
+                    observed_calls=stagnation['same_stance_observation_calls'],
+                    low_information_calls=stagnation['low_information_calls'],
+                    physically_forced=False)
+        return result
