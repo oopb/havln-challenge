@@ -223,6 +223,51 @@ class ExplorationTests(unittest.TestCase):
         self.assertIn('observation_coverage',result)
         self.assertIn('observation_stagnation',result)
 
+    def test_turn_only_safety_veto_not_misreported_as_budget_resume(self):
+        # A post-TURN collision is a fresh safety veto, unlike PARTIAL
+        # tool_action_limit. Both may have a still pending waypoint.
+        self.mem.active_attempt=dict(unknown_motion_seen=False)
+        feedback=dict(turn_only_no_forward_attempt=True,
+            same_waypoint_pending=True,endpoint_estimate_valid=True,
+            waypoint_id='direct_0040',executed_turn_actions=1,
+            min_atomic_actions_until_first_forward_attempt=2)
+        r=SimpleNamespace(memory=self.mem,
+            motion_controller=SimpleNamespace(
+                pose=lambda:pose(120),target=(1.,1.),
+                next_action=lambda:'TURN_LEFT'),
+            active_subgoal=dict(action='descend',target='stairs'),
+            active_waypoint_id='direct_0040',pitch_deg=-60,
+            camera=SimpleNamespace(turn_angle=15,tilt_angle=30),
+            config=dict(max_steps=128,tool_max_actions=3,
+                        max_scene_age_seconds=300),paths={})
+        self.mem.tool_ledger.append(dict(
+            call=dict(tool='navigate_relative',
+                args=dict(turn_deg=30,distance_m=.5,max_atomic_steps=3)),
+            result=dict(tool='navigate_relative',waypoint_id='direct_0040',
+                status='PARTIAL',interrupted_status='BLOCKED',
+                reason='occupied_next_step',
+                end_observation_id='obs_0120',
+                movement_intent_feedback=feedback)))
+        with patch('havln_agent.contexts.turn_evidence',
+                   return_value=dict(requirement=None)):
+            blocked=navigation_context(r)
+        self.assertNotIn('pending_motion_continuity',blocked)
+        self.assertEqual(blocked['recent_motion_intent']['status'],'BLOCKED')
+        self.assertEqual(blocked['local_navigation']['execution_feasibility'],
+                         'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
+        # Change ONLY the reason to the true action-limit case:
+        self.mem.tool_ledger[-1]['result'].update(status='PARTIAL',
+            interrupted_status=None,reason='tool_action_limit')
+        with patch('havln_agent.contexts.turn_evidence',
+                   return_value=dict(requirement=None)):
+            partial=navigation_context(r)
+        self.assertEqual(partial['pending_motion_continuity']['waypoint_id'],
+                         'direct_0040')
+        self.assertEqual(
+            partial['pending_motion_continuity']['first_forward_requires_atomic_actions'],2)
+        self.assertEqual(
+            partial['pending_motion_continuity']['current_batch_action_limit'],3)
+
     def test_navigation_context_preserves_collision_and_coverage(self):
         runtime=SimpleNamespace(memory=self.mem,
             motion_controller=SimpleNamespace(pose=lambda:pose(120),target=None),

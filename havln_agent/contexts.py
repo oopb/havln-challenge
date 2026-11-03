@@ -196,7 +196,11 @@ def navigation_context(runtime):
             if key!='rows'},
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
-            direct_segment_max_m=3.0),
+            direct_segment_max_m=3.0,
+            max_atomic_actions_per_tool=min(
+                runtime.config.get('tool_max_actions',3),
+                max(1,runtime.config['max_steps']-1-len(memory.actions))),
+            atomic_action_budget_counts_turn_and_forward=True),
         grounding_evidence=grounding_hints,
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
@@ -321,8 +325,17 @@ def navigation_context(runtime):
                 move_result.get('status'),
             reason=move_result.get('reason'),
             **receipt)
-        if (receipt.get('turn_only_no_forward_attempt')
+        # A waypoint that TURNed and then hit BLOCKED/NEEDS_VIEW is NOT
+        # merely an action-budget partial. Do not suggest continuing it
+        # as if the only missing ingredient were a larger action allowance.
+        turn_only_budget_exhausted=(
+            move_result.get('status')=='PARTIAL'
+            and not move_result.get('interrupted_status')
+            and move_result.get('reason')=='tool_action_limit')
+        if (turn_only_budget_exhausted
+                and receipt.get('turn_only_no_forward_attempt')
                 and receipt.get('same_waypoint_pending')
+                and receipt.get('endpoint_estimate_valid',False)
                 and receipt.get('waypoint_id')==runtime.active_waypoint_id
                 and runtime.motion_controller.target is not None):
             pending_motion=dict(
@@ -332,8 +345,13 @@ def navigation_context(runtime):
                 remaining_turn_actions_est=receipt.get('remaining_turn_actions_est'),
                 first_forward_requires_atomic_actions=receipt.get(
                     'min_atomic_actions_until_first_forward_attempt'),
-                previous_batch_exhausted_on_turns=(
-                    move_result.get('reason')=='tool_action_limit'),
+                previous_batch_exhausted_on_turns=True,
+                current_batch_action_limit=result['action_calibration'][
+                    'max_atomic_actions_per_tool'],
+                requires_multiple_batches_before_forward=(
+                    receipt.get('min_atomic_actions_until_first_forward_attempt') is not None
+                    and receipt['min_atomic_actions_until_first_forward_attempt'] >
+                    result['action_calibration']['max_atomic_actions_per_tool']),
                 model_may_resume_or_change_route=True,
                 next_forward_requires_fresh_live_safety=True,
                 note='This move intent has only TURN receipts; no MOVE_FORWARD was attempted. A new navigate_relative bearing creates a DIFFERENT route, not continuation.')

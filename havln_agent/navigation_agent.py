@@ -122,8 +122,11 @@ PENDING_TURN_ONLY_MOTION_PROMPT = (
     'forward. Read pending_motion_continuity, including the remaining turns '
     'and min_atomic_actions_until_first_forward_attempt. If the original '
     'target still serves the task, use navigate_local with the SAME waypoint '
-    'ID and a suitable bounded action budget; otherwise deliberately choose '
-    'a different route or observation. Do not redefine a new relative MOVE '
+    'ID and a suitable bounded action budget; if the number of TURN actions '
+    'exceeds max_atomic_actions_per_tool, continue in multiple bounded '
+    'navigate_local batches. Never request more than the tool allows. '
+    'Otherwise deliberately choose a different route or observation. '
+    'Do not redefine a new relative MOVE '
     'merely because the last batch exhausted its turning budget. Live safety '
     'checks still apply to every forward attempt. '
 )
@@ -161,7 +164,9 @@ class NavigationAgent:
         pose=context.get('pose') or {}
         task=context.get('task_selection') or {}
         xy=pose.get('position_xz_m_est') or ()
-        signature=(task.get('current_subgoal_index'),
+        signature=(getattr(runtime.memory,'episode_id',None),
+                   getattr(runtime,'plan_revision',None),
+                   task.get('current_subgoal_index'),
                    pose.get('motion_epoch'),pose.get('place_id'),
                    tuple(round(float(v),1) for v in xy))
         first_checkpoint=(
