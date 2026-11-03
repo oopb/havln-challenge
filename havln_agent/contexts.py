@@ -5,7 +5,7 @@ import time
 from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
 from .local_exploration import (last_block, local_coverage,
-    multi_pitch_coverage, observation_stagnation)
+    multi_pitch_coverage, panorama_coverage, observation_stagnation)
 
 
 def fields(value,names):
@@ -354,6 +354,16 @@ def navigation_context(runtime):
     result['observation_coverage']=multi_pitch_coverage(
         memory,coverage_pose,runtime.camera.turn_angle,
         runtime.camera.tilt_angle)
+    panorama=panorama_coverage(memory, coverage_pose,
+        runtime.camera.turn_angle,
+        getattr(runtime.camera,'hfov',runtime.camera.turn_angle))
+    # Only surface detailed historical bearings after the panoramic threshold.
+    # These are proposals, NOT current walking clearance or live human evidence.
+    result['panoramic_observation']=(
+        panorama if panorama['all_azimuths_observed'] else
+        fields(panorama, ('reference','covered_yaw_bins','total_yaw_bins',
+                         'coverage_fraction','all_azimuths_observed',
+                         'motion_authorized')))
     stagnation=observation_stagnation(memory,coverage_pose)
     plausible_directions=[dict(relative_turn_deg=d.get('angle_degrees'),
                                current_snapshot_status=d.get('motion_state'),

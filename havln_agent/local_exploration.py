@@ -94,6 +94,70 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
 
 
 
+def panorama_coverage(memory, pose, turn_degrees=15, hfov_degrees=90):
+    """Conservative 360-degree *visual* coverage at one physical stance.
+
+    A full turn can sample at 30 or 45 degrees without an RGB frame at
+    every 15-degree actuator heading. Use at most half the physical camera
+    HFOV (capped at 45 degrees) to count an actually observed azimuth sector.
+    This is NOT a traversability scan; depth clearance is valid only for the
+    actual live view, never for inferred bins or historical human occupancy.
+    """
+    count = max(1, round(360 / turn_degrees))
+    bin_width = 360.0 / count
+    # Be deliberately more conservative than the camera's native HFOV.
+    visual_width = min(45.0, max(bin_width, float(hfov_degrees) / 2.0))
+    samples = {}
+    for record in getattr(memory, 'observations', ()):
+        prior = record.get('pose') or {}
+        if (record.get('subgoal') != memory.task.current_subgoal_index
+                or not same_stance(prior, pose)):
+            continue
+        heading = bearing_from_pose(prior)
+        key = round(heading / bin_width) % count
+        # Store the last measured snapshot per discrete observed heading.
+        samples[key] = record
+    covered = set()
+    for record in samples.values():
+        heading = bearing_from_pose(record['pose'])
+        for i in range(count):
+            if angular_separation(heading, i * bin_width) <= visual_width / 2.0 + 1e-6:
+                covered.add(i)
+    current = bearing_from_pose(pose)
+    views = []
+    for key, record in sorted(samples.items()):
+        absolute = bearing_from_pose(record['pose'])
+        front = next((d for d in record.get('directions', ())
+                      if abs(d.get('angle_degrees', 1e6)) < 1e-5), {})
+        # This status is historical and may have expired. UNKNOWN is *not*
+        # a blocked direction and an old EXECUTABLE is never motion permission.
+        delta = (absolute - current + 180) % 360 - 180
+        views.append(dict(
+            observation_id=record['observation_id'],
+            absolute_heading_deg=round(absolute, 2),
+            relative_turn_deg_from_current=round(delta, 2),
+            pitch_deg=record.get('pitch_deg', record['pose'].get('pitch_deg', 0)),
+            historical_front_state=front.get('motion_state', 'UNMEASURED'),
+            historical_front_reason=front.get('reason'),
+            historical_front_clearance_m=front.get('clearance')))
+    return dict(
+        reference='same_stance_same_motion_epoch_same_subgoal_RGBD_observations',
+        visual_sector_width_used_deg=round(visual_width, 2),
+        yaw_bin_width_deg=round(bin_width, 2),
+        covered_yaw_bins=len(covered),
+        total_yaw_bins=count,
+        coverage_fraction=round(len(covered) / count, 3),
+        all_azimuths_observed=len(covered) == count,
+        unsampled_yaw_bin_centers_deg=[
+            round(i * bin_width, 2) for i in range(count) if i not in covered],
+        observed_viewpoints=views,
+        interpretation=('complete_visual_azimuth_coverage_not_collision_certification'
+                        if len(covered) == count else
+                        'partial_visual_azimuth_coverage'),
+        motion_authorized=False,
+        historical_humans_are_not_current_safety_evidence=True)
+
+
 def multi_pitch_coverage(memory, pose, turn_degrees=15, pitch_degrees=30):
     """Compact camera coverage from AUTHENTIC public observations at this stance.
 

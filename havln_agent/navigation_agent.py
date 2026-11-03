@@ -2,6 +2,7 @@
 from .contracts import navigation_schema, compact_navigation_protocol, navigation_envelope
 from .contexts import navigation_context
 from .api_client import APIError
+from jsonschema import Draft7Validator
 
 COMMON_PROMPT = (
     'You are NavigationAgent. TaskPlanner supplies ordered semantic subgoals. '
@@ -121,6 +122,27 @@ BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'seen pitch levels or arbitrarily change relative headings. The model '
     'retains full planning authority and the executor retains physical veto. '
 )
+PANORAMA_COMMIT_PROMPT = (
+    'FULL-360 OBSERVATION COMPLETE: MODEL-OWNED DIRECTION COMMITMENT. '
+    'The robot has already observed every azimuth sector at this stance. '
+    'Further aimless TURN/LOOK scanning cannot substitute for a local path '
+    'choice. Read panoramic_observation.observed_viewpoints, current task, '
+    'historical front geometry, visual hints and prior failures. '
+    'CHOOSE the most promising specific heading yourself and return ONLY '
+    'navigate_relative with turn_deg (RELATIVE to the current heading) and '
+    'a finite distance_m between 0.25 and 3.0. A short first approach may '
+    'be appropriate, and turning first is part of the SAME continuous tool call. '
+    'Do NOT request turn_and_observe or another open-ended sweep in this '
+    'checkpoint. Historical EXECUTABLE is NOT current clearance; historical '
+    'BLOCKED may be stale, and an unmeasured direction is UNKNOWN, not blocked. '
+    'This request is a movement ATTEMPT, not a command to bypass the safety '
+    'controller. After turning, the tool rechecks live RGB-D/terrain/people '
+    'before every forward and may return BLOCKED, NEEDS_VIEW or '
+    'REQUIRES_ATTENTION without physical translation. In that case decide '
+    'again using its actual evidence, without falsely claiming success. '
+    'You, not the harness, choose the bearing and distance. '
+)
+ 
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
     'LocalMotionController checks fresh RGB-D for each forward action, '
@@ -147,9 +169,10 @@ class NavigationAgent:
                        **({'format_feedback': format_feedback} if format_feedback else {}))
         stagnation=context.get('observation_stagnation') or {}
         advisory=stagnation.get('intervention')
-        # A one-shot strategic checkpoint must not be repeated every turn
-        # while the physical stance is unchanged. A later new subgoal/stance
-        # can legitimately receive a new checkpoint.
+        panorama=context.get('panoramic_observation') or {}
+        # Do not force translational movement for an orientation-only
+        # instruction whose completion should be independently verified.
+        orientation=(context.get('orientation') or {}).get('requirement')
         pose=context.get('pose') or {}
         task=context.get('task_selection') or {}
         xy=pose.get('position_xz_m_est') or ()
@@ -158,9 +181,35 @@ class NavigationAgent:
                    task.get('current_subgoal_index'),
                    pose.get('motion_epoch'),pose.get('place_id'),
                    tuple(round(float(v),1) for v in xy))
+        if (panorama.get('all_azimuths_observed')
+                and getattr(self,'_panorama_committed_signature',None)==signature):
+            # One model-authored route attempt has already been issued at
+            # this stance: don't issue a second, conflicting stall advisory.
+            advisory=None
+        full_circle_commit=(
+            bool(panorama.get('all_azimuths_observed')) and not orientation
+            and getattr(self,'_panorama_committed_signature',None)!=signature
+            and 'navigate_relative' in runtime.registry)
+        # This is a temporary tool-choice contract, NOT an autonomous move:
+        # the LLM picks a bearing/distance and live safety still has the veto.
+        offered_tools=(
+            {'navigate_relative':runtime.registry['navigate_relative']}
+            if full_circle_commit else runtime.registry)
+        if full_circle_commit:
+            context['panorama_commitment']=dict(
+                required_decision='CHOOSE_DIRECTION_AND_ATTEMPT_FINITE_NAVIGATION',
+                allowed_tool='navigate_relative',
+                model_selects_turn_and_distance=True,
+                movement_is_not_guaranteed_if_live_safety_rejects=True,
+                viewpoint_evidence_is_historical_only=True)
+
+        # A one-shot strategic checkpoint must not be repeated every turn
+        # while the physical stance is unchanged. A later new subgoal/stance
+        # can legitimately receive a new checkpoint.
         first_checkpoint=(
-            advisory in ('DIRECTIONAL_ACTION_DECISION_REQUIRED',
-                         'BLOCKED_ACTIONABILITY_REASSESSMENT')
+            not full_circle_commit
+            and advisory in ('DIRECTIONAL_ACTION_DECISION_REQUIRED',
+                             'BLOCKED_ACTIONABILITY_REASSESSMENT')
             and getattr(self,'_intervention_signature',None)!=signature)
         advisory_prompt=(
             OBSERVATION_INTERVENTION_PROMPT
@@ -172,11 +221,31 @@ class NavigationAgent:
             stagnation['intervention_delivery']='previously_issued_or_pending_route'
         result=runtime.client.complete(
             'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt,
-            context, navigation_schema(runtime.registry), validate=validate,
+            COMMON_PROMPT + OBSERVE_PROMPT +
+                (PANORAMA_COMMIT_PROMPT if full_circle_commit else advisory_prompt),
+            context, navigation_schema(offered_tools), validate=validate,
             format_retry=int(bool(format_feedback)), retry_safe=True,
-            protocol=compact_navigation_protocol(runtime.registry),
-            validation_schema=navigation_envelope(runtime.registry))
+            protocol=compact_navigation_protocol(offered_tools),
+            validation_schema=navigation_envelope(offered_tools))
+        if full_circle_commit:
+            # Compact/no-native-schema providers may ignore enumerated tools.
+            # Reject rather than execute an arbitrary TURN or spend another
+            # 200 decisions on an identical invalid tool call. scheduler.request
+            # can issue one structured-field correction with fresh context.
+            if not Draft7Validator(navigation_schema(offered_tools)).is_valid(result):
+                raise APIError(
+                    'full_circle_requires_schema_valid_navigate_relative_turn_deg_and_distance_m',
+                    category='structured_field')
+            self._panorama_committed_signature=signature
+            if hasattr(runtime,'event'):
+                runtime.event('panorama_direction_committed',
+                    source='navigation_agent',
+                    selected_tool='navigate_relative',
+                    selected_turn_deg=result['args']['turn_deg'],
+                    selected_distance_m=result['args']['distance_m'],
+                    observed_yaw_bins=panorama.get('covered_yaw_bins'),
+                    physically_forced=False,
+                    live_safety_revalidation_required=True)
         if first_checkpoint:
             self._intervention_signature=signature
             if hasattr(runtime,'event'):
