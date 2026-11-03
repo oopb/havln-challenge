@@ -34,7 +34,7 @@ def direct_runtime():
         rgb_hash='r',depth_hash='d',pose=pose,subgoal=0,
         captured_at=time.monotonic()))
     r._navigate_local=Mock(return_value=dict(status='PARTIAL',
-        reason='tool_action_limit'))
+        reason='model_selected_route_pending'))
     r.paths={}
     return r
 
@@ -42,7 +42,7 @@ def direct_runtime():
 class ModelControlRuntimeTests(unittest.TestCase):
     def test_model_direct_motion_creates_resumable_route_without_candidates(self):
         r=direct_runtime()
-        result=r._navigate_relative(turn_deg=45,distance_m=2.,max_atomic_steps=3)
+        result=r._navigate_relative(turn_deg=45,distance_m=2.)
         self.assertEqual(result['status'],'PARTIAL')
         self.assertEqual(result['waypoint_id'],'direct_0000')
         self.assertEqual(r.paths['direct_0000']['type'],'EXPLORATION_WAYPOINT')
@@ -50,7 +50,7 @@ class ModelControlRuntimeTests(unittest.TestCase):
         self.assertTrue(r.paths['direct_0000']['requires_post_turn_recheck'])
         self.assertEqual(r.paths['direct_0000']['objective']['purpose'],
                          'model_directed_motion')
-        r._navigate_local.assert_called_once_with('direct_0000',3)
+        r._navigate_local.assert_called_once_with('direct_0000')
         r.memory.note_candidates.assert_called_once()
         self.assertEqual(r.memory.note_candidates.call_args.args[0][0]['id'],'direct_0000')
         self.assertEqual(result['requested_motion']['authorization'],
@@ -58,7 +58,7 @@ class ModelControlRuntimeTests(unittest.TestCase):
 
     def test_model_continuous_intent_is_quantized_not_rejected(self):
         r=direct_runtime()
-        got=r._navigate_relative(19.,.61,2)
+        got=r._navigate_relative(19.,.61)
         self.assertEqual(got['status'],'PARTIAL')
         self.assertEqual(got['requested_motion']['quantized_turn_deg'],15.)
         self.assertEqual(got['requested_motion']['quantized_distance_m'],.5)
@@ -66,8 +66,8 @@ class ModelControlRuntimeTests(unittest.TestCase):
 
     def test_out_of_bounds_motion_does_not_execute(self):
         r=direct_runtime()
-        self.assertEqual(r._navigate_relative(15,3.25,1)['status'],'INVALID_ARGUMENTS')
-        self.assertEqual(r._navigate_relative(float('nan'),.5,1)['status'],'INVALID_ARGUMENTS')
+        self.assertEqual(r._navigate_relative(15,3.25)['status'],'INVALID_ARGUMENTS')
+        self.assertEqual(r._navigate_relative(float('nan'),.5)['status'],'INVALID_ARGUMENTS')
         r._navigate_local.assert_not_called()
         self.assertEqual(r.paths,{})
 
@@ -79,13 +79,13 @@ class ModelControlRuntimeTests(unittest.TestCase):
         r.geometry=Mock(return_value=Geometry(obs,r.camera,0.05))
         r._navigate_relative=Mock(return_value=dict(status='PARTIAL',
                                                   waypoint_id='direct_0000'))
-        outcome=r._navigate_to_pixel(.75,.5,.5,2)
+        outcome=r._navigate_to_pixel(.75,.5,.5)
         self.assertEqual(outcome['status'],'PARTIAL')
         self.assertLess(outcome['pixel_target']['selected_turn_deg'],0)
         self.assertEqual(outcome['pixel_target']['measured_depth_m'],2.)
         self.assertIn('not_walkability_certificate',
                       outcome['pixel_target']['interpretation'])
-        self.assertEqual(r._navigate_relative.call_args.args[1:],(.5,2))
+        self.assertEqual(r._navigate_relative.call_args.args[1:],(.5,))
         self.assertEqual(
             r._navigate_relative.call_args.kwargs['_source']['observation_id'],
             'obs_0000')
@@ -101,15 +101,19 @@ class ModelControlRuntimeTests(unittest.TestCase):
                         'find exit',time.monotonic())
         r.geometry=Mock(return_value=Geometry(obs,r.camera,0.05))
         r._navigate_relative=Mock()
-        self.assertEqual(r._navigate_to_pixel(.5,.5,.5,1)['status'],'NEEDS_VIEW')
+        self.assertEqual(r._navigate_to_pixel(.5,.5,.5)['status'],'NEEDS_VIEW')
         r._navigate_relative.assert_not_called()
 
     def test_registry_allows_open_targets_and_direct_motion(self):
         tools=registry(camera(),3)
         self.assertTrue(Draft7Validator(tools['navigate_relative']['parameters'])
-                        .is_valid(dict(turn_deg=30,distance_m=1.5,max_atomic_steps=3)))
+                        .is_valid(dict(turn_deg=30,distance_m=1.5)))
         self.assertTrue(Draft7Validator(tools['navigate_to_pixel']['parameters'])
-                        .is_valid(dict(u=.65,v=.33,distance_m=.5,max_atomic_steps=1)))
+                        .is_valid(dict(u=.65,v=.33,distance_m=.5)))
+        self.assertFalse(Draft7Validator(tools['navigate_relative']['parameters'])
+                         .is_valid(dict(turn_deg=30,distance_m=.5,max_atomic_steps=1)))
+        self.assertFalse(Draft7Validator(tools['navigate_local']['parameters'])
+                         .is_valid(dict(waypoint_id='p0',max_atomic_steps=1)))
         self.assertEqual(tools['navigate_relative']['permission'],'NAVIGATION')
         self.assertTrue(Draft7Validator(tools['observe_for_goal']['parameters'])
                         .is_valid(dict(objective='locate the dancer',
