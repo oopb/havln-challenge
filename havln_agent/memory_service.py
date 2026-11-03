@@ -147,7 +147,7 @@ class MemoryService(MemoryRecords):
             self.dynamic.append(dict(id='dynamic_%04d' % len(self.dynamic),kind=item['kind'],
                 place_id=self.keyframes[source['observation_id']]['place_id'],
                 finding=item.get('activity',item.get('description','unknown activity')),
-                box=item.get('box'),position=self.runtime.geometry().localize_human(item.get('box')),
+                box=item.get('box'),position=None,
                 observed_at=source.get('revalidated_at',source['captured_at']),confidence='model_hypothesis',
                 source_observation_ids=[source['observation_id']],usable_for_live_safety=False))
 
