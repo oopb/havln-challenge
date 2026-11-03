@@ -203,19 +203,16 @@ class ObservationController:
                         r.observation, source, objective, target_types)
                 previous_id = None
                 origin = 'vlm_current_frame'
-            # Current RGB-D is a *measurement*; VLM box/identity is a hypothesis.
-            # Diagnostic geometry does not grant forward authorization.
-            from .safety import forward_probe
-            check = forward_probe(r.geometry())
+            # A goal-directed scan is a visual tool, not an implicit
+            # geometry/obstacle inspection. VLM evidence remains semantic.
             point = dict(observation_id=source['observation_id'],
                 heading_deg=round(math.degrees(source['pose']['heading']),2),
                 pitch_deg=r.pitch_deg, new_static_information=bool(
                     observation.get('new_visual_information',True)),
                 evidence_origin=origin, visual=visual,
-                geometry=dict(forward_status=check['state'],
-                    reason=check['reason'],
-                    clearance_m=round(check['depth']['clearance'],3),
-                    terrain_status=check['support']['status'],
+                geometry=dict(forward_status='NOT_CHECKED',
+                    reason='geometry_requires_explicit_model_tool',
+                    clearance_m=None,terrain_status='NOT_CHECKED',
                     motion_authorized=False))
             if previous_id:
                 point['reused_from_observation_id'] = previous_id
