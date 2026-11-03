@@ -13,6 +13,58 @@ def fields(value,names):
 
 
 
+ 
+def local_geometry_measurement_scope(directions, turn_step_deg):
+    """Describe the *sampled* current RGB-D directions, not a 360-degree map.
+
+    Other headings are UNMEASURED; a missing executable direction is never
+    evidence that every other bearing is blocked. Historical view coverage is
+    kept separately and never authorizes new motion.
+    """
+    bins = max(1, round(360.0 / float(turn_step_deg)))
+    step = 360.0 / bins
+    sampled = []
+    for direction in directions:
+        try:
+            angle = float(direction['angle_degrees'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(angle):
+            sampled.append((angle, direction))
+    checked = {round((angle + 180.0) / step) % bins for angle, _ in sampled}
+    unchecked = [index for index in range(bins) if index not in checked]
+    runs = []
+    for index in unchecked:
+        if runs and index == runs[-1][1] + 1:
+            runs[-1][1] = index
+        else:
+            runs.append([index, index])
+    return dict(
+        evidence_scope='current_RGBD_snapshot_relative_to_current_heading',
+        sampled_relative_bearings_deg=sorted(set(round(a, 2) for a, _ in sampled)),
+        sampled_count=len(checked),
+        yaw_bin_width_deg=round(step, 2),
+        unmeasured_yaw_bin_count=len(unchecked),
+        unmeasured_relative_bearing_ranges_deg=[
+            [round(-180.0 + lo * step, 2), round(-180.0 + hi * step, 2)]
+            for lo, hi in runs],
+        ranges_are_inclusive_yaw_bins=True,
+        confirmed_executable_relative_bearings_deg=[
+            round(a, 2) for a, d in sampled if d.get('motion_state') == 'EXECUTABLE'],
+        explicitly_blocked_relative_bearings_deg=[
+            round(a, 2) for a, d in sampled if d.get('motion_state') == 'BLOCKED'],
+        sampled_unconfirmed=[
+            dict(relative_bearing_deg=round(a, 2),
+                 motion_state=d.get('motion_state', 'UNKNOWN'),
+                 reason=d.get('reason'))
+            for a, d in sampled if d.get('motion_state') not in ('EXECUTABLE', 'BLOCKED')],
+        full_circle_sampled=len(checked) == bins,
+        sampled_evidence_is_not_future_motion_permission=True,
+        interpretation=('No executable sampled bearing does not imply the robot is '
+                        'surrounded by obstacles. Unmeasured headings are UNKNOWN, '
+                        'not BLOCKED; new forward steps need fresh RGB-D safety.'))
+
+
 def collision_summary(result):
     """Keep decisive measured data, not a VLM guess about obstacle identity."""
     safety=result.get('safety') or {}
@@ -219,6 +271,8 @@ def navigation_context(runtime):
             if abs(runtime.pitch_deg+delta)<=60],
         local_geometry=[fields(d,('angle_degrees','motion_state','reason','clearance')) for d in
             sorted(memory.current.get('directions',[]),key=lambda d:abs(d['angle_degrees']))[:7]],
+        local_geometry_scope=local_geometry_measurement_scope(
+            memory.current.get('directions', []), runtime.camera.turn_angle),
         memory_hints=hints,dynamic_hints=memory.dynamic_summaries(memory.current_place_id)[-2:],
         last_tool=tool_summary(last) if last else None,
         actions_remaining=runtime.config['max_steps']-len(memory.actions))
