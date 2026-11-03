@@ -594,7 +594,7 @@ class ToolExecutor:
                     executable_segment=self.executable_segment or {},
                     validation=checked.get('validation', {}), **extra)
 
-    def _execute_waypoint(self, target, max_actions):
+    def _execute_waypoint(self, target):
         if target != 'current':
             path = self.paths.get(target)
             if path is None:
@@ -628,7 +628,11 @@ class ToolExecutor:
             if path.get('execution_status') == 'REQUIRES_ATTENTION':
                 return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
                     'previous_motion_requires_new_local_path_or_cancellation')
-        for _ in range(max_actions):
+        # No per-call atomic action quota. A model-selected finite route
+        # executes until target arrival, fresh-sensor safety/pose interruption,
+        # or the remaining Episode action budget (STOP reserved).
+        # The global episode limit is the only hard action-count bound.
+        for _ in range(max(0, self.config['max_steps'] - 1 - len(self.memory.actions))):
             attempt = self.memory.active_attempt
             unverified = bool(attempt and attempt.get('unknown_motion_seen'))
             if unverified and attempt['forward_actions'] >= attempt['forward_action_horizon']:
@@ -683,28 +687,13 @@ class ToolExecutor:
                         alert['reason'], motion_alert=alert)
             if self.done:
                 return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
-        attempt = self.memory.active_attempt
-        if attempt and attempt.get('unknown_motion_seen'):
-            if attempt['forward_actions'] >= attempt['forward_action_horizon']:
-                return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                    'relative_forward_horizon_exhausted_without_verified_pose',
-                    recovery=dict(mode='REANCHOR_CURRENT_RGBD',
-                        executed_forward_actions=attempt['forward_actions'],
-                        horizon=attempt['forward_action_horizon'],
-                        unknown_observation_ids=attempt['unknown_observation_ids'],
-                        next_step='new_local_waypoints_from_current_rgbd_not_repeat_semantic_scan'))
-            return self._navigation_feedback(path, checked, 'PARTIAL',
-                'tool_action_limit_after_unverified_translation',
-                recovery=dict(mode='CONTINUE_BOUNDED_RELATIVE_MOTION',
-                    executed_forward_actions=attempt['forward_actions'],
-                    horizon=attempt['forward_action_horizon'],
-                    remaining_safe_forward_attempts=(
-                        attempt['forward_action_horizon']-attempt['forward_actions']),
-                    requires_fresh_rgbd_before_next_step=True,
-                    endpoint_estimate_valid=False))
-        reached = self.motion_controller.next_action() is None
-        return self._navigation_feedback(path, checked, 'TARGET_REACHED' if reached else 'PARTIAL',
-                                         'original_endpoint_reached' if reached else 'tool_action_limit')
+        # A bounded Episode may be exhausted before the finite selected route
+        # ends. Never interpret this as success; scheduler will terminate and
+        # the final STOP action remains reserved.
+        return self._navigation_feedback(path, checked, 'PARTIAL',
+            'episode_action_budget_exhausted',
+            remaining_episode_actions=max(0,
+                self.config['max_steps'] - 1 - len(self.memory.actions)))
 
     def _update_progress(self, claim, evidence, observation_ids):
         self.refresh()
