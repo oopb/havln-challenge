@@ -25,6 +25,7 @@ class MemoryService(MemoryRecords):
         super().reset(episode_id,instruction)
         self.places,self.keyframes,self.landmarks,self.routes={},{},{},{}
         self.dynamic,self.notes=[],[]
+        self.visual_targets=[]
         self.current_place_id=None
         self.place_visit_step=0
 
@@ -88,6 +89,55 @@ class MemoryService(MemoryRecords):
                 landmark['source_observation_ids'].append(identifier)
         self.event('semantic_candidates_recorded',source=source,findings=findings)
 
+    def note_panorama_target(self, visual, views, goal=None):
+        """Retain provenance-linked goal/entry hypotheses across OBSERVE turns.
+
+        Stored headings are historical estimates; they never imply a live
+        collision clearance or actual reached landmark.
+        """
+        by_id={v['observation_id']:v for v in views}
+        identifier=visual['selected_observation_id']
+        if identifier not in by_id or identifier not in self.keyframes:
+            raise ValueError('panorama_target_requires_real_observation')
+        candidates=[]
+        for item in visual.get('approach_candidates',[]):
+            view=by_id.get(item['observation_id'])
+            if view is None:
+                raise ValueError('panorama_candidate_requires_real_observation')
+            candidates.append(dict(item,
+                absolute_heading_deg=view['absolute_heading_deg'],
+                relative_heading_deg_at_review=view['relative_turn_deg_from_current']))
+        main=by_id[identifier]
+        record=dict(id='visual_target_%04d'%len(self.visual_targets),
+            subgoal_index=self.task.current_subgoal_index,
+            place_id=self.keyframes[identifier]['place_id'],
+            motion_epoch=self.runtime.motion_controller.pose()['motion_epoch'],
+            goal=copy.deepcopy(goal),
+            status=visual.get('target_status','AMBIGUOUS'),
+            selected_observation_id=identifier,
+            source_observation_ids=[identifier]+[x['observation_id'] for x in candidates
+                if x['observation_id']!=identifier],
+            absolute_heading_deg=main['absolute_heading_deg'],
+            relative_heading_deg_at_review=main['relative_turn_deg_from_current'],
+            target_region=visual.get('target_region'),
+            visual_evidence=visual['visible_evidence'],
+            uncertainty=visual['uncertainty'],
+            missing_evidence=visual.get('missing_evidence',''),
+            approach_candidates=candidates,
+            evidence_state='historical_visual_hypothesis_not_clearance')
+        self.visual_targets.append(record)
+        # Make target evidence searchable by observation ID, unlike ephemeral
+        # panorama answers that previously left landmarks/groundings empty.
+        label=goal if isinstance(goal,dict) else {}
+        if record['status'] == 'VISIBLE':
+            self.note_semantics(dict(observation_id=identifier),[
+                str(label.get('target') or label.get('landmark') or
+                    'navigation_target') + ': ' + visual['visible_evidence'][:300]])
+        self.event('panorama_target_recorded',target_id=record['id'],
+                   source_observation_ids=record['source_observation_ids'],
+                   target_status=record['status'])
+        return record
+
     def note_scene(self, scene, source):
         self.note_semantics(source,[v['name'] for v in scene.get('landmarks',[])])
         people=[dict(p,kind='person') for p in scene.get('humans',[])]+[
@@ -129,8 +179,13 @@ class MemoryService(MemoryRecords):
     def note_validation(self, path, value):
         route=self.routes.get(path['id'])
         if route and value['status']=='OK' and not value['executable_segment']['turn_only']:
-            route.update(state='EXECUTABLE',evidence_state='geometry_supported',traversability='FREE',
-                source_observation_ids=[self.current['observation_id']],validated_at=self.runtime.observation.captured_at)
+            evidence=(value.get('validation') or {}).get('forward_evidence_state')
+            route.update(state='EXECUTABLE' if evidence=='EXECUTABLE' else 'CANDIDATE',
+                evidence_state='geometry_supported' if evidence=='EXECUTABLE'
+                    else 'depth_unconfirmed_motion_hypothesis',
+                traversability='FREE' if evidence=='EXECUTABLE' else 'UNKNOWN',
+                source_observation_ids=[self.current['observation_id']],
+                validated_at=self.runtime.observation.captured_at)
 
     def note_motion(self):
         observations={o['observation_id']:o for o in self.observations}
@@ -190,6 +245,8 @@ class MemoryService(MemoryRecords):
             total_forward_actions=len(motions),
             recent_forward_motion=motions[-6:],
             last_progress_motion=successes[-1] if successes else None,
+            visual_target_memory=[copy.deepcopy(v) for v in getattr(self,'visual_targets',[])
+                if v['subgoal_index']==goal_index][-3:],
             last_motion=motions[-1] if motions else None,
             recent_failed_waypoints=failures,
             historical_motion_evidence={key:value for key,value in registered_motion_history(self).items()
@@ -231,6 +288,11 @@ class MemoryService(MemoryRecords):
             source_observation_ids=v['source_observation_ids'][-2:]) for v in self.landmarks.values()]
         items += [dict(kind='route',**fields(v,('id','from_place','to_place','state','traversability',
             'evidence_state','bearing_deg','source_observation_ids'))) for v in self._routes()]
+        items += [dict(kind='visual_target',id=v['id'],place_id=v['place_id'],
+            status=v['status'],goal=v['goal'],absolute_heading_deg=v['absolute_heading_deg'],
+            approach_candidates=copy.deepcopy(v['approach_candidates']),
+            source_observation_ids=v['source_observation_ids'],
+            evidence_state=v['evidence_state']) for v in getattr(self,'visual_targets',[])]
         items += list(reversed(self.dynamic_summaries(place_id)))
         def score(item):
             local=item.get('place_id',item.get('from_place'))==place_id
@@ -269,7 +331,8 @@ class MemoryService(MemoryRecords):
                 sensor_record=copy.deepcopy(next(o for o in self.observations if o['observation_id']==record_id)),
                 visual_analyses=copy.deepcopy([v for v in self.scene_history if v['source']['observation_id']==record_id]),
                 grounding_ids=[g['grounding_id'] for g in self.groundings if g['source']['observation_id']==record_id])
-        for values,key in [(self.tool_ledger,'call_id'),(self.groundings,'grounding_id')]:
+        for values,key in [(self.tool_ledger,'call_id'),(self.groundings,'grounding_id'),
+                           (self.visual_targets,'id')]:
             value=next((v for v in values if v[key]==record_id),None)
             if value is not None:return dict(detail_requested=True,record=copy.deepcopy(value))
         if record_id.startswith('task_') and record_id[5:].isdigit():
@@ -278,10 +341,12 @@ class MemoryService(MemoryRecords):
         raise ValueError('unknown_memory_record')
 
     def stats(self):
-        return dict(super().stats(),places=len(self.places),landmarks=len(self.landmarks),routes=len(self.routes))
+        return dict(super().stats(),places=len(self.places),landmarks=len(self.landmarks),
+            visual_targets=len(getattr(self,'visual_targets',[])),routes=len(self.routes))
 
     def snapshot(self):
         return dict(super().snapshot(),current_place_id=self.current_place_id,places=list(self.places.values()),
             keyframes=list(self.keyframes.values()),landmarks=list(self.landmarks.values()),routes=self._routes(),
             dynamic_records=copy.deepcopy(self.dynamic),dynamic=self.dynamic_summaries(),hypotheses=self.notes,
+            visual_targets=copy.deepcopy(getattr(self,'visual_targets',[])),
             navigation_summary=self.navigation_summary())

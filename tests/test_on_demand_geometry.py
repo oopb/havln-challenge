@@ -38,16 +38,18 @@ class GeometryOnDemandTests(unittest.TestCase):
                          (None,'occupied_next_step'))
         g.assess_step.assert_not_called()
 
-    def test_unknown_depth_requires_new_view(self):
+    def test_unknown_depth_not_an_obstacle_veto(self):
         g=self.geometry('UNKNOWN',False)
-        self.assertEqual(forward_probe(g)['state'],'NEEDS_VIEW')
-        self.assertEqual(check_action('MOVE_FORWARD',g),
-                         (None,'unknown_depth_or_fov'))
+        probe=forward_probe(g)
+        self.assertEqual(probe['state'],'UNCONFIRMED')
+        self.assertFalse(probe['collision_evidence_confirmed'])
+        self.assertEqual(check_action('MOVE_FORWARD',g),('MOVE_FORWARD',None))
 
-    def test_unlocalized_human_requires_another_view(self):
+    def test_unlocalized_human_is_uncertain_not_a_confirmed_collision(self):
         g=self.geometry()
         g.human_status['unlocalized']=1
         self.assertEqual(forward_probe(g)['reason'],'human_localization_unverified')
+        self.assertEqual(check_action('MOVE_FORWARD',g),('MOVE_FORWARD',None))
 
     def test_waypoint_preview_never_fits_terrain(self):
         g=self.geometry()

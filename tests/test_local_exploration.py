@@ -262,6 +262,7 @@ class ExplorationTests(unittest.TestCase):
             dict(relative_bearing_deg=0., motion_state='NEEDS_VIEW',
                  reason='unknown_depth')])
         self.assertEqual(scope['confirmed_executable_relative_bearings_deg'], [15.])
+        self.assertEqual(scope['unconfirmed_but_not_blocked_relative_bearings_deg'], [])
         self.assertEqual(scope['unmeasured_yaw_bin_count'], 22)
 
     def test_pending_unknown_waypoint_does_not_claim_current_feasibility(self):

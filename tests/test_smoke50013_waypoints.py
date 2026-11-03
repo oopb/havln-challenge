@@ -1,4 +1,4 @@
-"""Regression for smoke-500-13: unknown camera bearings must not become routes."""
+"""Regression: unknown bearings remain candidates, confirmed blocks do not."""
 import math
 import unittest
 from types import SimpleNamespace
@@ -27,14 +27,14 @@ class GeometryStub:
 
 
 class WaypointLoopTests(unittest.TestCase):
-    def test_needs_view_is_a_direction_not_navigable_path(self):
+    def test_unconfirmed_direction_is_a_route_hypothesis(self):
         geometry=GeometryStub()
         diagnostics=[]
         paths=generate_waypoints(geometry,.5,diagnostics)
-        self.assertEqual(paths,[])
+        self.assertTrue(paths)
         self.assertTrue(diagnostics)
         self.assertTrue(any(d["motion_state"]=="NEEDS_VIEW" for d in diagnostics))
-        self.assertTrue(all(d["motion_state"]!="EXECUTABLE" for d in diagnostics))
+        self.assertTrue(all(p['first_step']!='BLOCKED' for p in paths))
 
     def test_executable_direction_still_produces_waypoint(self):
         geometry=GeometryStub("EXECUTABLE")
@@ -43,14 +43,14 @@ class WaypointLoopTests(unittest.TestCase):
         self.assertTrue(all(p["first_step"]=="EXECUTABLE" for p in paths))
         self.assertTrue(all(p["requires_post_turn_recheck"] for p in paths))
 
-    def test_legacy_unverified_waypoint_cannot_start_motion(self):
+    def test_confirmed_blocked_waypoint_does_not_start_motion(self):
         executor=ToolExecutor.__new__(ToolExecutor)
-        executor.paths={"p0":dict(id="p0",first_step="NEEDS_VIEW",
+        executor.paths={"p0":dict(id="p0",first_step="BLOCKED",
                                   execution_status="PROPOSED")}
         executor._revalidate_path=Mock(side_effect=AssertionError("must not execute"))
         rejected=executor._execute_waypoint("p0")
-        self.assertEqual(rejected["status"],"NEEDS_VIEW")
-        self.assertIn("waypoint_requires_view",rejected["reason"])
+        self.assertEqual(rejected["status"],"BLOCKED")
+        self.assertEqual(rejected["reason"],"measured_obstacle_in_waypoint")
         executor._revalidate_path.assert_not_called()
 
     def test_runtime_returns_camera_views_separately_and_no_routes(self):

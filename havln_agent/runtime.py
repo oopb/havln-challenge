@@ -256,9 +256,9 @@ class AgentRuntime(ToolExecutor):
         return value
 
     def _prepare_forward(self):
-        geometry = self.geometry()
-        if geometry.human_status['unlocalized']:
-            return self.motion_controller.needs_view('human_localization_unverified')
+        # A nonlocalized visual human hypothesis is not evidence of occupancy
+        # in the next body sweep. Measured occupancy remains a motion veto.
+        return None
 
     def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
                           checkpoint_degrees=30, look='none', force_recheck=False):
@@ -457,7 +457,7 @@ class AgentRuntime(ToolExecutor):
                         execution_requirements=['current_rgbd','live_human_safety','next_step_depth_collision_probe'])
             else:
                 # Missing / partial grounding does not forbid short motion.
-                # Return every depth-executable candidate for model selection.
+                # Include both known-clear and unconfirmed, nonblocked hypotheses.
                 for path in paths:
                     path.update(
                         type=('GOAL_WAYPOINT' if path.get('goal_association')
@@ -469,8 +469,8 @@ class AgentRuntime(ToolExecutor):
             # Preserve genuine semantic goal progress in the shortlist. The
             # model still chooses one candidate; no autonomous route policy.
             paths = rank_candidates(paths, purpose)
-            # Show enough distinct safe bearings for the model to choose its
-            # own detour; no fixed straight-ahead or category-specific choice.
+            # Show distinct candidate bearings without claiming unknown is safe;
+            # the model still chooses its own detour.
             offered=paths[:12]
             # Do not replace a model-visible candidate with a fixed straight
             # choice. If useful, straight remains in the ranked options.
@@ -540,8 +540,8 @@ class AgentRuntime(ToolExecutor):
                     value.update(status='BLOCKED', reason='occupied_local_directions',
                         suggestion='no_new_executable_local_path; explore_distinct_heading_or_request_task_review',
                         information_options=['request_task_review','inspect_geometry'])
-            elif not any(p['first_step'] == 'EXECUTABLE' for p in offered):
-                value.update(self.motion_controller.needs_view(next_step['reason'] or 'observation_required_after_turn'))
+            elif not any(p['first_step'] != 'BLOCKED' for p in offered):
+                value.update(status='BLOCKED',reason='all_offered_bearings_measured_blocked')
             self.memory.note_candidates(offered)
             return value
         finally:

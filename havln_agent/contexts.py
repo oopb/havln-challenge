@@ -51,6 +51,8 @@ def local_geometry_measurement_scope(directions, turn_step_deg):
         ranges_are_inclusive_yaw_bins=True,
         confirmed_executable_relative_bearings_deg=[
             round(a, 2) for a, d in sampled if d.get('motion_state') == 'EXECUTABLE'],
+        unconfirmed_but_not_blocked_relative_bearings_deg=[
+            round(a, 2) for a, d in sampled if d.get('motion_state') == 'UNCONFIRMED'],
         explicitly_blocked_relative_bearings_deg=[
             round(a, 2) for a, d in sampled if d.get('motion_state') == 'BLOCKED'],
         sampled_unconfirmed=[
@@ -60,9 +62,9 @@ def local_geometry_measurement_scope(directions, turn_step_deg):
             for a, d in sampled if d.get('motion_state') not in ('EXECUTABLE', 'BLOCKED')],
         full_circle_sampled=len(checked) == bins,
         sampled_evidence_is_not_future_motion_permission=True,
-        interpretation=('No executable sampled bearing does not imply the robot is '
-                        'surrounded by obstacles. Unmeasured headings are UNKNOWN, '
-                        'not BLOCKED; new forward steps need fresh RGB-D safety.'))
+        interpretation=('Only confirmed measured obstacles veto movement. Missing '
+                        'depth, incomplete FOV and unlocalized semantics are '
+                        'UNCONFIRMED, not BLOCKED. Every forward uses fresh RGB-D.'))
 
 
 def collision_summary(result):
@@ -248,6 +250,11 @@ def navigation_context(runtime):
             if key!='rows'},
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
+            turn_and_observe_max_deg=runtime.camera.turn_angle *
+                min(runtime.config.get('tool_max_actions',3),
+                    max(1,runtime.config['max_steps']-1-len(memory.actions))),
+            unknown_depth_is_obstacle=False,
+            motion_veto='confirmed_measured_obstacle_only',
             direct_segment_max_m=3.0,
             navigation_execution_policy='continuous_until_route_or_safety_or_episode_budget',
             per_tool_atomic_action_cap=None,
@@ -269,8 +276,12 @@ def navigation_context(runtime):
             local_anchor_observation_id=pose.get('local_anchor_observation_id')),
         current_view=view,legal_look=[look for look,delta in [('up',runtime.camera.tilt_angle),('down',-runtime.camera.tilt_angle)]
             if abs(runtime.pitch_deg+delta)<=60],
-        local_geometry=[fields(d,('angle_degrees','motion_state','reason','clearance')) for d in
-            sorted(memory.current.get('directions',[]),key=lambda d:abs(d['angle_degrees']))[:7]],
+        local_geometry=[dict(fields(d,('angle_degrees','motion_state','reason')),
+            clearance_m=(d.get('clearance') if d.get('motion_state') in
+                ('EXECUTABLE','BLOCKED') else None),
+            clearance_is_measured=d.get('motion_state') in ('EXECUTABLE','BLOCKED'))
+            for d in sorted(memory.current.get('directions',[]),
+                key=lambda d:abs(d['angle_degrees']))[:7]],
         local_geometry_scope=local_geometry_measurement_scope(
             memory.current.get('directions', []), runtime.camera.turn_angle),
         memory_hints=hints,dynamic_hints=memory.dynamic_summaries(memory.current_place_id)[-2:],
@@ -290,7 +301,7 @@ def navigation_context(runtime):
             source['pose']!=pose or source['rgb_hash']!=current['rgb_hash'] or
             path.get('execution_status') in ('CANCELLED','BLOCKED','REQUIRES_ATTENTION','TARGET_REACHED')):
             continue
-        if path.get('first_step')!='EXECUTABLE':
+        if path.get('first_step')=='BLOCKED':
             continue
         recent.append(waypoint_summary(path))
         if len(recent)==9:break
@@ -367,9 +378,10 @@ def navigation_context(runtime):
     stagnation=observation_stagnation(memory,coverage_pose)
     plausible_directions=[dict(relative_turn_deg=d.get('angle_degrees'),
                                current_snapshot_status=d.get('motion_state'),
-                               clearance_m=d.get('clearance'))
+                               clearance_m=(d.get('clearance') if
+                                   d.get('motion_state')=='EXECUTABLE' else None))
         for d in memory.current.get('directions',())
-        if d.get('motion_state')=='EXECUTABLE'][:7]
+        if d.get('motion_state')!='BLOCKED'][:7]
     stagnation['currently_plausible_local_bearings']=plausible_directions
     stagnation['current_bearings_are_not_movement_authorization']=True
     # The latest motion intent can be obscured by several read-only scans.
@@ -396,7 +408,7 @@ def navigation_context(runtime):
         stagnation['model_must_propose']=(
             'Choose a task-directed finite route, executed continuously until arrival or a live safety/pose interruption.'
             if plausible_directions else
-            'Current geometry has no established executable bearing (unexamined is not BLOCKED). Choose a meaningful new view, direction, geometry check, detour or plan revision without inventing clearance.')
+            'No measured non-blocked bearing exists in this snapshot; unmeasured headings remain unknown, not blocked. Choose a purposeful route or new observation.')
     result['observation_stagnation']=stagnation
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(

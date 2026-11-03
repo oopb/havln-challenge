@@ -12,6 +12,7 @@ from PIL import Image
 from havln_agent.api_client import APIError
 from havln_agent.perception import Observation
 from havln_agent.visual_perception import VisualPerception
+from havln_agent.memory_service import MemoryService
 from havln_agent.panorama_memory import (
     PANORAMA_NAVIGATION_PROMPT, select_saved_viewpoints, decide_with_panorama)
 
@@ -54,6 +55,8 @@ class PanoramaMemoryTests(unittest.TestCase):
             navigation_memory=dict(failures=['blocked']),
             recent_route_failures=dict(reason='occupied_next_step')))
         self.assertEqual(result['selected_observation_id'],'obs0')
+        self.assertIn('target_status',args_schema:=client.requests[0][0][4]['properties'])
+        self.assertIn('approach_candidates',args_schema)
         args,kwargs=client.requests[0]
         self.assertEqual(args[0:2],('visual_perception','panorama_direction_evidence'))
         self.assertEqual([x['observation_id'] for x in args[3]['views']],
@@ -73,6 +76,9 @@ class PanoramaMemoryTests(unittest.TestCase):
         with self.assertRaises(APIError):
             kwargs['validate'](dict(result,
                 alternative_observation_ids=['never_observed']))
+        with self.assertRaises(APIError):
+            kwargs['validate'](dict(result,approach_candidates=[dict(
+                observation_id='invented',kind='ENTRY',confidence='high',evidence='fake')]))
 
     def test_saved_yaw_diversity_and_no_synthetic_frames(self):
         panorama=dict(observed_viewpoints=[
@@ -136,6 +142,32 @@ class PanoramaMemoryTests(unittest.TestCase):
                              dict(navigate_relative=tool))
         self.assertEqual(visuals.panorama_direction_evidence.call_count,1)
         self.assertEqual(client.complete.call_count,2)
+
+    def test_panorama_target_memory_remains_hypothesis_not_collision_permission(self):
+        mem=MemoryService.__new__(MemoryService)
+        mem.visual_targets=[]
+        mem.keyframes={'obs0':dict(place_id='P0'),
+                       'obs1':dict(place_id='P0')}
+        mem.task=SimpleNamespace(current_subgoal_index=0)
+        mem.runtime=SimpleNamespace(motion_controller=SimpleNamespace(
+            pose=lambda:dict(motion_epoch=2)))
+        mem.note_semantics=Mock()
+        mem.event=Mock()
+        views=[snapshot('obs0',225,-15),snapshot('obs1',240,0)]
+        visual=dict(selected_observation_id='obs0',
+            visible_evidence='railing and lower floor, entry uncertain',
+            uncertainty='not enough view of treads',target_status='CUE_ONLY',
+            target_region=None,missing_evidence='look down near platform',
+            approach_candidates=[dict(observation_id='obs1',kind='APPROACH',
+                                      confidence='medium',evidence='open floor')])
+        record=mem.note_panorama_target(visual,views,goal=dict(target='stairs'))
+        self.assertEqual(record['status'],'CUE_ONLY')
+        self.assertEqual(record['source_observation_ids'],['obs0','obs1'])
+        self.assertEqual(record['approach_candidates'][0]['absolute_heading_deg'],240)
+        self.assertEqual(record['evidence_state'],
+                         'historical_visual_hypothesis_not_clearance')
+        mem.note_semantics.assert_not_called()
+        self.assertEqual(len(mem.visual_targets),1)
 
     def test_missing_historical_image_never_creates_a_fabricated_view(self):
         runtime=SimpleNamespace(

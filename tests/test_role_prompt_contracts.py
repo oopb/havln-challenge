@@ -44,6 +44,8 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("Never bypass a measured collision", client.system)
         self.assertIn("candidate_waypoints", client.system)
         self.assertIn("fresh RGB-D", client.system)
+        self.assertIn("0.25m atomic forward action",client.system)
+        self.assertIn("UNCONFIRMED is NOT BLOCKED",client.system)
         self.assertIn("NEEDS_VIEW", client.system)
         self.assertIn("REQUIRES_ATTENTION", client.system)
         self.assertIn("never request_finish", client.system)

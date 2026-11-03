@@ -25,7 +25,14 @@ PANORAMA_NAVIGATION_PROMPT = (
     'The executor will perform all needed turns then attempt forward and '
     'check fresh RGB-D depth, terrain and people BEFORE every forward action. '
     'Past EXECUTABLE does not mean currently safe; past BLOCKED might be stale. '
-    'A visual opening is a hypothesis, NOT free-space authorization. '
+    'UNKNOWN/NEEDS_VIEW means unconfirmed, not a physical barrier. Only '
+    'affirmative current obstacle/occupied corridor evidence vetoes a step. '
+    'Distinguish a visible staircase/railing from its WALKABLE ENTRY; their '
+    'bearings may differ. Compare approach_candidates and prior successful '
+    'forward/downward movements before choosing a direction. A successful '
+    '0.25m atomic step is NOT a limit on the requested segment distance: '
+    'choose 0.25-3.0m based on task evidence and estimated progress. '
+    'A visual opening is a hypothesis, NOT a clearance certificate. '
     'Do not invent completion or guarantee a forward will execute. '
     'Do not choose more camera-only scans at this checkpoint. '
     'No hardcoded stair or door bearing: YOU choose the direction based on '
@@ -102,6 +109,11 @@ def decide_with_panorama(agent, context, signature, validate, offered_tools):
                 navigation_memory=context.get('navigation_memory'),
                 recent_route_failures=context.get('recent_navigation_block')))
         agent._panorama_visual_cache=dict(key=key,visual=visual)
+        # Persist historical visual target / approach hypotheses before the
+        # next model decision. Never turn them into geometric clearance.
+        store=getattr(runtime.memory,'note_panorama_target',None)
+        if callable(store):
+            store(visual,views,goal=context.get('goal'))
         if hasattr(runtime,'event'):
             runtime.event('panorama_visual_memory_reviewed',
                 source='visual_perception',

@@ -29,7 +29,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             purpose=dict(enum=['explore','dynamic_recheck','intentional_recheck']))),
             required=['relative_turn_deg','look']))
     specs = {
-        'turn_and_observe': ('Execute up to 3 calibrated TURN/LOOK actions. Duplicates are reported; purpose=intentional_recheck explicitly allows re-observation. Prior views never authorize current motion.', dict(oneOf=turn)),
+        'turn_and_observe': ('Execute only the enumerated, calibrated short TURN/LOOK actions (normally <=45 degrees). For 90+ degree visual sweeps use observe_for_goal; for turning AND advancing use navigate_relative. Prior views never authorize current motion.', dict(oneOf=turn)),
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
@@ -54,7 +54,7 @@ def registry(camera, max_actions, pitch_deg=0.):
         'inspect_geometry': ('ON-DEMAND full geometry diagnosis after an obstacle, unclear drop or repeated block; normal MOVE uses a fast live depth probe. Inspection provides evidence and does not itself authorize motion.', object_schema({})),
         'get_waypoint_candidates': ('Optional short candidate bearings with current-depth evidence; not mandatory before navigate_relative or navigate_to_pixel. Every forward step gets fresh safety checks.',
             dict(object_schema(dict(target=text, purpose=dict(enum=['approach_landmark', 'explore']))), required=[])),
-        'navigate_relative': ('Model-directed finite movement: choose bearing and target distance. Execute all required TURN and MOVE_FORWARD actions continuously until route arrival, live safety/pose interruption, or total Episode action budget. No per-call atomic step cap. RGB-D safety is rechecked before EVERY forward; return the true motion receipt.',
+        'navigate_relative': ('Model-directed finite movement: 0.25m is ONE atomic forward, not the maximum segment (distance_m=0.25..3.0). Execute all required TURN and MOVE_FORWARD actions continuously; only affirmative measured obstacles veto forward, not unknown depth/FOV. Fresh RGB-D is rechecked before EVERY forward; no per-call atomic step cap.',
             object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
                 distance_m=dict(type='number',minimum=0.25,maximum=3.0)))),
         'navigate_to_pixel': ('Model-directed finite travel along a live RGB-D pixel bearing; a pixel is not a walkability certificate. Continuous TURN then MOVE_FORWARD until selected distance, live safety/pose interruption, or total Episode budget. No per-call atomic step cap.',
