@@ -11,6 +11,6 @@ def forward_probe(geometry, angle=0.):
 def check_action(action, geometry):
     if action == 'MOVE_FORWARD':
         check = forward_probe(geometry)
-        if check['state'] != 'EXECUTABLE':
+        if check['state'] == 'BLOCKED':
             return None, check['reason']
     return action, None
