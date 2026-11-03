@@ -4,7 +4,8 @@ import time
 
 from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
-from .local_exploration import last_block, local_coverage
+from .local_exploration import (last_block, local_coverage,
+    multi_pitch_coverage, observation_stagnation)
 
 
 def fields(value,names):
@@ -242,8 +243,27 @@ def navigation_context(runtime):
         target=runtime.motion_controller.target
         attempt=memory.active_attempt or {}
         unverified=bool(attempt.get('unknown_motion_seen'))
+        # Pending means the finite target has not been consumed. It does NOT
+        # imply fresh clearance, nor that a stale endpoint can be re-used.
+        recent_attempt=next((
+            entry.get('result') or {}
+            for entry in reversed(memory.tool_ledger)
+            if (entry.get('call') or {}).get('tool') in
+                ('navigate_local','navigate_relative','navigate_to_pixel')
+            and ((entry.get('result') or {}).get('waypoint_id') or
+                 (entry.get('call') or {}).get('args',{}).get('waypoint_id'))
+                   ==runtime.active_waypoint_id), {})
+        last_status=recent_attempt.get('interrupted_status') or recent_attempt.get('status')
+        pending_valid=not unverified and last_status not in (
+            'NEEDS_VIEW','BLOCKED','REQUIRES_ATTENTION','STALE_TARGET')
         result['local_navigation']=dict(waypoint_id=runtime.active_waypoint_id,
-            status='IN_PROGRESS',next_action=(
+            status='IN_PROGRESS',
+            route_status='IN_PROGRESS',
+            execution_feasibility=('REQUIRES_NEW_LIVE_SAFETY_EVIDENCE'
+                if not pending_valid else 'NOT_YET_REVALIDATED'),
+            last_execution_status=last_status,
+            last_failure_reason=(recent_attempt.get('reason') if not pending_valid else None),
+            next_action=(
                 'MOVE_FORWARD_PENDING_LIVE_SAFETY' if unverified else
                 runtime.motion_controller.next_action()),
             remaining_distance_m=(None if unverified else
@@ -252,9 +272,10 @@ def navigation_context(runtime):
             relative_motion_only=unverified,
             forward_actions=attempt.get('forward_actions',0),
             forward_action_horizon=attempt.get('forward_action_horizon'),
-            suggestion=('continue_same_bounded_waypoint_with_fresh_rgbd_checks'
-                if unverified else
-                'prefer_continuing_same_waypoint_if_still_relevant; each forward step is rechecked'))
+            suggestion=('old_waypoint_is_not_a_currently_executable_direction; '
+                        'obtain specific new evidence or choose a different model-led route'
+                if not pending_valid else
+                'waypoint_is_pending_only; live safety must be revalidated before motion'))
     # Persistent physical obstruction: use the END pose, and recognize
     # PARTIAL + interrupted_status=BLOCKED from a waypoint that moved first.
     # Historical depth is evidence of failure, never fresh motion permission.
@@ -266,8 +287,27 @@ def navigation_context(runtime):
                 if measured:block['measured_collision']=measured
                 break
         result['recent_navigation_block']=block
-    result['local_exploration']=local_coverage(memory,pose,runtime.camera.turn_angle,
+    # A spatially coherent yaw/pitch map avoids treating LOOK_UP -> LOOK_DOWN
+    # revisits as novel exploration merely because the camera pitch changed.
+    coverage_pose=dict(pose,pitch_deg=runtime.pitch_deg)
+    result['local_exploration']=local_coverage(memory,coverage_pose,runtime.camera.turn_angle,
         round(360/runtime.camera.turn_angle))
+    result['observation_coverage']=multi_pitch_coverage(
+        memory,coverage_pose,runtime.camera.turn_angle,
+        runtime.camera.tilt_angle)
+    stagnation=observation_stagnation(memory,coverage_pose)
+    plausible_directions=[dict(relative_turn_deg=d.get('angle_degrees'),
+                               current_snapshot_status=d.get('motion_state'),
+                               clearance_m=d.get('clearance'))
+        for d in memory.current.get('directions',())
+        if d.get('motion_state')=='EXECUTABLE'][:7]
+    stagnation['currently_plausible_local_bearings']=plausible_directions
+    stagnation['current_bearings_are_not_movement_authorization']=True
+    if stagnation['repeated_low_information']:
+        stagnation['intervention']='DIRECTIONAL_ACTION_DECISION_REQUIRED'
+        stagnation['model_must_propose']='Choose a task-relevant short MOVE bearing using current evidence; or identify an actual sensor safety blocker and the exact different evidence needed.'
+        stagnation['no_unconditional_forward']=True
+    result['observation_stagnation']=stagnation
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(
             matched_observation_ids=current.get('revisited_view_ids',[])[-3:],
