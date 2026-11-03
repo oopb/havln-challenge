@@ -78,6 +78,30 @@ OBSERVE_PROMPT = (
     'After each MOVE, choose the next short segment using the new observation '
     'and retained memory; continue the same subgoal. '
 )
+
+# This is a model-visible *decision focus*, not a tool whitelist or a hidden
+# physical control action. The agent still owns the bearing and can explain
+# missing live safety rather than inventing a safe corridor.
+OBSERVATION_INTERVENTION_PROMPT = (
+    'OBSERVATION-LOOP INTERVENTION: Repeated same-stance camera searches have '
+    'produced little new actionable information. The observation_coverage '
+    'context lists ABSOLUTE headings grouped by camera pitch; do not mistake '
+    'LOOK_UP then LOOK_DOWN for a new place or an unexplored direction. '
+    'YOUR NEXT DECISION MUST SELECT a concrete task-directed short movement '
+    'bearing and distance using navigate_relative/navigate_to_pixel, or '
+    'continue an actually usable waypoint with navigate_local. You choose '
+    'the bearing and retain full control over detours and semantic goals. '
+    'If no plausible direction has sufficient current evidence, you MUST '
+    'identify the exact safety or visibility blocker in decision_reason, '
+    'then select ONE distinct observation/geometry/plan action that could '
+    'actually resolve it. Do not merely repeat a prior horizontal/downward '
+    'camera toggle or waypoint-candidate query with unchanged evidence. '
+    'A historic EXECUTABLE sector is a clue, NEVER movement permission: '
+    'live RGB-D/body/human checks still decide physical action legality. '
+    'This checkpoint does NOT force a blind MOVE_FORWARD or forbid necessary '
+    'dynamic human rechecks. '
+)
+
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
     'LocalMotionController checks fresh RGB-D for each forward action, '
@@ -102,9 +126,18 @@ class NavigationAgent:
                                category='structured_field')
         context = dict(navigation_context(runtime),
                        **({'format_feedback': format_feedback} if format_feedback else {}))
+        intervention=(context.get('observation_stagnation') or {}).get(
+            'intervention') == 'DIRECTIONAL_ACTION_DECISION_REQUIRED'
+        if intervention and hasattr(runtime, 'event'):
+            runtime.event('model_direction_intervention_requested',
+                source='navigation_agent',
+                observed_calls=context['observation_stagnation']['same_stance_observation_calls'],
+                low_information_calls=context['observation_stagnation']['low_information_calls'],
+                physically_forced=False)
         return runtime.client.complete(
             'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT,
+            COMMON_PROMPT + OBSERVE_PROMPT +
+                (OBSERVATION_INTERVENTION_PROMPT if intervention else ''),
             context, navigation_schema(runtime.registry), validate=validate,
             format_retry=int(bool(format_feedback)), retry_safe=True,
             protocol=compact_navigation_protocol(runtime.registry),
