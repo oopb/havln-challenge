@@ -64,6 +64,7 @@ def waypoint_summary(path):
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
+        'movement_intent_feedback',
         'remaining_distance','endpoint_estimate_valid','reach_basis',
         'vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
     if result.get('status') in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION') or result.get('safety'):
@@ -303,10 +304,54 @@ def navigation_context(runtime):
         if d.get('motion_state')=='EXECUTABLE'][:7]
     stagnation['currently_plausible_local_bearings']=plausible_directions
     stagnation['current_bearings_are_not_movement_authorization']=True
+    # The latest motion intent can be obscured by several read-only scans.
+    # Keep its physically executed receipt, not just the requested tool name.
+    recent_move=next((entry for entry in reversed(memory.tool_ledger)
+        if (entry.get('call') or {}).get('tool') in
+            ('navigate_relative','navigate_to_pixel','navigate_local')
+        and entry.get('subgoal_id') in (None,'sg_%d' % index)),None)
+    pending_motion=None
+    if recent_move:
+        move_result=recent_move.get('result') or {}
+        receipt=move_result.get('movement_intent_feedback') or {}
+        result['recent_motion_intent']=dict(
+            tool_call_id=recent_move.get('call_id'),
+            tool=(recent_move.get('call') or {}).get('tool'),
+            status=move_result.get('interrupted_status') or
+                move_result.get('status'),
+            reason=move_result.get('reason'),
+            **receipt)
+        if (receipt.get('turn_only_no_forward_attempt')
+                and receipt.get('same_waypoint_pending')
+                and receipt.get('waypoint_id')==runtime.active_waypoint_id
+                and runtime.motion_controller.target is not None):
+            pending_motion=dict(
+                waypoint_id=receipt['waypoint_id'],
+                turn_actions_already_executed=receipt['executed_turn_actions'],
+                forward_actions_executed=0,
+                remaining_turn_actions_est=receipt.get('remaining_turn_actions_est'),
+                first_forward_requires_atomic_actions=receipt.get(
+                    'min_atomic_actions_until_first_forward_attempt'),
+                previous_batch_exhausted_on_turns=(
+                    move_result.get('reason')=='tool_action_limit'),
+                model_may_resume_or_change_route=True,
+                next_forward_requires_fresh_live_safety=True,
+                note='This move intent has only TURN receipts; no MOVE_FORWARD was attempted. A new navigate_relative bearing creates a DIFFERENT route, not continuation.')
+    if pending_motion:
+        result['pending_motion_continuity']=pending_motion
     if stagnation['repeated_low_information']:
-        stagnation['intervention']='DIRECTIONAL_ACTION_DECISION_REQUIRED'
-        stagnation['model_must_propose']='Choose a task-relevant short MOVE bearing using current evidence; or identify an actual sensor safety blocker and the exact different evidence needed.'
+        stagnation['intervention']=(
+            'PENDING_TURN_ONLY_MOTION_REVIEW'
+            if pending_motion else
+            'DIRECTIONAL_ACTION_DECISION_REQUIRED'
+            if plausible_directions else 'BLOCKED_ACTIONABILITY_REASSESSMENT')
         stagnation['no_unconditional_forward']=True
+        stagnation['model_must_propose']=(
+            'Review the existing finite movement intent; continue the SAME waypoint if relevant, or choose a justified alternative.'
+            if pending_motion else
+            'Choose a short task-directed movement direction based on current evidence; every forward still requires live clearance.'
+            if plausible_directions else
+            'No currently executable bearing is established. Identify the real safety/visibility problem and choose a different useful path, geometry test, task change, or observation. Never claim UNKNOWN/BLOCKED is free.')
     result['observation_stagnation']=stagnation
     if current.get('revisited_static_view'):
         result['revisited_static_view']=dict(

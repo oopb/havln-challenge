@@ -152,7 +152,43 @@ def decode_response(content):
                 raise json.JSONDecodeError('Duplicate JSON key: ' + key, '', 0)
             result[key] = value
         return result
-    return json.loads(content, parse_constant=reject_json_constant, object_pairs_hook=unique_pairs), normalization
+    decoder = json.JSONDecoder(
+        parse_constant=reject_json_constant, object_pairs_hook=unique_pairs)
+    try:
+        return decoder.decode(content), normalization
+    except json.JSONDecodeError as original_error:
+        # Some Chat Completions providers leak a plain-language preface even
+        # with response_format=json_object. Only recover ONE complete,
+        # unambiguous JSON container; all existing schema/role validation
+        # remains mandatory BEFORE any tool is dispatched.
+        if not isinstance(content, str):
+            raise
+        candidates = []
+        consumed_until = 0
+        for start, char in enumerate(content):
+            if start < consumed_until or char not in '{[':
+                continue
+            try:
+                value, length = decoder.raw_decode(content, start)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, (dict, list)):
+                continue
+            candidates.append((start, length, value))
+            consumed_until = length   # do not treat nested args as second JSON
+            if len(candidates) > 1:
+                break
+        if len(candidates) != 1:
+            raise original_error
+        start, end, value = candidates[0]
+        # Braces/brackets outside the sole container can represent another
+        # action or an incomplete JSON fragment. Reject rather than guess.
+        outside = content[:start] + content[end:]
+        if any(c in outside for c in '{}[]'):
+            raise original_error
+        if not (content[:start].strip() or content[end:].strip()):
+            raise original_error
+        return value, 'unique_embedded_json_container'
 
 
 def model_endpoints(settings):
