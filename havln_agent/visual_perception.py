@@ -58,7 +58,8 @@ PANORAMA_VISUAL_PROMPT = (
     'The supplied views[] entries align ONE-TO-ONE to the images IN ORDER. '
     'Each view identifies observation_id, image_index, absolute camera yaw, '
     'signed relative yaw from the robot CURRENT heading, pitch and historical '
-    'front depth state. Read those actual angles; do NOT infer them from image '
+    'front depth state (UNMEASURED when geometry was not explicitly requested). '
+    'Read those actual angles; do NOT infer them from image '
     'appearance and do not swap left/right or reinterpret pitch as yaw. '
     'Use the current navigation instruction and failures to identify WHICH '
     'visible corridor, stair entry, door or approach region is the best next '
@@ -173,7 +174,8 @@ class VisualPerception:
             'suggested_next_view can ask for ONE look_up/look_down refinement; '
             'otherwise return continue. Do not infer metric distance, current human '
             'occupancy, physical reachability, movement safety or task completion. '
-            'The controller independently owns real turns and live Depth safety. '
+            'The controller owns real turns; collision and terrain geometry are ONLY '
+            'inspected when NavigationAgent explicitly requests a geometry tool. '
             + coordinate_prompt(request),
             request,coordinate_schema(SEARCH_SCHEMA, 'image_1000_xyxy'),
             image_url=image_url(observation),cache=not force_recheck,
