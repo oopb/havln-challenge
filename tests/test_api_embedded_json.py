@@ -12,7 +12,7 @@ class EmbeddedJsonTests(unittest.TestCase):
         raw=(
             "The prior route only turned; I will choose a short local segment. "
             '{"tool":"navigate_relative","args":'
-            '{"turn_deg":30,"distance_m":0.25,"max_atomic_steps":1},'
+            '{"turn_deg":30,"distance_m":0.25},'
             '"memory_delta":[{"finding":"live safety required",'
             '"source_observation_ids":["obs_0044"]}]}'
         )
