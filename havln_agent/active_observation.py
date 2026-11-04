@@ -30,7 +30,8 @@ def comparable_scan_pose(a, b):
     """Tolerate floating-point yaw wrap; reject translated or re-anchored views."""
     if not isinstance(a, dict) or not isinstance(b, dict):
         return False
-    if a.get('motion_epoch') != b.get('motion_epoch'):
+    if (a.get('motion_epoch') != b.get('motion_epoch')
+            or a.get('viewpoint_generation',0) != b.get('viewpoint_generation',0)):
         return False
     if math.hypot(a.get('x',1e6)-b.get('x',-1e6),
                   a.get('z',1e6)-b.get('z',-1e6)) > .03:
@@ -341,6 +342,13 @@ class ObservationController:
                 end_observation_id=r.memory.current['observation_id'],
                 candidate=copy.deepcopy(best_candidate),
                 best_cue=copy.deepcopy(best_cue))
+            # Saved absolute view bearings are always rebound to the CURRENT
+            # robot heading before the main model sees them.
+            live_heading=math.degrees(r.motion_controller.pose()['heading'])
+            for hypothesis in (best_candidate,best_cue):
+                if hypothesis:
+                    hypothesis['relative_turn_deg_from_current']=round(
+                        (hypothesis['heading_deg']-live_heading+180)%360-180,2)
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_owner='visual_perception_vlm',
@@ -413,7 +421,7 @@ class ObservationController:
                     geometry=dict(forward_status='NOT_CHECKED',
                         motion_authorized=False),
                     usable_for_live_safety=False)
-                if visual['target_kind'] in ('ENTRY','APPROACH'):
+                if visual['target_kind'] in ('ENTRY','APPROACH','TARGET'):
                     best_candidate=candidate
                     r.memory.note_semantics(source,[
                         visual['target_type']+': '+visual['evidence']])
