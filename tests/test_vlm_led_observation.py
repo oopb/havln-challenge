@@ -86,9 +86,9 @@ class VLMObservationTests(unittest.TestCase):
     def test_non_entry_object_can_be_a_visual_target(self):
         r=FakeRuntime([])
         r.visual_perception=VLMGuide([
-            guidance('finish',kind='TARGET',visible=True)])
+            dict(guidance('finish',kind='TARGET',visible=True),target_type='person')])
         result=ObservationController(r).scan_vlm(
-            'Locate a person',['entry'],sweep_degrees=90)
+            'Locate a person',['person'],sweep_degrees=90)
         self.assertEqual(result['status'],'OK')
         self.assertEqual(result['outcome'],'TARGET_CANDIDATE_FOUND')
         self.assertEqual(result['best_candidate']['target_kind'],'TARGET')
