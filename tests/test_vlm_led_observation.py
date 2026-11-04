@@ -29,10 +29,13 @@ class VLMGuide:
     def __init__(self,answers):
         self.answers=list(answers)
         self.calls=[]
-    def guide_scan_view(self,frame,source,objective,targets,history,remaining_turn_deg,prior_targets=None):
+    def guide_scan_view(self,frame,source,objective,targets,history,remaining_turn_deg,
+                        prior_targets=None,observed_yaw_pitch=None,view_correction=None):
         self.calls.append(dict(observation_id=source['observation_id'],
             objective=objective,targets=targets,history=history,
-            remaining_turn_deg=remaining_turn_deg))
+            remaining_turn_deg=remaining_turn_deg,
+            observed_yaw_pitch=observed_yaw_pitch,
+            view_correction=view_correction))
         return self.answers.pop(0)
 
 
@@ -75,13 +78,49 @@ class VLMObservationTests(unittest.TestCase):
     def test_revisiting_same_heading_pitch_yields_to_navigation(self):
         r=FakeRuntime([])
         r.visual_perception=VLMGuide([
-            guidance('turn_left',30), guidance('turn_right',30)])
+            guidance('turn_left',30), guidance('turn_right',30),
+            guidance('look_down'),guidance('finish')])
         result=ObservationController(r).scan_vlm(
             'Search for entry',['entry'],sweep_degrees=120)
-        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(result['status'],'OK')
+        self.assertEqual(result['outcome'],'VLM_SEARCH_FINISHED')
+        self.assertEqual(result['view_replan_attempts'],1)
+        self.assertEqual(r.step_calls,['TURN_LEFT','TURN_LEFT','LOOK_DOWN'])
+        self.assertEqual(len(r.visual_perception.calls),4)
+        self.assertEqual(r.visual_perception.calls[2]['view_correction']['rejected_action'],
+                         'turn_right')
+        self.assertEqual(r.visual_perception.calls[2]['view_correction']['reason'],
+                         'already_inspected_heading_pitch')
+
+    def test_repeated_invalid_view_is_bounded_without_turn_loop(self):
+        r=FakeRuntime([])
+        r.visual_perception=VLMGuide([
+            guidance('turn_left',30),
+            guidance('turn_right',30),
+            guidance('turn_right',30),
+            guidance('turn_right',30)])
+        result=ObservationController(r).scan_vlm(
+            'Search entry',['entry'],sweep_degrees=120)
         self.assertEqual(result['outcome'],'REPEATED_VIEW_REQUEST')
+        self.assertEqual(result['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(result['view_replan_attempts'],3)
         self.assertEqual(r.step_calls,['TURN_LEFT','TURN_LEFT'])
-        self.assertEqual(len(r.visual_perception.calls),2)
+        self.assertEqual(len(r.visual_perception.calls),4)
+
+    def test_visual_candidate_is_handed_to_typed_persistent_memory(self):
+        r=FakeRuntime([])
+        r.memory.note_active_observation_target=Mock()
+        r.visual_perception=VLMGuide([
+            guidance('finish',kind='ENTRY',visible=True)])
+        result=ObservationController(r).scan_vlm(
+            'Locate stair entry',['entry'],sweep_degrees=90)
+        self.assertEqual(result['outcome'],'TARGET_CANDIDATE_FOUND')
+        args,kwargs=r.memory.note_active_observation_target.call_args
+        self.assertEqual(args[0]['observation_id'],'obs_0000')
+        self.assertEqual(args[0]['target_kind'],'ENTRY')
+        self.assertEqual(args[0]['relative_turn_deg_from_current'],0)
+        self.assertEqual(args[1],'Locate stair entry')
+        self.assertEqual(args[2],['entry'])
 
     def test_non_entry_object_can_be_a_visual_target(self):
         r=FakeRuntime([])
@@ -161,6 +200,7 @@ class VLMObservationTests(unittest.TestCase):
                      if x['properties']['tool']['const']=='observe_for_goal')
         parameters=offered['properties']['args']
         self.assertNotIn('direction',parameters['properties'])
+        self.assertNotIn('look',parameters['properties'])
         self.assertLess(len(args[2]),7000)
         self.assertLess(len(str(args[3])),5000)
         self.assertEqual(args[3]['navigation_memory']['visual_targets'][0]['visual_evidence'],'A'*150)
