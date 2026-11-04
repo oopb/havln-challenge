@@ -37,7 +37,7 @@ probes occur inside observation.
 `direction` and `checkpoint_degrees` should be **omitted**. With direction
 omitted, VLM chooses all next view bearings and tilt actions. Omitted
 `sweep_degrees` defaults to **360°**, though VLM can stop as soon as it has
-meaningful visual evidence. A `look` field may initialize camera pitch.
+meaningful visual evidence. A legacy explicit `look` field may initialize pitch only through executor compatibility; ordinary NavigationAgent no longer sees it, so VLM owns every view/pitch decision.
 
 For backward compatibility, explicit `direction=left|right` still uses the
 legacy scripted sweep at fixed checkpoints. Ordinary NavigationAgent decisions
@@ -67,7 +67,10 @@ current-relative bearing, with `usable_for_live_safety=false`.
 `observe_for_goal` returns one consolidated tool receipt with
 `outcome`, `best_candidate` or `best_cue`, real view references,
 `covered_turn_deg` and `observation_owner=visual_perception_vlm`.
-The next NavigationAgent decision receives **only compact evidence**,
+A found ENTRY, APPROACH, TARGET or CUE is stored persistently in shared
+`visual_targets` with the genuine observation ID, image box, absolute heading,
+camera pitch, VLM evidence and a historical/uncertain evidence label. The next
+NavigationAgent decision receives **only compact evidence**,
 not all raw checkpoint JSON. Full details are retained in diagnostics
 and requestable memory records.
 
@@ -76,8 +79,11 @@ clearance or semantic task completion. Geometry and terrain checks remain
 an **explicit NavigationAgent tool choice** in this simulator-specific
 experimental pipeline, and Habitat remains responsible for its physics.
 
-A repeated view, budget exhaustion or unavailable visual API returns a
-structured non-success receipt rather than making up target coordinates
+A repeated requested view triggers up to two same-frame VLM correction calls
+with explicit rejected-action feedback and the inspected yaw/pitch map. This
+never calls NavigationAgent or spends a TURN for the rejected camera action.
+Repeated failed corrections, budget exhaustion or unavailable visual API
+return a structured non-success receipt rather than making up target coordinates
 or starting a forced movement. Existing in-progress navigation targets
 are preserved by camera observation.
 
