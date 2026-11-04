@@ -131,6 +131,25 @@ registered visual/motion evidence. See
 [action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
+**Navigation tool-menu refactor (20 registered, 9 core):**
+The ToolExecutor registry still contains all 20 validated tools, so archived
+tool calls and specialized visual/history utilities remain executable.
+Ordinary NavigationAgent requests advertise only these nine strategic
+capabilities: `observe_for_goal`, `navigate_relative`, `navigate_local`,
+`ground_landmark`, `inspect_geometry`, `verify_subgoal`,
+`select_subgoal`, `request_task_review`, and `request_finish`.
+Extra tools become visible only when their purpose is grounded in current
+evidence: a fresh grounded target enables `navigate_to_pixel`; an active
+route enables cancel; explicit geometry feedback enables waypoint previews;
+ambiguous visual memory enables contextual retrieval; verification gaps enable
+targeted task/history inspection. Legacy `turn_and_observe` is reserved for
+orientation-only tasks and existing executor callers, never routine camera
+search. `analyze_scene` and `assess_entry` are internal VLM utilities rather
+than competing main-agent observation tools. The panorama checkpoint still
+offers only `navigate_relative`. The API trace records `offered_tool_count`
+and `offered_tool_names` for each navigation request. **No core motion or
+safety behavior is inferred from reducing the tool menu.**
+
 **VLM-led observation and smaller navigation requests:** NavigationAgent
 specifies WHAT visual evidence to find using `observe_for_goal`, then
 VisualPerception chooses successive real TURN/LOOK checkpoints without
