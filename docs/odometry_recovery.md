@@ -1,65 +1,68 @@
-# Robust short-horizon navigation and odometry gaps
+# Finite action plans with optional RGB-D odometry
 
-## Motivation
+## Design goal
 
-In smoke-500-15 a second real MOVE_FORWARD was followed by an UNKNOWN
-RGB-D translation. The estimator found 43 mutual matches, including a
-23-match 3D consensus spread across 7 spatial tiles, with ~1.2 cm metric
-residual, but rejected it because the consensus was 53.5% rather than the
-strict 65% threshold. The old executor then discarded the remaining waypoint,
-causing repeated semantic scans instead of local geometric movement.
+The Habitat simulator accepts calibrated TURN and MOVE_FORWARD actions. RGB-D
+translation registration is **not** needed to issue those actions. A failed
+feature-matching estimate is missing metric evidence, not proof that an action
+failed. In batch4-10, repeatedly treating UNKNOWN estimates as lost pose
+caused avoidable reanchoring and re-observation.
 
-## Live per-step control
+## Model-owned execution
 
-1. Navigation Agent selects a short Waypoint (0.5 m / two calibrated
-   0.25 m forward actions in the current geometry generator).
-2. Each TURN/forward action is executed by Local Motion Controller. Before
-   every forward action, Runtime reads current public RGB-D and verifies
-   geometry, floor support and people. The depth check is never skipped.
-3. Translation is estimated from public consecutive RGB-D frames, not from
-   commanded distance or simulator ground-truth position.
-4. A strict estimate still requires >=65% match consensus. A second
-   distributed-static branch requires **all**: >=20 inliers, >=52% ratio,
-   image coverage >=65% on both axes, >=7 spatial tiles, >=0.6 m depth
-   span, <=0.02 m metric residual. Camera motion plausibility checks and
-   terrain-direction alerts remain unchanged.
-5. If both fail, one UNKNOWN does not immediately discard a short Waypoint.
-   Existing bounded relative continuation may execute only its remaining
-   forward attempts at the same heading, with fresh independent checks.
-   It cannot increase the original two-step horizon or claim measured arrival.
-6. If an UNKNOWN remains at the horizon, the tool reports
-   `REQUIRES_ATTENTION` (possibly surfaced as outer `PARTIAL` because
-   actions already executed), `endpoint_estimate_valid=false` and
-   `remaining_distance=null`; the missing translation is still **UNKNOWN**.
-   The post-action current public RGB-D becomes a *new relative waypoint
-   anchor*; no missing distance is filled in. Old geometry and landmark
-   anchors remain invalid across the changed `motion_epoch`.
-7. Navigation Agent must now request new locally measured waypoints instead
-   of re-identifying the same static landmark. It retains high-level control
-   of choosing the next route; the local controller never self-selects a
-   new semantic destination.
+1. NavigationAgent chooses the target bearing and finite distance, such as
+   `navigate_relative(turn_deg=-30, distance_m=1.0)`.
+2. LocalMotionController quantizes turns to 15-degree actions and distance to
+   calibrated forward steps (typically 0.25m). The route is a **finite action
+   sequence**, never an inferred world-coordinate endpoint.
+3. The executor performs the selected turns and forward actions, collecting
+   public RGB-D after each action. The model may explicitly request geometry
+   inspection; automatic geometry/terrain/human vetoes remain disabled in this
+   simulation configuration.
+4. `estimate_translation` remains an optional diagnostic, recording registered
+   3D translation and vertical motion when measurements meet consensus checks.
+   `UNKNOWN` is recorded as UNKNOWN without adding an invented 0.25m
+   uncertainty or incrementing `motion_epoch`. It does **not** stop the
+   model's finite action plan.
+5. If the public RGB-D is byte-identical before and after a forward attempt,
+   the current route yields `REQUIRES_ATTENTION` and a no-motion alert.
+   This indicates no observable change, **not** proven collision.
+6. Otherwise, after the requested forward count is executed, the executor
+   returns **`ACTIONS_COMPLETED`**, `action_intent_completed=true`,
+   `target_reached=false`, `endpoint_estimate_valid=false`, and
+   `remaining_distance=null`. The nominal commanded distance is never
+   reported as verified traversal.
+7. If the global Episode budget interrupts a route, its commanded forward
+   count and remaining steps persist. NavigationAgent may resume the *same*
+   model-authored bearing through `navigate_local` without needing an
+   old metric x/z endpoint.
+8. A changed public frame after forward increments `viewpoint_generation`.
+   This keeps separate visual stances distinct even without reliable metric
+   translation; UNKNOWN alone no longer resets the navigation `motion_epoch`.
 
-## Safety limitations
+## Evidence versus control
 
-Distributed consensus provides an estimate, not ground truth: nearby moving
-people or repetitive texture can still cause motion registration errors.
-The fallback is deliberately stricter on coverage and residual than the
-ordinary 65% match path. Neither route continuation nor local reanchoring
-can authorize MOVE_FORWARD without current Depth and terrain checks.
+`position_coordinates_valid=false` and a null model-visible
+`position_xz_m_est` mean that metric coordinates are not reliable following
+an unregistered forward. Old projected landmark positions cannot be used as
+verified new destinations. New current-frame images, visual target hypotheses,
+command action history and yaw still inform model decisions.
 
-After an unknown translation, numerical x/z history is not a global
-localization; its meaning is local within the new epoch only. Do not infer
-stair descent or semantic subgoal completion from commanded movement.
+Independent progress verification **continues to require** registered motion,
+visual grounding, observed level landing support and task evidence as
+appropriate. Executing 4 nominal 0.25m commands cannot by itself prove 1m
+translation or stair descent. The verifier intentionally does not replace
+unknown displacement with the nominal command length.
 
-## Verification
+## Validation
 
 ```bash
-python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
+python -m unittest discover -s tests -p 'test_direct_motion_execution.py' -v
 python -m unittest discover -s tests -p 'test_odometry_gap_navigation.py' -v
+python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
+python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
 ```
 
-These regressions validate both a distributed 23-of-43 match scene and a
-concentrated moving-object distractor, along with bounded safe motion,
-unknown-distance feedback and new local Waypoint validation. Real Habitat
-success requires rerunning the same episode and comparing verified forwards,
-model decisions, action budgets, and semantic descent evidence.
+Habitat closed-loop performance and collision metrics require a new episode
+evaluation. This is a simulation-specific experimental policy and should not
+be directly applied to a real robot without an independent safety system.
