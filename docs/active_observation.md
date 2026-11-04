@@ -62,6 +62,20 @@ when an entry remains uncertain. A localized, evidence-backed actionable
 target yields the named observation ID, bounding box, heading, pitch and
 current-relative bearing, with `usable_for_live_safety=false`.
 
+Finding a candidate no longer ignores the VLM's `next_action`. If VLM
+asks for another real view, the controller executes the legal LOOK/TURN
+and revisits the image. This continuation is bounded to three extra VLM
+checkpoints after the first candidate; the best source-labeled candidate is
+preserved if VLM finishes or reaches that budget. This is an observation-cost
+bound only, not a limit on NavigationAgent's MOVE actions.
+
+A large return sweep (90 degrees or greater) that simply reverses a prior
+sweep toward a yaw physically visited in the SAME observation subtask is
+returned to VLM for correction when the cumulative turn is at least 180
+degrees. Its history labels *physically visited yaw* separately from
+*VLM-inspected image*, so intermediate TURN frames do not become invented
+semantic evidence. The model may pick a new pitch, new view, or finish.
+
 ## Returned result and safety
 
 `observe_for_goal` returns one consolidated tool receipt with
