@@ -331,6 +331,10 @@ class ObservationController:
         best_cue=None
         best_candidate=None
         seen=set()
+        rejected_views=[]
+        pending_view_correction=None
+        consecutive_replans=0
+        max_replans=2
         # A VLM decision always refers to ONE real current-frame observation.
         # Metadata contains no synthesized, unseen or predicted RGB frames.
         def view_key():
@@ -348,10 +352,17 @@ class ObservationController:
             record.update(outcome=outcome,covered_turn_deg=turned,
                 end_observation_id=r.memory.current['observation_id'],
                 candidate=copy.deepcopy(best_candidate),
-                best_cue=copy.deepcopy(best_cue))
+                best_cue=copy.deepcopy(best_cue),
+                rejected_view_requests=copy.deepcopy(rejected_views))
+            store=getattr(r.memory,'note_active_observation_target',None)
+            hypothesis=best_candidate or best_cue
+            if hypothesis and callable(store):
+                store(hypothesis,objective,target_types,
+                    goal=getattr(r,'active_subgoal',None))
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_owner='visual_perception_vlm',
+                view_replan_attempts=len(rejected_views),
                 planned_sweep_deg=sweep_degrees,covered_turn_deg=turned,
                 checkpoints=[dict(observation_id=p['observation_id'],
                     heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
@@ -377,29 +388,39 @@ class ObservationController:
         if look!='none':
             failed=do_action('LOOK_DOWN' if look=='down' else 'LOOK_UP')
             if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))
-        max_checks=min(14,max(3,math.ceil(sweep_degrees/30)+3))
+        max_checks=min(16,max(3,math.ceil(sweep_degrees/30)+5))
         for _ in range(max_checks):
             if r.done:
                 return finish('INTERRUPTED','PARTIAL','environment_done')
             key=view_key()
-            if key in seen:
+            retrying=pending_view_correction is not None
+            if key in seen and not retrying:
                 return finish('REPEATED_VIEW_REQUEST','NO_NEW_INFORMATION',
-                    'vlm_requested_already_inspected_heading_pitch')
-            seen.add(key)
+                    'camera_returned_to_an_already_inspected_pose')
+            if not retrying:
+                seen.add(key)
             source=r.source()
             history=[dict(observation_id=p['observation_id'],
                 heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
                 target_kind=p['visual'].get('target_kind','UNKNOWN'),
                 evidence=(p['visual'].get('evidence') or '')[:110])
-                for p in record['checkpoints'][-5:]]
+                for p in record['checkpoints'][-12:]]
             prior=[dict(observation_id=t.get('selected_observation_id'),
                 target_status=t.get('status'),
                 evidence=(t.get('visible_evidence') or '')[:100])
                 for t in getattr(r.memory,'visual_targets',())[-2:]]
+            correction=pending_view_correction
+            pending_view_correction=None
             try:
+                options=dict(prior_targets=prior)
+                if correction is not None:
+                    options['view_correction']=correction
+                options['observed_yaw_pitch']=[
+                    dict(heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'])
+                    for p in record['checkpoints'][-12:]]
                 visual=r.visual_perception.guide_scan_view(
                     r.observation,source,objective,target_types,history,
-                    max(0,sweep_degrees-turned),prior_targets=prior)
+                    max(0,sweep_degrees-turned),**options)
             except (APIError,BudgetExceeded) as error:
                 return finish('VISION_UNAVAILABLE','PARTIAL',type(error).__name__)
             position=r.motion_controller.pose()
@@ -408,7 +429,11 @@ class ObservationController:
                 pitch_deg=r.pitch_deg,
                 new_static_information=bool(r.memory.current.get(
                     'new_visual_information',True)),visual=visual)
-            record['checkpoints'].append(point)
+            if retrying and record['checkpoints'] and (
+                    record['checkpoints'][-1]['observation_id']==source['observation_id']):
+                record['checkpoints'][-1]['visual']=visual
+            else:
+                record['checkpoints'].append(point)
             if meaningful_candidate(visual,target_types):
                 candidate=dict(target_type=visual['target_type'],
                     confidence=visual['confidence'],box=visual['box'],
@@ -429,6 +454,28 @@ class ObservationController:
                 if best_cue is None or visual['confidence']=='high':
                     best_cue=candidate
             action=visual['next_action']
+            # Rejected VLM camera choices are corrected with another VLM
+            # decision on the SAME genuine image. No main LLM call and no
+            # physical TURN is spent on a duplicate heading/pitch pair.
+            def request_new_view(reason,requested_heading=None,requested_pitch=None):
+                nonlocal pending_view_correction,consecutive_replans
+                rejected_views.append(dict(
+                    observation_id=source['observation_id'],
+                    action=action,turn_deg=visual['turn_deg'],
+                    reason=reason,requested_heading_deg=requested_heading,
+                    requested_pitch_deg=requested_pitch))
+                consecutive_replans+=1
+                if consecutive_replans>max_replans:
+                    return finish('REPEATED_VIEW_REQUEST','NO_NEW_INFORMATION',
+                        'vlm_exhausted_bounded_same_frame_view_corrections')
+                pending_view_correction=dict(
+                    rejected_action=action,rejected_turn_deg=visual['turn_deg'],
+                    reason=reason,
+                    required_next='choose_unseen_yaw_or_pitch_or_finish',
+                    already_inspected=[
+                        dict(heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'])
+                        for p in record['checkpoints'][-12:]])
+                return None
             if action=='finish':
                 return finish('CUE_ONLY' if best_cue else 'VLM_SEARCH_FINISHED',
                     reason='vlm_concluded_visual_search')
@@ -436,21 +483,37 @@ class ObservationController:
                 new_pitch=r.pitch_deg+(r.camera.tilt_angle if action=='look_up'
                                       else -r.camera.tilt_angle)
                 if abs(new_pitch)>60:
-                    return finish('CUE_ONLY' if best_cue else 'VLM_SEARCH_FINISHED',
-                        reason='vlm_requested_out_of_range_pitch')
+                    result=request_new_view('camera_pitch_outside_allowed_range',
+                        requested_pitch=new_pitch)
+                    if result is not None:return result
+                    continue
+                proposed_key=(key[0],round(new_pitch/r.camera.tilt_angle))
+                if proposed_key in seen:
+                    result=request_new_view('already_inspected_heading_pitch',
+                        requested_heading=round(math.degrees(
+                            r.motion_controller.pose()['heading']),2),
+                        requested_pitch=new_pitch)
+                    if result is not None:return result
+                    continue
+                consecutive_replans=0
                 failed=do_action('LOOK_UP' if action=='look_up' else 'LOOK_DOWN')
                 if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))
                 continue
             degrees=visual['turn_deg']
             if degrees<=0 or degrees%turn or turned+degrees>sweep_degrees:
-                return finish('CUE_ONLY' if best_cue else 'SEARCH_REGION_COVERED_NO_MATCH',
-                    reason='vlm_turn_exceeds_remaining_sweep')
+                result=request_new_view('turn_exceeds_remaining_observation_budget')
+                if result is not None:return result
+                continue
             direction='TURN_LEFT' if action=='turn_left' else 'TURN_RIGHT'
             target_heading=(key[0]+(
                 degrees/turn if direction=='TURN_LEFT' else -degrees/turn))%round(360/turn)
             if (int(round(target_heading)),key[1]) in seen:
-                return finish('REPEATED_VIEW_REQUEST','NO_NEW_INFORMATION',
-                    'vlm_requested_already_inspected_heading_pitch')
+                result=request_new_view('already_inspected_heading_pitch',
+                    requested_heading=round(target_heading*turn,2),
+                    requested_pitch=r.pitch_deg)
+                if result is not None:return result
+                continue
+            consecutive_replans=0
             for _turn in range(round(degrees/turn)):
                 failed=do_action(direction)
                 if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))

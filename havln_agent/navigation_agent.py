@@ -11,8 +11,9 @@ COMMON_PROMPT = (
     'you control strategic observation, motion, subgoal selection and STOP. '
     'You see concise JSON, not RGB. VLM owns all goal-directed camera search '
     'inside observe_for_goal; never micro-manage its 15-degree turns. '
-    'Return ONE JSON {"tool":"name","args":{...}} with optional evidence-linked '
-    'memory_delta. Use only authentic observation IDs and registered tools. '
+    'Return ONLY ONE JSON {"tool":"name","args":{...}}; do NOT provide '
+    'memory_delta or commentary. Tools persist provenance-linked visual '
+    'evidence automatically. Use only registered tools and real IDs. '
     'Unknown RGB-D odometry is not evidence of a collision and does not stop '
     'a finite movement plan. A completed atomic action plan is NOT verified '
     'physical arrival. Verify milestones from real visual/motion evidence; '
@@ -103,11 +104,8 @@ class NavigationAgent:
             if not Draft7Validator(navigation_schema(offered_tools)).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
-            known = set(runtime.memory.keyframes)
-            if any(not set(item['source_observation_ids']) <= known
-                   for item in value.get('memory_delta', [])):
-                raise APIError('memory_delta_requires_known_observation_sources',
-                               category='structured_field')
+            # Optional metadata is outside the navigation command contract.
+            # It may be malformed; only tool+args can authorize a motion.
         context = dict(navigation_context(runtime),
                        **({'format_feedback': format_feedback} if format_feedback else {}))
         stagnation=context.get('observation_stagnation') or {}
@@ -175,6 +173,10 @@ class NavigationAgent:
                 format_retry=int(bool(format_feedback)), retry_safe=True,
                 protocol=compact_navigation_protocol(offered_tools),
                 validation_schema=navigation_envelope(offered_tools))
+        # Always discard any model-authored side-channel memory before tool
+        # dispatch. VLM and executor persist grounded facts independently.
+        # Invalid tool/args remain fatal through the strict model validator.
+        result={'tool':result['tool'],'args':result['args']}
         if full_circle_commit:
             # Compact/no-native-schema providers may ignore enumerated tools.
             # Reject rather than execute an arbitrary TURN or spend another

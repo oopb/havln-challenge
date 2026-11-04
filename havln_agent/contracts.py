@@ -90,8 +90,12 @@ def registry(camera, max_actions, pitch_deg=0.):
 def navigation_schema(tools):
     branches=[]
     for name,spec in tools.items():
+        # Legacy low-cost providers may still hallucinate memory_delta. Accept
+        # arbitrary OPTIONAL metadata so a valid tool+args is never rejected;
+        # NavigationAgent strips it before execution. No memory payload is
+        # advertised or trusted as a source of observations.
         branch=object_schema(dict(tool=dict(const=name), args=spec['parameters'],
-            memory_delta=dict(type='array', maxItems=4, items=HYPOTHESIS)))
+            memory_delta={}))
         branch['required']=['tool','args']
         branch['description']=spec['description']
         branches.append(branch)
@@ -101,7 +105,7 @@ def navigation_schema(tools):
 def navigation_envelope(tools):
     """Malformed messages are API errors; valid calls get runtime argument feedback."""
     value=object_schema(dict(tool=dict(enum=list(tools)),args=dict(type='object'),
-        memory_delta=dict(type='array',maxItems=4,items=HYPOTHESIS)))
+        memory_delta={}))
     value['required']=['tool','args']
     return value
 
@@ -131,8 +135,9 @@ def compact_navigation_protocol(tools):
     def brief(spec):
         desc=spec['description'].split('.')[0].strip()
         return desc[:105]
-    return ('Return one JSON {"tool":"name","args":{...}}. Optional memory_delta '
-        'uses existing observation IDs only (max 4). ? = optional. '
+    return ('Return ONLY one JSON {"tool":"name","args":{...}}. '
+        'Do NOT include memory_delta, notes, explanations or extra keys; '
+        'visual evidence and memory are persisted by tools. ? = optional. '
         'Tools and exact argument signatures:\n'+'\n'.join(
             name+signatures(spec['parameters'])+' : '+brief(spec)
             for name,spec in tools.items()))

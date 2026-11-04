@@ -60,7 +60,10 @@ SCAN_GUIDANCE_PROMPT = (
     'otherwise CUE or UNKNOWN. Return an exact normalized image box when '
     'target_visible and localized; do not hallucinate missing regions. '
     'Avoid already-observed yaw/pitch combinations and useless 15-degree '
-    'micro-scans; larger calibrated turns are allowed. Finish when meaningful '
+    'micro-scans; larger calibrated turns are allowed. If a previous camera '
+    'choice was rejected, use view_correction and observed_yaw_pitch to '
+    'choose a DIFFERENT real view (often look down/up) within this SAME '
+    'subtask. Never repeat a rejected action. Finish when meaningful '
     'visual evidence is sufficient OR the remaining views will not help; '
     'state uncertainty. You only return evidence and the next camera action. '
     'Do not invent robot motion, measured depth, safety or task completion. '
@@ -226,7 +229,8 @@ class VisualPerception:
             result_schema=SEARCH_SCHEMA)
 
     def guide_scan_view(self, observation, source, objective, target_types,
-                        view_history, remaining_turn_deg, prior_targets=None):
+                        view_history, remaining_turn_deg, prior_targets=None,
+                        observed_yaw_pitch=None, view_correction=None):
         """VLM-directed next camera action from one genuine current RGB view.
 
         Provide only compact, source-labeled history, not a growing conversation
@@ -246,9 +250,12 @@ class VisualPerception:
             heading_deg=round(__import__('math').degrees(pose['heading']),2),
             pitch_deg=round(pose.get('pitch_deg',0),2),
             remaining_turn_deg=int(remaining_turn_deg),
-            previously_inspected_views=list(view_history)[-5:],
+            previously_inspected_views=list(view_history)[-12:],
+            observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
             prior_target_hypotheses=list(prior_targets or ())[-2:],
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        if view_correction is not None:
+            request['view_correction']=view_correction
         def validate(value):
             turns=value['next_action'] in ('turn_left','turn_right')
             if turns and not value['turn_deg']:

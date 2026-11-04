@@ -131,6 +131,17 @@ registered visual/motion evidence. See
 [action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
+**Batch 4-11 P0/P1 hardening:** NavigationAgent now emits only the validated
+`tool` and `args` object; provider-hallucinated optional `memory_delta` fields
+(even malformed object/list shapes) are silently discarded *after* strict
+validation of actual tool parameters. VLM and tool receipts own persistent
+memory. During one VLM-led observation, a duplicated yaw/pitch request is
+rejected without physical TURN and the VLM gets up to two same-image correction
+opportunities with real coverage/rejection metadata. VLM view evidence is also
+persisted in the same typed `visual_targets` pool as panoramic hypotheses,
+including authentic frame ID, bearing, camera pitch, box and evidence status.
+Such targets never certify safe traversal or completed tasks.
+
 **Navigation tool-menu refactor (20 registered, 9 core):**
 The ToolExecutor registry still contains all 20 validated tools, so archived
 tool calls and specialized visual/history utilities remain executable.

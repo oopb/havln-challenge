@@ -94,6 +94,66 @@ class MemoryService(MemoryRecords):
                 landmark['source_observation_ids'].append(identifier)
         self.event('semantic_candidates_recorded',source=source,findings=findings)
 
+    def note_active_observation_target(self, candidate, objective, target_types,
+                                       goal=None):
+        """Persist VLM-search evidence in the same typed visual target pool.
+
+        This records an authentic RGB observation and an uncertain visual
+        hypothesis. It never claims collision clearance, metric arrival or
+        completed semantic navigation. The calling controller provides the
+        actual source observation_id, yaw and camera pitch.
+        """
+        if not isinstance(candidate,dict):
+            return None
+        identifier=candidate.get('observation_id')
+        if identifier not in self.keyframes:
+            raise ValueError('active_visual_target_requires_real_observation')
+        kind=candidate.get('target_kind','UNKNOWN')
+        if kind not in ('ENTRY','APPROACH','TARGET','CUE'):
+            return None
+        selected=self.keyframes[identifier]
+        status='CUE_ONLY' if kind=='CUE' else 'VISIBLE'
+        current_goal=(copy.deepcopy(goal) if goal is not None
+            else dict(objective=objective,target_types=list(target_types)))
+        for existing in reversed(self.visual_targets):
+            if (existing.get('subgoal_index')==self.task.current_subgoal_index
+                    and existing.get('selected_observation_id')==identifier
+                    and existing.get('target_type')==candidate.get('target_type')
+                    and existing.get('target_kind')==kind):
+                return existing
+        pose=self.runtime.motion_controller.pose()
+        absolute=round(float(candidate.get('heading_deg',
+            selected['heading_deg'])),2)
+        relative=round((absolute-math.degrees(pose['heading'])+180)%360-180,2)
+        record=dict(
+            id='visual_target_%04d'%len(self.visual_targets),
+            visual_source='vlm_active_observation',
+            subgoal_index=self.task.current_subgoal_index,
+            place_id=selected['place_id'],
+            motion_epoch=pose.get('motion_epoch',0),
+            viewpoint_generation=pose.get('viewpoint_generation',0),
+            goal=current_goal,
+            observation_objective=objective,
+            target_type=candidate.get('target_type'),
+            target_kind=kind,confidence=candidate.get('confidence'),
+            status=status,selected_observation_id=identifier,
+            source_observation_ids=[identifier],
+            absolute_heading_deg=absolute,
+            pitch_deg=candidate.get('pitch_deg',selected.get('pitch_deg')),
+            relative_heading_deg_at_review=relative,
+            target_region=copy.deepcopy(candidate.get('box')),
+            visual_evidence=(candidate.get('evidence') or '')[:400],
+            uncertainty=(candidate.get('uncertainty') or '')[:300],
+            missing_evidence=('confirm_actual_walkable_entry'
+                if kind=='CUE' else ''),
+            approach_candidates=[],
+            evidence_state='historical_visual_hypothesis_not_clearance')
+        self.visual_targets.append(record)
+        self.event('active_visual_target_recorded',
+                   target_id=record['id'],observation_id=identifier,
+                   target_kind=kind,status=status)
+        return record
+
     def note_panorama_target(self, visual, views, goal=None):
         """Retain provenance-linked goal/entry hypotheses across OBSERVE turns.
 
