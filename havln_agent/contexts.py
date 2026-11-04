@@ -192,6 +192,94 @@ def planner_context(runtime):
         actions_remaining=runtime.config['max_steps']-len(runtime.memory.actions))
 
 
+def navigation_progress_review(memory):
+    """Compact, chronological evidence review; never a completion verdict.
+
+    It summarizes *registered* local RGB-D motion and VLM visual hypotheses.
+    Relative y measurements from different pose epochs are not added into a
+    global position. The NavigationAgent alone may request verification or
+    select the next UNVERIFIED semantic goal.
+    """
+    task=memory.task
+    index=task.current_subgoal_index
+    goals=getattr(task,'subgoals',[])
+    history=registered_motion_history(memory)
+    rows=history.get('rows',[])
+    directed=[]
+    for row in rows:
+        if (row.get('status')!='ESTIMATED'
+                or row.get('delta_y_m') is None
+                or row.get('uncertainty_m') is None):
+            continue
+        displacement=row['delta_y_m']
+        uncertainty=row['uncertainty_m']
+        direction=('UP' if displacement>uncertainty else
+                   'DOWN' if displacement<-uncertainty else 'LEVEL_OR_UNCERTAIN')
+        if direction in ('UP','DOWN'):
+            directed.append(dict(step=row['step'],direction=direction,
+                observation_id=row.get('observation_after'),
+                motion_epoch=row.get('motion_epoch')))
+    # Only actual chronological, registered measurement events are described.
+    segments=[]
+    for row in directed:
+        if segments and segments[-1]['direction']==row['direction']:
+            segments[-1]['count']+=1
+            segments[-1]['last_step']=row['step']
+            segments[-1]['last_observation_id']=row['observation_id']
+        else:
+            segments.append(dict(direction=row['direction'],
+                first_step=row['step'],last_step=row['step'],count=1,
+                last_observation_id=row['observation_id']))
+    latest_targets=[]
+    seen=set()
+    for target in reversed(getattr(memory,'visual_targets',[])):
+        if target.get('subgoal_index')!=index:
+            continue
+        key=(target.get('target_type'),target.get('target_kind'),
+             target.get('selected_observation_id'))
+        if key in seen:
+            continue
+        seen.add(key)
+        latest_targets.append(dict(
+            observation_id=target.get('selected_observation_id'),
+            target_type=target.get('target_type'),
+            kind=target.get('target_kind'),
+            status=target.get('status'),
+            heading_deg=target.get('absolute_heading_deg'),
+            pitch_deg=target.get('pitch_deg'),
+            evidence=(target.get('visual_evidence') or '')[:130],
+            evidence_class='VLM_HYPOTHESIS_NOT_NAVIGATION_PROOF'))
+        if len(latest_targets)==3:
+            break
+    latest_targets.reverse()
+    changed_direction=any(a['direction']!=b['direction']
+                          for a,b in zip(segments,segments[1:]))
+    last_verifier=next((
+        entry.get('result') or {} for entry in
+        reversed(getattr(memory,'tool_ledger',[]))
+        if (entry.get('call') or {}).get('tool')=='verify_subgoal'
+        and entry.get('subgoal_id') in (None,'sg_%d'%index)),None)
+    return dict(
+        current_subgoal_index=index,
+        next_subgoal=(fields(goals[index+1],
+            ('action','target','landmark','semantic_description'))
+            if index+1<len(goals) else None),
+        registered_forward_steps=history.get('registered_forward_steps',0),
+        unknown_forward_steps=len(history.get('unknown_forward_steps',[])),
+        observed_downward_m_est=history.get('observed_downward_m_est',0),
+        observed_upward_m_est=history.get('observed_upward_m_est',0),
+        directional_history=segments[-5:],
+        observed_direction_reversal=changed_direction,
+        latest_visual_hypotheses=latest_targets,
+        last_verification=(fields(last_verifier,('status','stage','reason',
+            'missing','supported')) if last_verifier else None),
+        interpretation='local_measured_segments_are_historical_not_global_pose; '
+            'visual_targets_are_unverified_hypotheses; no_subgoal_auto_completion',
+        model_choices='If evidence suggests a phase change, evaluate '
+            'verify_subgoal, targeted ground_landmark, or model-owned '
+            'select_subgoal (provisional only); otherwise continue purposefully.')
+
+
 def navigation_context(runtime):
     pose=runtime.motion_controller.pose()
     memory=runtime.memory
@@ -243,6 +331,7 @@ def navigation_context(runtime):
         if len(prior_motion_evidence)>=2:
             break
     result=dict(goal=runtime.active_subgoal,
+        progress_review=navigation_progress_review(memory),
         prior_subgoal_motion_evidence=prior_motion_evidence,
         task_selection=dict(
             current_subgoal_index=index,
@@ -496,6 +585,14 @@ def compact_navigation_context(state):
     if 'current_view' in out:
         for k in ('description','uncertainty'):
             if k in out['current_view']:out['current_view'][k]=short(out['current_view'][k],220)
+    if state.get('progress_review'):
+        p=state['progress_review']
+        out['progress_review']=fields(p,(
+            'current_subgoal_index','next_subgoal','registered_forward_steps',
+            'unknown_forward_steps','observed_downward_m_est',
+            'observed_upward_m_est','directional_history',
+            'observed_direction_reversal','latest_visual_hypotheses',
+            'last_verification','interpretation','model_choices'))
     if state.get('navigation_memory'):
         m=state['navigation_memory']
         n=fields(m,('expected_vertical_motion','total_forward_actions',
@@ -507,8 +604,9 @@ def compact_navigation_context(state):
             'requested_motion')) for v in m.get('recent_failed_waypoints',[])[-2:]]
         n['visual_targets']=[]
         for v in m.get('visual_target_memory',[])[-2:]:
-            t=fields(v,('id','status','selected_observation_id',
-                'absolute_heading_deg','target_region'))
+            t=fields(v,('id','status','target_type','target_kind',
+                'selected_observation_id','absolute_heading_deg',
+                'pitch_deg','target_region'))
             t['visual_evidence']=short(v.get('visual_evidence',''),150)
             t['missing_evidence']=short(v.get('missing_evidence',''),100)
             t['approach_candidates']=[dict(observation_id=a.get('observation_id'),
