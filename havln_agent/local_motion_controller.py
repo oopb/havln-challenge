@@ -19,18 +19,28 @@ class LocalMotionController:
         # fresh public RGB-D image can anchor NEW local relative waypoints.
         self.local_anchor_observation_id = None
         self.global_chain_continuous = True
+        # Command receipts are independent of optional RGB-D translation fitting.
+        # A changed post-action view starts a new observed stance; failed
+        # registration alone never resets a waypoint or its action budget.
+        self.forward_actions_attempted = 0
+        self.unknown_forward_actions = 0
+        self.viewpoint_generation = 0
 
     def pose(self):
         return dict(x=self.x, y=self.y, z=self.z, heading=self.heading, pitch_deg=self.pitch_deg,
-            source='rgbd_translation_and_commanded_yaw', confidence='estimated',
+            source='optional_rgbd_translation_and_commanded_yaw',
+            confidence=('estimated' if self.global_chain_continuous else 'action_only_unlocalized'),
             position_uncertainty=self.position_uncertainty, local_reference=self.local_reference,
             motion_error_total=self.motion_error_total, motion_epoch=self.motion_epoch,
             displacement_verified=False, uncertainty_source='registration_residual_not_ground_truth',
+            forward_actions_attempted=self.forward_actions_attempted,
+            unknown_forward_actions=self.unknown_forward_actions,
+            viewpoint_generation=self.viewpoint_generation,
+            position_coordinates_valid=self.global_chain_continuous,
             global_chain_continuous=self.global_chain_continuous,
             local_anchor_observation_id=self.local_anchor_observation_id,
             coordinate_scope=('episode_relative' if self.global_chain_continuous else
-                              'reanchored_local_relative' if self.local_anchor_observation_id else
-                              'unanchored_after_unknown_translation'))
+                              'action_only_after_unregistered_translation'))
 
     def accept_feedback(self, action, measurement):
         if action == 'TURN_LEFT':
@@ -38,11 +48,18 @@ class LocalMotionController:
         elif action == 'TURN_RIGHT':
             self.heading -= math.radians(self.camera.turn_angle)
         elif action == 'MOVE_FORWARD':
+            self.forward_actions_attempted += 1
+            # Only a changed public frame supports treating the new view as
+            # a different physical stance. Neither a receipt nor a command
+            # certifies the nominal 0.25m of movement.
+            if measurement and measurement.get('observed_frame_change', False):
+                self.viewpoint_generation += 1
             if not measurement or measurement['status'] != 'ESTIMATED':
-                self.position_uncertainty += self.camera.forward_step
-                self.motion_epoch += 1
+                self.unknown_forward_actions += 1
                 self.global_chain_continuous = False
-                self.local_anchor_observation_id = None
+                # Preserve metric uncertainty as UNKNOWN (via pose confidence)
+                # rather than adding an invented 0.25m uncertainty or
+                # invalidating the model-selected route with a new motion_epoch.
                 return
             motion=measurement['translation_m']
             x,z=motion['x_right'],motion['z_forward']
@@ -89,66 +106,80 @@ class LocalMotionController:
                     suggestion=suggestion, information_options=['turn_and_observe', 'analyze_scene',
                         'assess_entry', 'ground_landmark', 'inspect_geometry'], **extra)
 
+    def route_action(self, path, forwards_done, forward_horizon):
+        """Return next atomic action for a finite model-authored bearing/step plan.
+
+        Do not steer using unregistered x/z odometry. TURN uses commanded yaw,
+        then the model's finite count of forward receipts is consumed.
+        """
+        target_heading = path['source']['pose']['heading'] + path['angle']
+        yaw_error = angle_delta(target_heading, self.heading)
+        if abs(yaw_error) > math.radians(self.camera.turn_angle) / 2:
+            return 'TURN_LEFT' if yaw_error > 0 else 'TURN_RIGHT'
+        if forwards_done < forward_horizon:
+            return 'MOVE_FORWARD'
+        return None
+
     def validate(self, runtime, path, resume=False, uncertain_straight=False):
+        """Validate goal identity and fresh observation, NOT metric odometry."""
         r = runtime
         source, pose = path['source'], self.pose()
         if source['subgoal'] != r.memory.task.current_subgoal_index:
             return dict(status='STALE_TARGET', reason='language_goal_changed')
-        if not resume and math.hypot(source['pose']['x']-pose['x'], source['pose']['z']-pose['z']) > self.camera.forward_step/2:
-            return dict(status='STALE_TARGET', reason='path_start_position_changed')
-        relative_error = relative_pose_error(source['pose'], pose)
-        if uncertain_straight:
-            # An UNKNOWN registration breaks global endpoint coordinates, but
-            # not the direction of a short, already accepted straight segment.
-            # Only ToolExecutor's bounded same-waypoint recovery may use this
-            # mode; it never certifies arrival or old landmark geometry.
-            commanded_heading = source['pose']['heading'] + path['angle']
-            if not resume or self.target is None or math.isfinite(relative_error):
-                return dict(status='REQUIRES_ATTENTION',
-                    reason='relative_motion_recovery_not_applicable')
-            if abs(angle_delta(commanded_heading, pose['heading'])) > math.radians(
-                    self.camera.turn_angle) / 2:
-                return dict(status='REQUIRES_ATTENTION',
-                    reason='relative_motion_heading_changed')
-        elif relative_error > .5:
-            return self.needs_view('pose_uncertainty_requires_reconfirmation')
+        if not resume:
+            # Saved candidate waypoints from a different visual stance should
+            # not be silently reused. An active finite route is still resumable
+            # even if several RGB-D registrations failed mid-command.
+            start_stance = source['pose'].get('viewpoint_generation')
+            current_stance = pose.get('viewpoint_generation')
+            if (start_stance is not None and current_stance is not None
+                    and start_stance != current_stance):
+                return dict(status='STALE_TARGET', reason='viewpoint_changed_since_waypoint_proposal')
+            if math.hypot(source['pose']['x']-pose['x'],
+                          source['pose']['z']-pose['z']) > self.camera.forward_step / 2:
+                return dict(status='STALE_TARGET', reason='path_start_position_changed')
         r.refresh()
-        if time.monotonic()-r.observation.captured_at > r.config['max_depth_age_seconds']:
-            return self.needs_view('fresh_depth_required')
-        heading = source['pose']['heading']+path['angle']
-        endpoint = self.target if resume else (
-            source['pose']['x']-math.sin(heading)*path['distance'],
-            source['pose']['z']+math.cos(heading)*path['distance'])
-        dx, dz = endpoint[0]-pose['x'], endpoint[1]-pose['z']
-        if uncertain_straight:
-            # Never interpret old x/z as a reliable distance to the target.
-            # ToolExecutor bounds the number of commanded forward actions.
-            angle, distance = 0., self.camera.forward_step
-        else:
-            angle, distance = angle_delta(math.atan2(-dx, dz), pose['heading']), math.hypot(dx, dz)
-        turn_only = abs(angle) > math.radians(self.camera.turn_angle)/2
-        # Geometry is never run by routine path validation. Preserve pose and
-        # step-size checks; only an explicit geometry tool diagnoses obstacles.
+        if time.monotonic() - r.observation.captured_at > r.config['max_depth_age_seconds']:
+            return self.needs_view('fresh_rgbd_required')
+        attempt = getattr(r.memory, 'active_attempt', None) or {}
+        same_path = (attempt.get('target') or {}).get('id') == path['id']
+        forward_horizon = (attempt.get('forward_action_horizon')
+                           if same_path else None)
+        if forward_horizon is None:
+            forward_horizon = max(1, math.ceil(
+                (path['distance'] - 1e-6) / self.camera.forward_step))
+        forwards_done = attempt.get('forward_actions', 0) if same_path else 0
+        action = self.route_action(path, forwards_done, forward_horizon)
+        target_heading = source['pose']['heading'] + path['angle']
+        endpoint = self.target if resume and self.target is not None else (
+            source['pose']['x']-math.sin(target_heading)*path['distance'],
+            source['pose']['z']+math.cos(target_heading)*path['distance'])
+        turn_only = action in ('TURN_LEFT','TURN_RIGHT')
+        remaining_actions = max(0, forward_horizon - forwards_done)
         diagnostic = dict(scope='model_requested_geometry_only',
             status='NOT_CHECKED',collision_clearance_m=None)
-        next_action = ('TURN_LEFT' if angle > 0 else 'TURN_RIGHT') if turn_only else 'MOVE_FORWARD'
-        validation = dict(source=r.source(), geometry=diagnostic,
-            relative_motion_only=uncertain_straight,
-            endpoint_estimate_valid=not uncertain_straight,
-            next_atomic_action=next_action,
+        validation = dict(source=r.source(),geometry=diagnostic,
+            relative_motion_only=True,
+            endpoint_estimate_valid=False,
+            next_atomic_action=action,
             validated_forward_bearing_deg=None,
             requires_post_turn_recheck=False,
             forward_evidence_state='NOT_CHECKED',
-            scope='next_atomic_step_only', geometry_policy='explicit_model_tool_only')
+            commanded_forward_actions=forwards_done,
+            commanded_forward_horizon=forward_horizon,
+            scope='next_atomic_action_not_metric_arrival',
+            geometry_policy='explicit_model_tool_only')
         path['last_validation'] = validation
-        segment_distance = 0 if turn_only else min(distance, self.camera.forward_step)
-        segment = dict(path_id=path['id'], origin_xz_m=[pose['x'], pose['z']],
-            endpoint_xz_m=[pose['x']-math.sin(pose['heading'])*segment_distance,
-                           pose['z']+math.cos(pose['heading'])*segment_distance],
-            distance_m=segment_distance, turn_only=turn_only, source=r.source(),
-            geometry_checked=False)
-        value = dict(status='OK', candidate=dict(path, angle=angle, distance=segment_distance),
-            original_target=list(endpoint), executable_segment=segment, validation=validation)
+        segment_distance = self.camera.forward_step if action == 'MOVE_FORWARD' else 0
+        segment = dict(path_id=path['id'], origin_xz_m=None, endpoint_xz_m=None,
+            distance_m=segment_distance, turn_only=turn_only,
+            source=r.source(), geometry_checked=False,
+            reach_basis='commanded_atomic_action_not_verified_displacement')
+        result = dict(status='OK',
+            candidate=dict(path, angle=angle_delta(target_heading, pose['heading']),
+                           distance=remaining_actions*self.camera.forward_step),
+            original_target=list(endpoint), executable_segment=segment,
+            validation=validation)
         path['execution_status'] = 'REVALIDATED'
-        r.memory.note_validation(path, value)
-        return value
+        r.memory.note_validation(path, result)
+        return result
