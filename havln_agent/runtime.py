@@ -597,13 +597,13 @@ class AgentRuntime(ToolExecutor):
         self.paths[path_id] = path
         # Direct routes were absent from spatial memory because they skip
         # get_waypoint_candidates. Register the proposal, not a clearance
-        # certificate. Live checks still establish execution status.
+        # certificate. Action completion does NOT imply metric target arrival.
         self.memory.note_candidates([path])
         result = self._navigate_local(path_id)
         return dict(result, waypoint_id=path_id,
                     requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
-                        authorization='live_per_atomic_action_only'))
+                        authorization='model_selected_atomic_actions_not_metric_arrival'))
 
     def _navigate_to_pixel(self, u, v, distance_m):
         """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
@@ -755,7 +755,7 @@ class AgentRuntime(ToolExecutor):
         if value['status'] in ('API_ERROR', 'API_UNAVAILABLE'):
             self.api_failure = value.get('api_failure', dict(category=value.get('category'), reason=value.get('reason')))
             self.terminate('api_error' if value['status'] == 'API_ERROR' else 'api_budget_exhausted')
-        if value['status'] == 'TARGET_REACHED':
+        if value['status'] in ('TARGET_REACHED','ACTIONS_COMPLETED'):
             self.active_waypoint_id = None
         # UNKNOWN, repeated views, failures and zero motion are feedback only.
 
