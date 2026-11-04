@@ -338,17 +338,17 @@ class ObservationController:
             return (round(math.degrees(pose['heading'])/turn)%round(360/turn),
                     round(r.pitch_deg/r.camera.tilt_angle))
         def finish(outcome,status='OK',reason=None):
-            record.update(outcome=outcome,covered_turn_deg=turned,
-                end_observation_id=r.memory.current['observation_id'],
-                candidate=copy.deepcopy(best_candidate),
-                best_cue=copy.deepcopy(best_cue))
-            # Saved absolute view bearings are always rebound to the CURRENT
-            # robot heading before the main model sees them.
+            # Saved absolute view bearings are rebound to the CURRENT heading.
+            # Both the return receipt and persisted observation task agree.
             live_heading=math.degrees(r.motion_controller.pose()['heading'])
             for hypothesis in (best_candidate,best_cue):
                 if hypothesis:
                     hypothesis['relative_turn_deg_from_current']=round(
                         (hypothesis['heading_deg']-live_heading+180)%360-180,2)
+            record.update(outcome=outcome,covered_turn_deg=turned,
+                end_observation_id=r.memory.current['observation_id'],
+                candidate=copy.deepcopy(best_candidate),
+                best_cue=copy.deepcopy(best_cue))
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_owner='visual_perception_vlm',
