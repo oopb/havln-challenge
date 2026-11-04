@@ -41,6 +41,7 @@ class NavigationToolMenuTests(unittest.TestCase):
         compact=offered['observe_for_goal']['parameters']
         self.assertNotIn('direction',compact['properties'])
         self.assertNotIn('checkpoint_degrees',compact['properties'])
+        self.assertNotIn('look',compact['properties'])
         self.assertTrue(Draft7Validator(compact).is_valid(dict(
             objective='Find accessible stair entry',
             target_types=['stairs','stair_entry'],sweep_degrees=180)))
