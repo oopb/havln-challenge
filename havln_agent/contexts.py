@@ -115,6 +115,27 @@ def waypoint_summary(path):
     return value
 
 
+def compact_vlm_reports(reports, limit=8):
+    """Retain unfiltered VLM statements with real frame/yaw/pitch citations.
+
+    Truncate prose only to keep the cheap NavigationAgent's context bounded;
+    never discard a report for mismatched target vocabulary or low confidence.
+    Full structured outputs are kept in observation records/diagnostics.
+    """
+    results=[]
+    for report in list(reports or [])[-limit:]:
+        item=fields(report,(
+            'observation_id','heading_deg','pitch_deg','target_visible',
+            'target_type','target_kind','confidence','box','evidence',
+            'uncertainty','next_action','reason','relative_turn_deg_from_current',
+            'usable_for_live_safety'))
+        for name,max_chars in (('evidence',180),('uncertainty',120),('reason',90)):
+            if isinstance(item.get(name),str):
+                item[name]=item[name][:max_chars]
+        results.append(item)
+    return results
+
+
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
@@ -159,6 +180,7 @@ def tool_summary(result):
             planned_sweep_deg=result.get('planned_sweep_deg'),
             best_candidate=result.get('best_candidate'),
             best_cue=result.get('best_cue'),
+            visual_reports=compact_vlm_reports(result.get('visual_reports')),
             observation_owner=result.get('observation_owner'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
@@ -542,6 +564,11 @@ def navigation_context(runtime):
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
             best_cue=recent_search.get('best_cue'),
+            visual_reports=[dict(report,
+                relative_turn_deg_from_current=round(
+                    (report['heading_deg']-math.degrees(pose['heading'])+180)%360-180,2))
+                for report in compact_vlm_reports(
+                    recent_search.get('visual_reports'))],
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
     liveness=getattr(runtime,'navigation_liveness',None) or {}
@@ -633,6 +660,12 @@ def compact_navigation_context(state):
                 best_candidate=v.get('best_candidate'),
                 best_cue=v.get('best_cue'),
                 checked_views=v.get('checked_views',[])[-3:])
+            # Older or synthetic tool receipts may not have an observation
+            # search record. Otherwise latest_observation_task is the single
+            # canonical location for direct VLM evidence (avoid duplication).
+            if not (state.get('latest_observation_task') or {}).get('visual_reports'):
+                out['last_tool']['observation_task']['visual_reports']=compact_vlm_reports(
+                    v.get('visual_reports'))
         if t.get('measured_collision'):
             out['last_tool']['measured_collision']=fields(t['measured_collision'],
                 ('reason','clearance','motion_state'))
@@ -641,6 +674,7 @@ def compact_navigation_context(state):
         out['latest_observation_task']=dict(mode=t.get('mode'),
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
             candidate=t.get('candidate'),best_cue=t.get('best_cue'),
+            visual_reports=compact_vlm_reports(t.get('visual_reports')),
             searched_headings_deg=t.get('searched_headings_deg',[])[-4:])
     if state.get('local_geometry'):out['local_geometry']=state['local_geometry'][:3]
     if state.get('historical_hint'):
