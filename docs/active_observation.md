@@ -1,96 +1,106 @@
-# Active observation subtask (RoboWorld HA-VLN Track 2)
+# VLM-led active observation — RoboWorld HA-VLN 2.0
 
-## Purpose
+## Responsibility split
 
-Previously, `turn_and_observe` returned to Navigation Agent after every 1–3
-atomic turns or looks. On the stair episode this caused repeated scans of the
-same camera positions and dozens of high-latency navigation LLM decisions before
-the first forward step.
+**NavigationAgent** is the strategic decision-maker: choose the current
+language goal, decide whether new visual evidence is needed, specify the
+observation objective and open-vocabulary targets, then decide if/where/how
+far to navigate or whether to request an explicit geometry inspection.
 
-`observe_for_goal` delegates **a bounded visual search**, not movement.
-Navigation Agent chooses the objective, static target types, left/right direction
-and sweep area. ObservationController executes legal Habitat TURN actions and
-collects every RGB-D frame. VLM only checks keyframes after 30 or 45 degrees,
-with at most one VLM-suggested LOOK refinement per task. A medium/high-confidence
-visible target with a bounding box and concrete evidence ends the task early.
+**VisualPerception (VLM)** owns the **whole camera observation subtask**.
+At each checkpoint it receives the current genuine RGB image, task and
+goal, absolute current heading/pitch, remaining turn budget, and a short
+history of previously inspected real views and prior target hypotheses.
+It chooses the **next camera action** (turn left/right by 15–90 calibrated
+degrees, look up/down, or finish), then inspects the actual fresh post-action
+image. There is **no NavigationAgent inference between camera steps**.
 
-No single VLM call can certify human safety, ground support or traversability.
-Navigation Agent must use fresh Geometry/Terrain and local-waypoint checks before
-any `MOVE_FORWARD`. An in-progress local navigation goal must be explicitly
-cancelled before starting a wide scan; scanning does not silently undo alignment.
+**ObservationController** applies calibrated TURN/LOOK actions, persists
+real frame/angle receipts, enforces pitch/turn/episode limits and prevents
+returning to an already-inspected heading/pitch within the same task.
+No forward movement, simulator ground-truth reads or automatic geometry
+probes occur inside observation.
 
-## Request
+## Recommended tool call
 
 ```json
 {
   "tool": "observe_for_goal",
   "args": {
-    "objective": "Find an accessible-looking downward stair entry",
-    "target_types": ["stairs_down", "stair_entry"],
-    "direction": "left",
-    "sweep_degrees": 90,
-    "checkpoint_degrees": 30,
-    "look": "down"
+    "objective": "Locate an actual approach or entry to the downward stairs",
+    "target_types": ["stairs", "stair_entry"],
+    "sweep_degrees": 180
   }
 }
 ```
 
-The two optional parameters default to `checkpoint_degrees=30`, `look=none`.
-Allowed sweep sizes are 30, 60, 90 and 120 degrees (two to eight atomic
-TURN actions on the current 15-degree camera calibration). Every TURN/LOOK
-still counts toward `max_steps`; the underlying actuator reserves one STOP.
-The regular `tool_max_actions=3` continues to constrain existing short
-action tools; this macro has its own angle and refinement bounds.
+`direction` and `checkpoint_degrees` should be **omitted**. With direction
+omitted, VLM chooses all next view bearings and tilt actions. Omitted
+`sweep_degrees` defaults to **360°**, though VLM can stop as soon as it has
+meaningful visual evidence. A `look` field may initialize camera pitch.
 
-## Response and lifecycle
+For backward compatibility, explicit `direction=left|right` still uses the
+legacy scripted sweep at fixed checkpoints. Ordinary NavigationAgent decisions
+do not advertise this legacy variant or the standalone
+`turn_and_observe` micro-turn tool (except orientation-only tasks).
 
-The tool responds `status=OK` and
-`outcome=TARGET_CANDIDATE_FOUND` with a `best_candidate` containing:
-`target_type`, `confidence`, `box` (normalized `[left,top,right,bottom]`),
-`evidence`, `observation_id`, `heading_deg`, `pitch_deg`,
-`geometry.forward_status` and `usable_for_live_safety=false`.
+## VLM output
 
-If none is localized within the sweep, returns
-`outcome=SEARCH_REGION_COVERED_NO_MATCH` with `checkpoints` and precise
-`covered_turn_deg`; this does **not** stop the robot or prevent a later task.
-Budget exhaustion or visual API failure returns `status=PARTIAL` with an
-`INTERRUPTED` or `VISION_UNAVAILABLE` outcome, preserving executed actions.
+`vlm_guided_observation` returns one structured visual checkpoint:
 
-Observation history and checkpoint evidence are recorded in `memory.json`,
-tool ledger and episode traces. Revisited static views can reuse prior
-vision hypotheses **only for the same objective and target types** within
-the same subgoal and comparable pose. Reused evidence is explicitly marked
-historical and never authorizes movement.
+- `target_visible`, `target_type`, `confidence`, normalized `box`
+- `evidence`, `uncertainty`, and `target_kind`:
+  `ENTRY`, `APPROACH`, `TARGET` (localized object), `CUE`, `UNKNOWN`
+- `next_action`: `turn_left`, `turn_right`, `look_up`,
+  `look_down`, or `finish`; for turns, `turn_deg` is 15–90
+- a short `reason` explaining the visual decision
 
-## Boundaries
+A staircase seen beyond a railing can be a **CUE** without a verified
+accessible entrance. Cues are preserved but do **not** automatically
+yield `TARGET_CANDIDATE_FOUND`. The VLM should refine the view
+when an entry remains uncertain. A localized, evidence-backed actionable
+target yields the named observation ID, bounding box, heading, pitch and
+current-relative bearing, with `usable_for_live_safety=false`.
 
-- Task Planner: semantic sequence and milestone verification.
-- Navigation Agent: which target to look for; where to scan; how to navigate
-  afterwards.
-- ObservationController: TURN/LOOK batching, coverage, novelty and VLM
-  checkpoint timing. Never moves forward.
-- Visual Perception: one frame → typed visual candidate and evidence,
-  optional one-time pitch refinement request.
-- Local Motion Controller and runtime safety: local target execution and
-  **fresh** Depth / support / person checks before every forward step.
-- Memory Service: view-history reuse and already-covered directions.
+## Returned result and safety
 
-## Measure improvement
+`observe_for_goal` returns one consolidated tool receipt with
+`outcome`, `best_candidate` or `best_cue`, real view references,
+`covered_turn_deg` and `observation_owner=visual_perception_vlm`.
+The next NavigationAgent decision receives **only compact evidence**,
+not all raw checkpoint JSON. Full details are retained in diagnostics
+and requestable memory records.
 
-Compare equal-budget and same-seed diagnostic runs against smoke-500-14:
-Navigation Agent decisions per 100 atomic actions, repeat-view share,
-time/steps to first `MOVE_FORWARD`, safe forward actions,
-localized target coverage, and verified stair descent.
-A shorter run or fewer VLM calls alone is **not** task success.
+VLM has no power to invoke `MOVE_FORWARD`, `STOP`, physical safety
+clearance or semantic task completion. Geometry and terrain checks remain
+an **explicit NavigationAgent tool choice** in this simulator-specific
+experimental pipeline, and Habitat remains responsible for its physics.
 
-## Diagnostic command
+A repeated view, budget exhaustion or unavailable visual API returns a
+structured non-success receipt rather than making up target coordinates
+or starting a forced movement. Existing in-progress navigation targets
+are preserved by camera observation.
+
+## Token/cost measurement
+
+The API ledger now reports `system_chars`,
+`tool_protocol_chars` and `context_chars_before_encoding`, alongside
+provider token usage per role. Evaluate the same episode and compare:
+
+- NavigationAgent requests per 100 atomic actions
+- navigation input tokens / successful forward attempt
+- VLM requests and visual input tokens
+- repeated views, first forward time/step, observed stair entry evidence
+- physical progress, obstacle collisions and verified task completion
+
+Fewer model calls alone do **not** imply better navigation.
+
+## Verification
 
 ```bash
-cd /toolkit
-python -u scripts/run_api_agent.py --config configs/agent.yaml \\
-  --output-dir /workspace/smoke-active-observation-100 \\
-  --splits val_seen --episode-limit 1 --max-steps 100 --progress-interval 2
+python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
+python -m unittest discover -s tests -p 'test_active_observation.py' -v
 ```
 
-Use a fresh `--output-dir` after code changes. All real Habitat
-end-to-end validation remains to be done on the user's simulator machine.
+Closed-loop Habitat measurements still require rerunning on the user's
+simulation host.
