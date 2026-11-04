@@ -408,7 +408,10 @@ class APIClient:
         response_format = {'type': config['response_format']}
         if config['response_format'] == 'json_schema':
             response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)
-        request_metrics = dict(native_schema_chars=len(canonical(response_format))
+        request_metrics = dict(system_chars=len(system),
+            tool_protocol_chars=len(protocol or ''),
+            context_chars_before_encoding=context_chars,
+            native_schema_chars=len(canonical(response_format))
             if config['response_format'] == 'json_schema' else 0,
             schema_channels=['response_format'] if config['response_format']=='json_schema' else
                 ['compact_protocol'] if protocol else ['system'])
