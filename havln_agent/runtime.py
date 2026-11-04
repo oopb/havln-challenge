@@ -244,11 +244,18 @@ class AgentRuntime(ToolExecutor):
         # in the next body sweep. Measured occupancy remains a motion veto.
         return None
 
-    def _observe_for_goal(self, objective, target_types, direction, sweep_degrees,
-                          checkpoint_degrees=30, look='none', force_recheck=False):
+    def _observe_for_goal(self, objective, target_types, direction=None,
+                          sweep_degrees=360, checkpoint_degrees=30,
+                          look='none', force_recheck=False):
+        # The VLM owns the camera subtask unless the caller explicitly asks
+        # for the legacy fixed-direction calibrated scan.
+        if direction is None:
+            return self.observation_controller.scan_vlm(
+                objective,target_types,sweep_degrees=sweep_degrees,
+                look=look,force_recheck=force_recheck)
         return self.observation_controller.scan(
-            objective, target_types, direction, sweep_degrees, checkpoint_degrees,
-            look, force_recheck=force_recheck)
+            objective,target_types,direction,sweep_degrees,
+            checkpoint_degrees,look,force_recheck=force_recheck)
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
