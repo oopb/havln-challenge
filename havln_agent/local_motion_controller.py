@@ -52,9 +52,12 @@ class LocalMotionController:
             # Only a changed public frame supports treating the new view as
             # a different physical stance. Neither a receipt nor a command
             # certifies the nominal 0.25m of movement.
-            if measurement and measurement.get('observed_frame_change', False):
-                self.viewpoint_generation += 1
             if not measurement or measurement['status'] != 'ESTIMATED':
+                # Unregistered but visibly changed steps require a new
+                # observation stance. Registered motion already changes x/z
+                # naturally and should not fragment place memory every step.
+                if measurement and measurement.get('observed_frame_change',False):
+                    self.viewpoint_generation += 1
                 self.unknown_forward_actions += 1
                 self.global_chain_continuous = False
                 # Preserve metric uncertainty as UNKNOWN (via pose confidence)
