@@ -120,6 +120,9 @@ def tool_summary(result):
         'requested_actions','executed_actions','executed_motion','end_observation_id',
         'movement_intent_feedback',
         'remaining_distance','endpoint_estimate_valid','reach_basis',
+        'action_intent_completed','remaining_commanded_forward_actions',
+        'nominal_remaining_command_distance_m','commanded_forward_actions',
+        'commanded_forward_horizon','odometry_unknown_during_route',
         'vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
     if result.get('status') in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION') or result.get('safety'):
         collision=collision_summary(result)
