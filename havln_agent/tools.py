@@ -554,8 +554,10 @@ class ToolExecutor:
         # Action completion is NOT spatial arrival. Even 100% executed command
         # steps cannot certify robot displacement in Habitat's collision world.
         attempt=self.memory.active_attempt or {}
-        horizon=attempt.get('forward_action_horizon',max(
-            1,math.ceil((path['distance']-1e-6)/self.camera.forward_step)))
+        step_size=getattr(getattr(self,'camera',None),'forward_step',0.25)
+        horizon=attempt.get('forward_action_horizon')
+        if horizon is None:
+            horizon=max(1,math.ceil((path.get('distance',step_size)-1e-6)/step_size))
         forwards=attempt.get('forward_actions',0)
         remaining_actions=max(0,horizon-forwards)
         action_complete=status=='ACTIONS_COMPLETED'
