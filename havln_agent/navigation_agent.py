@@ -126,8 +126,12 @@ class NavigationAgent:
             # One model-authored route attempt has already been issued at
             # this stance: don't issue a second, conflicting stall advisory.
             advisory=None
+        vlm_observation_just_finished=(
+            (context.get('last_tool') or {}).get('observation_owner')
+            == 'visual_perception_vlm')
         full_circle_commit=(
             bool(panorama.get('all_azimuths_observed')) and not orientation
+            and not vlm_observation_just_finished
             and getattr(self,'_panorama_committed_signature',None)!=signature
             and 'navigate_relative' in runtime.registry)
         # This is a temporary tool-choice contract, NOT an autonomous move:
