@@ -27,12 +27,25 @@ probes occur inside observation.
 {
   "tool": "observe_for_goal",
   "args": {
-    "objective": "Locate an actual approach or entry to the downward stairs",
-    "target_types": ["stairs", "stair_entry"],
+    "objective": "Find the descending stairs and inspect whether the visible treads end at a flat landing or floor. Distinguish a nearby stair-to-floor transition from a distant floor view; report uncertainty.",
+    "target_types": ["stairs", "landing", "floor"],
     "sweep_degrees": 180
   }
 }
 ```
+
+The `objective` now states **both** the current visual question and the
+visible cue(s) one might expect near the END of the current semantic milestone,
+if a meaningful endpoint is visually identifiable. NavigationAgent writes
+this reference in the **existing objective string**; no new tool argument,
+VLM field, verification call, or extra camera sweep is added. For a descent,
+the cue might be descending treads transitioning to level flooring; for a
+doorway, the visible opening/interior beyond the door. The VLM checks only
+the current real RGB evidence and reports absence or uncertainty rather than
+assuming the endpoint is present. Seeing a distant floor or room is NOT proof
+that the robot has reached it. This also must NOT make the VLM suppress other
+useful visual facts or unilaterally change the goal. Only NavigationAgent
+interprets the results with actual motion history.
 
 `direction` and `checkpoint_degrees` should be **omitted**. With direction
 omitted, VLM chooses all next view bearings and tilt actions. Omitted
