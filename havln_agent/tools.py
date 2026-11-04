@@ -160,7 +160,7 @@ class ToolExecutor:
         except (RuntimeError,OSError) as error:
             result=dict(status='TOOL_ERROR',reason=str(error)[:300],error_type=type(error).__name__)
         actions=[a['action'] for a in self.memory.actions[before:]]
-        if actions and result['status'] not in ('OK','PARTIAL','TARGET_REACHED','FINISHED','EXECUTED','NO_NEW_INFORMATION'):
+        if actions and result['status'] not in ('OK','PARTIAL','TARGET_REACHED','ACTIONS_COMPLETED','FINISHED','EXECUTED','NO_NEW_INFORMATION'):
             result.update(interrupted_status=result['status'],status='PARTIAL')
         args=call.get('args',{})
         # Navigation has NO per-tool atomic budget: count actual authorized
@@ -191,17 +191,20 @@ class ToolExecutor:
             uncertain=bool(attempt.get('unknown_motion_seen'))
             remaining_turns=None
             forward_budget=None
-            if active and not uncertain:
-                target=self.motion_controller.target
-                pose=self.motion_controller.pose()
-                dx,dz=target[0]-pose['x'],target[1]-pose['z']
-                if math.hypot(dx,dz)>=self.camera.forward_step*.6:
+            if active and attempt.get('target'):
+                next_action=self.motion_controller.route_action(
+                    attempt['target'],attempt.get('forward_actions',0),
+                    attempt.get('forward_action_horizon',1))
+                if next_action in ('TURN_LEFT','TURN_RIGHT'):
+                    heading_goal=attempt['target']['source']['pose']['heading']+attempt['target']['angle']
                     heading_error=abs(angle_delta(
-                        math.atan2(-dx,dz),pose['heading']))
-                    stride=math.radians(self.camera.turn_angle)
+                        heading_goal,self.motion_controller.heading))
                     remaining_turns=max(0,math.ceil(
-                        heading_error/stride-.5-1e-8))
-                    forward_budget=remaining_turns+1
+                        heading_error/math.radians(self.camera.turn_angle)-.5-1e-8))
+                else:
+                    remaining_turns=0
+                forward_budget=remaining_turns+int(
+                    attempt.get('forward_actions',0)<attempt.get('forward_action_horizon',0))
             result['movement_intent_feedback']=dict(
                 executed_turn_actions=turns,
                 executed_forward_actions=forwards,
@@ -216,7 +219,11 @@ class ToolExecutor:
                 min_atomic_actions_until_first_forward_attempt=forward_budget,
                 first_forward_still_requires_live_safety=False,
                 geometry_diagnostics_model_invoked_only=True,
-                endpoint_estimate_valid=not uncertain,
+                endpoint_estimate_valid=result.get('endpoint_estimate_valid',False),
+                action_intent_completed=result.get('action_intent_completed',False),
+                remaining_commanded_forward_actions=result.get(
+                    'remaining_commanded_forward_actions'),
+                movement_feedback_is_evidence_not_completion=True,
                 interpretation=(
                     'only_turns_executed_forward_not_attempted'
                     if turns and not forwards else
@@ -273,6 +280,10 @@ class ToolExecutor:
             if action == 'MOVE_FORWARD' else None
         changed_depth = array_hash(after.depth) != array_hash(before.depth)
         changed_rgb = array_hash(after.rgb) != array_hash(before.rgb)
+        if motion is not None:
+            # Viewpoint separation is observable even when metric registration
+            # fails. Never treat the commanded 0.25m as measured translation.
+            motion = dict(motion, observed_frame_change=changed_depth or changed_rgb)
         self.motion_controller.accept_feedback(action,motion)
         feedback = dict(
             visual_change=changed_depth or changed_rgb,
@@ -315,10 +326,17 @@ class ToolExecutor:
             # an ordinary odometry gap. Never infer a collision or ground-truth
             # translation from this alone; but halt this local route so the
             # model can pick a different short motion/observation strategy.
-            alert_reason=(
-                'no_observed_frame_change_after_forward'
-                if motion['status'] != 'ESTIMATED' and not changed_rgb and not changed_depth
-                else 'motion_estimate_unknown' if motion['status']!='ESTIMATED' else None)
+            if motion['status'] != 'ESTIMATED':
+                self.memory.event('odometry_diagnostic_unknown',
+                    action_step=len(self.memory.actions)-1,
+                    reason=motion.get('reason'),
+                    observation_before=feedback['observation_before'],
+                    observation_after=feedback['observation_after'],
+                    does_not_reset_route=True)
+            # Only a demonstrably unchanged frame can interrupt a route.
+            # Low-consensus feature matching by itself is NOT a movement veto.
+            alert_reason=('no_observed_frame_change_after_forward'
+                          if not changed_rgb and not changed_depth else None)
             if alert_reason:
                 alert = dict(action_step=len(self.memory.actions)-1, reason=alert_reason, motion_policy=policy,
                     observation_before=feedback['observation_before'], observation_after=feedback['observation_after'],
@@ -533,156 +551,126 @@ class ToolExecutor:
         return dict(status='CANCELLED', reason=reason)
 
     def _navigation_feedback(self, path, checked, status, reason=None, **extra):
-        endpoint = checked['original_target']
-        attempt = self.memory.active_attempt
-        uncertain = bool(attempt and attempt.get('unknown_motion_seen'))
-        # The old endpoint's distance is not measurable once an UNKNOWN RGB-D
-        # translation has broken the pose chain. Report None, not false meters.
-        remaining = (None if uncertain else math.hypot(
-            endpoint[0] - self.motion_controller.x,
-            endpoint[1] - self.motion_controller.z))
-        reached = status == 'TARGET_REACHED'
-        path['execution_status'] = 'IN_PROGRESS' if status == 'PARTIAL' else status
-        # The old endpoint is invalid after uncertain translation or a confirmed
-        # collision. Keep PARTIAL/NEEDS_VIEW for same-path continuation, but do
-        # not offer a stale waypoint as an executable route.
-        if reached or status in ('INTERRUPTED','BLOCKED','REQUIRES_ATTENTION','STALE_TARGET'):
-            self.memory.finish_attempt(status, reason)
-            self.motion_controller.target = None
+        # Action completion is NOT spatial arrival. Even 100% executed command
+        # steps cannot certify robot displacement in Habitat's collision world.
+        attempt=self.memory.active_attempt or {}
+        horizon=attempt.get('forward_action_horizon',max(
+            1,math.ceil((path['distance']-1e-6)/self.camera.forward_step)))
+        forwards=attempt.get('forward_actions',0)
+        remaining_actions=max(0,horizon-forwards)
+        action_complete=status=='ACTIONS_COMPLETED'
+        path['execution_status']=('IN_PROGRESS' if status=='PARTIAL' else status)
+        if status in ('ACTIONS_COMPLETED','TARGET_REACHED','INTERRUPTED',
+                      'BLOCKED','REQUIRES_ATTENTION','STALE_TARGET'):
+            self.memory.finish_attempt(status,reason)
+            self.motion_controller.target=None
         elif self.memory.active_attempt:
-            attempt.update(result='IN_PROGRESS' if status == 'PARTIAL' else status, reason=reason)
-            if status != 'PARTIAL':
-                attempt['interruptions'].append(dict(status=status, reason=reason,
-                                                      observation_id=self.memory.current['observation_id']))
-        if (uncertain and status == 'REQUIRES_ATTENTION'
-                and reason == 'relative_forward_horizon_exhausted_without_verified_pose'):
-            # Current post-action RGB-D is a NEW local anchor only; it does not
-            # recover the old global displacement or certify endpoint arrival.
-            anchor = self.memory.current['observation_id']
-            established = self.motion_controller.anchor_relative_frame(anchor)
-            if 'recovery' in extra:
-                extra['recovery'].update(
-                    local_anchor_observation_id=anchor if established else None,
-                    coordinate_scope='new_local_relative_only',
-                    old_endpoint_valid=False,
-                    requires_new_waypoint=True,
-                    missing_translation_still_unknown=True)
-        return dict(status=status, reason=reason, target_reached=reached, displacement_verified=False,
-                    endpoint_estimate_valid=not uncertain,
-                    reach_basis=('unverified_relative_actions' if uncertain else
-                                 'registered_rgbd_translation_estimate'),
-                    original_target=list(endpoint),
-                    pending_target=list(self.motion_controller.target) if self.motion_controller.target is not None else None,
-                    remaining_distance=remaining,
-                    remaining_path=dict(path_id=path['id'], original_endpoint_xz_m=list(endpoint),
-                                        endpoint_estimate_valid=not uncertain,
-                                        status=path['execution_status'], completed=reached),
-                    executable_segment=self.executable_segment or {},
-                    validation=checked.get('validation', {}), **extra)
+            attempt.update(result='IN_PROGRESS' if status=='PARTIAL' else status,
+                           reason=reason)
+            if status!='PARTIAL':
+                attempt.setdefault('interruptions',[]).append(dict(
+                    status=status,reason=reason,
+                    observation_id=self.memory.current['observation_id']))
+        return dict(status=status,reason=reason,
+            target_reached=False,action_intent_completed=action_complete,
+            displacement_verified=False,endpoint_estimate_valid=False,
+            reach_basis='atomic_action_receipts_not_verified_metric_arrival',
+            original_target=list(checked['original_target']),
+            pending_target=list(self.motion_controller.target)
+                if self.motion_controller.target is not None else None,
+            remaining_distance=None,
+            remaining_commanded_forward_actions=remaining_actions,
+            nominal_remaining_command_distance_m=round(
+                remaining_actions*self.camera.forward_step,3),
+            commanded_forward_actions=forwards,
+            commanded_forward_horizon=horizon,
+            odometry_unknown_during_route=bool(attempt.get('unknown_motion_seen')),
+            unknown_observation_ids=list(attempt.get('unknown_observation_ids',[])),
+            remaining_path=dict(path_id=path['id'],
+                original_endpoint_xz_m=list(checked['original_target']),
+                endpoint_estimate_valid=False,
+                status=path['execution_status'],
+                completed=False,action_intent_completed=action_complete),
+            executable_segment=self.executable_segment or {},
+            validation=checked.get('validation',{}),**extra)
 
     def _execute_waypoint(self, target):
         if target != 'current':
-            path = self.paths.get(target)
+            path=self.paths.get(target)
             if path is None:
-                return dict(status='INVALID_TARGET', reason='unknown_tool_generated_path_id')
-            if path.get('execution_status') == 'REQUIRES_ATTENTION':
-                return dict(status='REQUIRES_ATTENTION', reason='previous_motion_requires_new_local_path_or_cancellation')
-            checked = self._revalidate_path(path)
-            if checked['status'] != 'OK':
+                return dict(status='INVALID_TARGET',reason='unknown_tool_generated_path_id')
+            checked=self._revalidate_path(path)
+            if checked['status']!='OK':
                 return checked
             self._cancel_local_navigation('model_selected_new_target')
-            self.memory.start_attempt(path, self.motion_controller.pose())
-            # Preserve the original selected endpoint; a checked fragment never replaces it.
-            self.motion_controller.target = tuple(checked['original_target'])
-            self.memory.active_attempt['original_endpoint_xz_m'] = list(self.motion_controller.target)
-            # A waypoint is at most two atomic forward steps in the current
-            # generator. A failed visual registration must never create an
-            # unlimited blind-movement budget or fake measured distance.
-            self.memory.active_attempt['forward_action_horizon'] = max(1, math.ceil(
-                (path['distance'] - 1e-6) / self.camera.forward_step))
-            self.memory.active_attempt['forward_actions'] = 0
-            self.memory.active_attempt['unknown_motion_seen'] = False
-            self.memory.active_attempt['unknown_observation_ids'] = []
-        elif self.motion_controller.target is None:
-            return dict(status='INVALID_TARGET', reason='no_pending_target')
+            self.memory.start_attempt(path,self.motion_controller.pose())
+            # Retain the historical endpoint for display ONLY. Commanded
+            # bearing and finite forward action count drive execution.
+            self.motion_controller.target=tuple(checked['original_target'])
+            attempt=self.memory.active_attempt
+            attempt['original_endpoint_xz_m']=list(self.motion_controller.target)
+            attempt['forward_action_horizon']=max(1,math.ceil(
+                (path['distance']-1e-6)/self.camera.forward_step))
+            attempt['forward_actions']=0
+            attempt['unknown_motion_seen']=False
+            attempt['unknown_observation_ids']=[]
+        elif self.motion_controller.target is None or not self.memory.active_attempt:
+            return dict(status='INVALID_TARGET',reason='no_pending_target')
         else:
-            path = self.paths[self.memory.active_attempt['target']['id']]
-            checked = dict(original_target=list(self.motion_controller.target))
-            if path.get('execution_status') == 'REQUIRES_ATTENTION':
-                return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                    'previous_motion_requires_new_local_path_or_cancellation')
-        # No per-call atomic action quota. A model-selected finite route
-        # executes until target arrival, fresh-sensor/pose interruption,
-        # or the remaining Episode action budget (STOP reserved).
-        # The global episode limit is the only hard action-count bound.
-        for _ in range(max(0, self.config['max_steps'] - 1 - len(self.memory.actions))):
-            attempt = self.memory.active_attempt
-            unverified = bool(attempt and attempt.get('unknown_motion_seen'))
-            if unverified and attempt['forward_actions'] >= attempt['forward_action_horizon']:
-                # We have performed the bounded relative route, but cannot
-                # claim target arrival based on commanded displacement alone.
-                return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                    'relative_forward_horizon_exhausted_without_verified_pose',
-                    recovery=dict(mode='REANCHOR_CURRENT_RGBD',
-                        executed_forward_actions=attempt['forward_actions'],
-                        horizon=attempt['forward_action_horizon'],
-                        unknown_observation_ids=attempt['unknown_observation_ids'],
-                        next_step='new_local_waypoints_from_current_rgbd_not_repeat_semantic_scan'))
-            # After a failed visual translation, x/z are deliberately not
-            # advanced. Continue only a straight, short-horizon intent under
-            # NEW odometry observations; do not steer toward stale x/z.
-            action = 'MOVE_FORWARD' if unverified else self.motion_controller.next_action()
+            path=self.paths[self.memory.active_attempt['target']['id']]
+            checked=dict(original_target=list(self.motion_controller.target))
+        # The model-chosen finite action sequence is independent of optional
+        # translation fitting. Only the global Episode budget limits actions.
+        for _ in range(max(0,self.config['max_steps']-1-len(self.memory.actions))):
+            attempt=self.memory.active_attempt
+            action=self.motion_controller.route_action(
+                path,attempt['forward_actions'],attempt['forward_action_horizon'])
             if action is None:
-                return self._navigation_feedback(path, checked, 'TARGET_REACHED', 'original_endpoint_reached')
-            validation = (self.motion_controller.validate(self, path, resume=True,
-                uncertain_straight=True) if unverified else self._revalidate_path(path, resume=True))
-            if validation['status'] != 'OK':
+                return self._navigation_feedback(
+                    path,checked,'ACTIONS_COMPLETED',
+                    'model_requested_forward_actions_executed')
+            validation=self._revalidate_path(path,resume=True)
+            if validation['status']!='OK':
                 checked.update(validation)
-                self.executable_segment = None
-                return self._navigation_feedback(path, checked, validation['status'], validation.get('reason'),
-                                                 **({'safety': validation['safety']} if 'safety' in validation else {}))
-            checked = validation
-            self.executable_segment = checked['executable_segment']
-            result = self._step(action)
-            if result['status'] != 'EXECUTED':
-                self.executable_segment = None
-                return self._navigation_feedback(path, checked, result['status'], result.get('reason'),
-                                                 **({'safety': result['safety']} if 'safety' in result else {}))
-            if action == 'MOVE_FORWARD':
-                attempt = self.memory.active_attempt
-                if attempt:
-                    attempt['forward_actions'] += 1
-                alert = result['feedback'].get('motion_alert') or {}
+                self.executable_segment=None
+                return self._navigation_feedback(
+                    path,checked,validation['status'],validation.get('reason'))
+            checked=validation
+            self.executable_segment=checked['executable_segment']
+            result=self._step(action)
+            if result['status']!='EXECUTED':
+                self.executable_segment=None
+                return self._navigation_feedback(
+                    path,checked,result['status'],result.get('reason'),
+                    **({'safety':result['safety']} if 'safety' in result else {}))
+            if action=='MOVE_FORWARD':
+                attempt=self.memory.active_attempt
+                attempt['forward_actions']+=1
                 if not result['feedback']['translation_supported']:
-                    # Register uncertainty BEFORE any early interruption.
-                    # _navigation_feedback reads unknown_motion_seen to avoid
-                    # showing a fabricated remaining distance / valid endpoint.
-                    if attempt:
-                        attempt['unknown_motion_seen'] = True
-                        attempt['unknown_observation_ids'].append(
-                            self.memory.current['observation_id'])
-                    self.executable_segment = None
-                if alert and alert.get('reason') != 'motion_estimate_unknown':
-                    # A byte-identical post-step camera view cannot justify a
-                    # blind second forward. Yield to NavigationAgent instead
-                    # of exhausting the same relative-forward horizon.
-                    return self._navigation_feedback(path, checked, 'REQUIRES_ATTENTION',
-                        alert['reason'], motion_alert=alert)
+                    # Diagnostic fact only: neither steer to the stale metric
+                    # endpoint nor reset the active model-selected route.
+                    attempt['unknown_motion_seen']=True
+                    attempt['unknown_observation_ids'].append(
+                        self.memory.current['observation_id'])
+                alert=result['feedback'].get('motion_alert') or {}
+                if alert.get('reason')=='no_observed_frame_change_after_forward':
+                    return self._navigation_feedback(
+                        path,checked,'REQUIRES_ATTENTION',
+                        alert['reason'],motion_alert=alert)
             if self.done:
-                return self._navigation_feedback(path, checked, 'INTERRUPTED', 'environment_done')
-        # A route can reach its endpoint on the LAST permitted non-STOP
-        # action. Confirm arrival before reporting global budget exhaustion.
-        attempt = self.memory.active_attempt
-        if not (attempt and attempt.get('unknown_motion_seen')):
-            if self.motion_controller.next_action() is None:
-                return self._navigation_feedback(path, checked, 'TARGET_REACHED',
-                    'original_endpoint_reached')
-        # The episode budget is the ONLY action-count bound; STOP is reserved.
-        # Unknown translation cannot fabricate a completed route.
-        return self._navigation_feedback(path, checked, 'PARTIAL',
+                return self._navigation_feedback(
+                    path,checked,'INTERRUPTED','environment_done')
+        # Finite route may finish on the final non-STOP action.
+        attempt=self.memory.active_attempt
+        if (attempt and self.motion_controller.route_action(
+                path,attempt['forward_actions'],
+                attempt['forward_action_horizon']) is None):
+            return self._navigation_feedback(path,checked,
+                'ACTIONS_COMPLETED','model_requested_forward_actions_executed')
+        return self._navigation_feedback(path,checked,'PARTIAL',
             'episode_action_budget_exhausted',
-            remaining_episode_actions=max(0,
-                self.config['max_steps'] - 1 - len(self.memory.actions)))
+            remaining_episode_actions=max(
+                0,self.config['max_steps']-1-len(self.memory.actions)))
 
     def _update_progress(self, claim, evidence, observation_ids):
         self.refresh()
