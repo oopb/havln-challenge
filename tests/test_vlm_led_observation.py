@@ -83,6 +83,24 @@ class VLMObservationTests(unittest.TestCase):
         self.assertEqual(r.step_calls,['TURN_LEFT','TURN_LEFT'])
         self.assertEqual(len(r.visual_perception.calls),2)
 
+    def test_non_entry_object_can_be_a_visual_target(self):
+        r=FakeRuntime([])
+        r.visual_perception=VLMGuide([
+            guidance('finish',kind='TARGET',visible=True)])
+        result=ObservationController(r).scan_vlm(
+            'Locate a person',['entry'],sweep_degrees=90)
+        self.assertEqual(result['status'],'OK')
+        self.assertEqual(result['outcome'],'TARGET_CANDIDATE_FOUND')
+        self.assertEqual(result['best_candidate']['target_kind'],'TARGET')
+        self.assertEqual(r.step_calls,[])
+
+    def test_unregistered_changed_view_must_not_reuse_prior_scan(self):
+        from havln_agent.active_observation import comparable_scan_pose
+        pose=dict(x=0.,z=0.,heading=0.,pitch_deg=0,
+                  motion_epoch=0,viewpoint_generation=1)
+        self.assertFalse(comparable_scan_pose(
+            dict(pose,viewpoint_generation=0),pose))
+
     def test_budget_interrupt_preserves_evidence_without_claiming_arrival(self):
         r=FakeRuntime([],fail_on=2)
         r.visual_perception=VLMGuide([guidance('turn_right',90)])
