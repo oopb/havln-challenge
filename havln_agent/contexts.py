@@ -452,6 +452,7 @@ def navigation_context(runtime):
             direction=recent_search['direction'],
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
+            best_cue=recent_search.get('best_cue'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
     liveness=getattr(runtime,'navigation_liveness',None) or {}
@@ -541,7 +542,7 @@ def compact_navigation_context(state):
         t=state['latest_observation_task']
         out['latest_observation_task']=dict(mode=t.get('mode'),
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
-            candidate=t.get('candidate'),
+            candidate=t.get('candidate'),best_cue=t.get('best_cue'),
             searched_headings_deg=t.get('searched_headings_deg',[])[-4:])
     if state.get('local_geometry'):out['local_geometry']=state['local_geometry'][:3]
     if state.get('historical_hint'):
