@@ -583,7 +583,7 @@ class ToolExecutor:
             remaining_distance=None,
             remaining_commanded_forward_actions=remaining_actions,
             nominal_remaining_command_distance_m=round(
-                remaining_actions*self.camera.forward_step,3),
+                remaining_actions*step_size,3),
             commanded_forward_actions=forwards,
             commanded_forward_horizon=horizon,
             odometry_unknown_during_route=bool(attempt.get('unknown_motion_seen')),
