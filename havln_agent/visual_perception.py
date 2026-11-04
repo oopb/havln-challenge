@@ -35,7 +35,7 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
     evidence=dict(type='string',maxLength=400),
     uncertainty=dict(type='string',maxLength=300),
-    target_kind=dict(enum=['ENTRY','APPROACH','CUE','UNKNOWN']),
+    target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
     reason=dict(type='string',maxLength=250)))
@@ -55,7 +55,8 @@ SCAN_GUIDANCE_PROMPT = (
     'and open-vocabulary targets. A distant staircase/railing is a CUE, '
     'not necessarily a reachable ENTRY; if an entry or approach is unclear, '
     'inspect a DIFFERENT view or look down/up, not immediately finish. '
-    'Use target_kind ENTRY/APPROACH only if the visible image supports it; '
+    'Use target_kind ENTRY/APPROACH for a visible approach, TARGET for a '
+    'localized non-entry object/person, only if image evidence supports it; '
     'otherwise CUE or UNKNOWN. Return an exact normalized image box when '
     'target_visible and localized; do not hallucinate missing regions. '
     'Avoid already-observed yaw/pitch combinations and useless 15-degree '
