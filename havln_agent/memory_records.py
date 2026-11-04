@@ -226,7 +226,7 @@ class MemoryRecords:
 
     def record_tool(self, call, result, request_context):
         call,result,request_context=copy.deepcopy((call,result,request_context))
-        successful=result['status'] in {'OK','EXECUTABLE','LOCALIZED','RECORDED','VERIFIED','FINISHED','CANCELLED','PARTIAL','TARGET_REACHED'}
+        successful=result['status'] in {'OK','EXECUTABLE','LOCALIZED','RECORDED','VERIFIED','FINISHED','CANCELLED','PARTIAL','TARGET_REACHED','ACTIONS_COMPLETED'}
         related=[r for r in self.tool_ledger if not r['resolved'] and r['call']==call]
         record=dict(call_id=result['tool_call_id'],actor=request_context['actor'],
             subgoal_id=request_context['subgoal_id'],call=call,result=result,request_context=request_context,
