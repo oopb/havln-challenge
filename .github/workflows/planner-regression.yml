@@ -15,6 +15,7 @@ on:
       - "tests/test_smoke50013_waypoints.py"
       - "tests/test_active_observation.py"
       - "tests/test_vlm_led_observation.py"
+      - "tests/test_batch412_progress_and_observation.py"
       - "tests/test_optional_memory_and_vlm_targets.py"
       - "tests/test_navigation_tool_menu.py"
       - "tests/test_odometry_gap_navigation.py"
@@ -80,6 +81,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_navigation_tool_menu.py' -v
       - name: Check malformed optional memory never vetoes navigation and visual targets persist
         run: python -m unittest discover -s tests -p 'test_optional_memory_and_vlm_targets.py' -v
+      - name: Check Batch 4-12 progression and VLM candidate refinement
+        run: python -m unittest discover -s tests -p 'test_batch412_progress_and_observation.py' -v
       - name: Check VLM-owned full observation and compact navigation contracts
         run: python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
       - name: Check bounded navigation after uncertain RGB-D motion

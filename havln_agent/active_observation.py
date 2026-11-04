@@ -331,6 +331,13 @@ class ObservationController:
         best_cue=None
         best_candidate=None
         seen=set()
+        # Physical yaw visits help detect costly 180-degree undo sweeps even
+        # when a LOOK changed pitch. Only VLM checkpoints count as SEMANTIC
+        # observed views: a passing camera TURN is not visual evidence.
+        yaw_traversed=set()
+        last_turn_direction=None
+        candidate_found_checkpoint=None
+        max_candidate_refinement_views=3
         rejected_views=[]
         pending_view_correction=None
         consecutive_replans=0
@@ -351,6 +358,8 @@ class ObservationController:
                         (hypothesis['heading_deg']-live_heading+180)%360-180,2)
             record.update(outcome=outcome,covered_turn_deg=turned,
                 end_observation_id=r.memory.current['observation_id'],
+                candidate_refinement_views=(max(0,len(record['checkpoints'])-1
+                    - candidate_found_checkpoint) if candidate_found_checkpoint is not None else 0),
                 candidate=copy.deepcopy(best_candidate),
                 best_cue=copy.deepcopy(best_cue),
                 rejected_view_requests=copy.deepcopy(rejected_views))
@@ -363,6 +372,7 @@ class ObservationController:
                 objective=objective,target_types=list(target_types),
                 observation_owner='visual_perception_vlm',
                 view_replan_attempts=len(rejected_views),
+                candidate_refinement_views=record['candidate_refinement_views'],
                 planned_sweep_deg=sweep_degrees,covered_turn_deg=turned,
                 checkpoints=[dict(observation_id=p['observation_id'],
                     heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
@@ -399,6 +409,7 @@ class ObservationController:
                     'camera_returned_to_an_already_inspected_pose')
             if not retrying:
                 seen.add(key)
+            yaw_traversed.add(key[0])
             source=r.source()
             history=[dict(observation_id=p['observation_id'],
                 heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
@@ -447,11 +458,19 @@ class ObservationController:
                         motion_authorized=False),
                     usable_for_live_safety=False)
                 if visual['target_kind'] in ('ENTRY','APPROACH','TARGET'):
-                    best_candidate=candidate
+                    priority={'ENTRY':3,'APPROACH':2,'TARGET':1}
+                    current_rank=(priority.get((best_candidate or {}).get('target_kind'),0),
+                                  {'low':0,'medium':1,'high':2}.get(
+                                      (best_candidate or {}).get('confidence'),0))
+                    new_rank=(priority[visual['target_kind']],
+                              {'low':0,'medium':1,'high':2}[visual['confidence']])
+                    if best_candidate is None or new_rank>=current_rank:
+                        best_candidate=candidate
                     r.memory.note_semantics(source,[
                         visual['target_type']+': '+visual['evidence']])
-                    return finish('TARGET_CANDIDATE_FOUND')
-                if best_cue is None or visual['confidence']=='high':
+                    if candidate_found_checkpoint is None:
+                        candidate_found_checkpoint=len(record['checkpoints'])-1
+                elif best_cue is None or visual['confidence']=='high':
                     best_cue=candidate
             action=visual['next_action']
             # Rejected VLM camera choices are corrected with another VLM
@@ -466,6 +485,9 @@ class ObservationController:
                     requested_pitch_deg=requested_pitch))
                 consecutive_replans+=1
                 if consecutive_replans>max_replans:
+                    if best_candidate:
+                        return finish('TARGET_CANDIDATE_FOUND',
+                            reason='vlm_refinement_exhausted_same_frame_corrections')
                     return finish('REPEATED_VIEW_REQUEST','NO_NEW_INFORMATION',
                         'vlm_exhausted_bounded_same_frame_view_corrections')
                 pending_view_correction=dict(
@@ -477,8 +499,18 @@ class ObservationController:
                         for p in record['checkpoints'][-12:]])
                 return None
             if action=='finish':
-                return finish('CUE_ONLY' if best_cue else 'VLM_SEARCH_FINISHED',
+                return finish('TARGET_CANDIDATE_FOUND' if best_candidate else
+                              'CUE_ONLY' if best_cue else 'VLM_SEARCH_FINISHED',
                     reason='vlm_concluded_visual_search')
+            # A candidate is a hypothesis, not an observation-stop signal.
+            # Honor VLM's requested follow-up views, then bound the cost of
+            # continued refinement: after three additional genuine visual
+            # checkpoints hand the retained candidate to NavigationAgent.
+            if (candidate_found_checkpoint is not None
+                    and len(record['checkpoints'])-1-candidate_found_checkpoint
+                        >=max_candidate_refinement_views):
+                return finish('TARGET_CANDIDATE_FOUND',
+                    reason='bounded_vlm_candidate_refinement_completed')
             if action in ('look_up','look_down'):
                 new_pitch=r.pitch_deg+(r.camera.tilt_angle if action=='look_up'
                                       else -r.camera.tilt_angle)
@@ -513,15 +545,30 @@ class ObservationController:
                     requested_pitch=r.pitch_deg)
                 if result is not None:return result
                 continue
+            # An expensive full undo of a prior sweep is not a new camera
+            # search: ask VLM to choose an alternative. It may still view the
+            # same yaw at a new pitch through shorter, deliberate motions.
+            # Do not confuse passed-through yaw with VLM-inspected RGB.
+            if (last_turn_direction is not None and last_turn_direction!=direction
+                    and degrees>=90 and turned+degrees>=180
+                    and int(round(target_heading)) in yaw_traversed):
+                result=request_new_view('large_reverse_sweep_to_previously_visited_yaw',
+                    requested_heading=round(target_heading*turn,2),
+                    requested_pitch=r.pitch_deg)
+                if result is not None:return result
+                continue
             consecutive_replans=0
             for _turn in range(round(degrees/turn)):
                 failed=do_action(direction)
                 if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))
                 turned+=turn
+                yaw_traversed.add(view_key()[0])
+            last_turn_direction=direction
             if turned>=sweep_degrees:
                 # The VLM gets a final look at the last real direction if a
                 # checkpoint remains; otherwise do not issue an extra turn.
                 continue
-        return finish('CUE_ONLY' if best_cue else 'SEARCH_REGION_COVERED_NO_MATCH',
+        return finish('TARGET_CANDIDATE_FOUND' if best_candidate else
+                      'CUE_ONLY' if best_cue else 'SEARCH_REGION_COVERED_NO_MATCH',
             reason='bounded_vlm_checkpoints_exhausted')
 

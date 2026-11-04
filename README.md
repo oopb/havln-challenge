@@ -131,6 +131,20 @@ registered visual/motion evidence. See
 [action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
+**Batch 4-12 visual/progress follow-up:** VLM may now actually execute its
+requested LOOK/TURN after finding a visual candidate (up to three follow-up
+image checkpoints) instead of automatically terminating the scan. Expensive
+reverse sweeps back to already-visited yaw are returned to VLM for selection
+of a more useful view. The navigation context carries chronological, strictly
+registered local vertical movement evidence, observed direction reversals,
+next ordered subgoal and recent source-labeled VLM hypotheses in a bounded
+`progress_review`. The strategic model may independently call
+`verify_subgoal`, `ground_landmark` or `select_subgoal` provisionally,
+but no heuristic automatically marks a subgoal complete or chooses the
+robot's direction. Camera pitch conventions and visual-versus-hypothetical
+target classifications are explicit. Verify in Habitat on the same episode;
+passing CI is not evidence of successful descent or task completion.
+
 **Batch 4-11 P0/P1 hardening:** NavigationAgent now emits only the validated
 `tool` and `args` object; provider-hallucinated optional `memory_delta` fields
 (even malformed object/list shapes) are silently discarded *after* strict
