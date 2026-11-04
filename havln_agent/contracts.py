@@ -126,11 +126,16 @@ def compact_navigation_protocol(tools):
         required=schema.get('required',[])
         return '('+', '.join(name+('' if name in required else '?')+':'+kind(value)
             for name,value in schema.get('properties',{}).items())+')'
-    return ('Return exactly {"tool":"name","args":{...}}. Optional memory_delta is at most 4 '
-        'objects {"finding":"text","source_observation_ids":["existing ID"]}; hypotheses only. '
-        'Use only listed tools/args. ? means optional; all text <=1000 characters, IDs nonempty, '
-        'arrays unique. Tool signatures and purpose:\n'+'\n'.join(
-            name+signatures(spec['parameters'])+' '+spec['description'] for name,spec in tools.items()))
+    # Schema remains the authority. The plain-language protocol is an index,
+    # not a duplicate of every verbose registry description on every turn.
+    def brief(spec):
+        desc=spec['description'].split('.')[0].strip()
+        return desc[:105]
+    return ('Return one JSON {"tool":"name","args":{...}}. Optional memory_delta '
+        'uses existing observation IDs only (max 4). ? = optional. '
+        'Tools and exact argument signatures:\n'+'\n'.join(
+            name+signatures(spec['parameters'])+' : '+brief(spec)
+            for name,spec in tools.items()))
 
 
 def tool_result_schema():
