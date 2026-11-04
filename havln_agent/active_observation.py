@@ -77,7 +77,7 @@ class ObservationController:
         total = round(sweep_degrees / turn)
         interval = round(checkpoint_degrees / turn)
         if (direction not in ('left', 'right') or look not in ('none', 'up', 'down')
-                or not 1 <= total <= 8 or not 1 <= interval <= total
+                or not 1 <= total <= round(360/turn) or not 1 <= interval <= total
                 or abs(total*turn-sweep_degrees) > .001
                 or abs(interval*turn-checkpoint_degrees) > .001):
             return dict(status='INVALID_ARGUMENTS',reason='invalid_observation_sweep_calibration')
