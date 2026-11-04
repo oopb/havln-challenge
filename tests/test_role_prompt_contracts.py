@@ -182,7 +182,11 @@ class PromptContractTests(unittest.TestCase):
             visual.panorama_direction_evidence.assert_called_once()
             agent.decide()
             self.assertNotIn('ONE-TIME PANORAMIC DIRECTION DECISION',client.system_history[1])
-            self.assertEqual(len(client.schema['oneOf']),2)
+            self.assertEqual(len(client.schema['oneOf']),1)
+            self.assertEqual(client.schema['oneOf'][0]['properties']['tool']['const'],
+                             'navigate_relative')
+            # Legacy turn_and_observe remains registered for execution but
+            # is not exposed after a completed panorama checkpoint.
             self.assertEqual(runtime.event.call_count,2)
             # Re-arm on a genuine new task/plan at the same location, not
             # on another model turn with identical physical and task evidence.
