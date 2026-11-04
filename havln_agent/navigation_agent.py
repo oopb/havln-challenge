@@ -18,6 +18,12 @@ COMMON_PROMPT = (
     'a finite movement plan. A completed atomic action plan is NOT verified '
     'physical arrival. Verify milestones from real visual/motion evidence; '
     'select_subgoal may provisionally advance but cannot certify success. '
+    'Read progress_review: chronological registered movement, opposite-direction '
+    'events, VLM hypotheses, and next ordered subgoal are decision evidence, '
+    'NOT task-completion proof. When progress may have reached the next phase, '
+    'consider verify_subgoal, targeted grounding or a justified provisional '
+    'select_subgoal rather than indefinitely repeating the previous goal. '
+    'Neither verification nor subgoal selection is automatic. '
     'Do not invent free space, target coordinates or completion; '
     'never request_finish success without independent proof. '
 )
@@ -49,7 +55,11 @@ OBSERVE_PROMPT = (
     'static sweep. You may seek additional evidence or plan a short detour. '
     'ACTIONS_COMPLETED means commanded steps executed, not traversed meters '
     'or semantic goal completion. Do not restart search after every short '
-    'move; judge the actual image and target progress. '
+    'move; judge the actual image and target progress. If verified RGB-D '
+    'motion reverses the requested semantic direction, treat this as a '
+    'replanning signal; the estimates may be uncertain, not a forced STOP '
+    'or a reason to claim arrival. '
+
 )
 # This is a model-visible *decision focus*, not a tool whitelist or a hidden
 # physical control action. The agent still owns the bearing and can explain
