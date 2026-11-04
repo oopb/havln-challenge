@@ -39,7 +39,7 @@ class OptionalMemoryAndVLMTargetTests(unittest.TestCase):
                 Draft7Validator(envelope).validate(result)
                 Draft7Validator(schema).validate(result)
                 self.assertEqual(result['args']['distance_m'],.25)
-        self.assertNotIn('memory_delta',compact_navigation_protocol(allowed))
+        self.assertNotIn('Optional memory_delta',compact_navigation_protocol(allowed))
         self.assertIn('Do NOT include memory_delta',compact_navigation_protocol(allowed))
 
     def test_bad_tool_and_arguments_still_rejected_by_schema(self):
