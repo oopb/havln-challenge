@@ -31,7 +31,7 @@ class OptionalMemoryAndVLMTargetTests(unittest.TestCase):
             '"distance_m":0.25},"memory_delta":[{"observation_id":'
             '"obs_0010","note":"Stairs visible ahead"}]}',
             '{"tool":"navigate_relative","args":{"turn_deg":0,'
-            '"distance_m":0.25},"memory_delta":"bad memory side-channel"',
+            '"distance_m":0.25},"memory_delta":"bad memory side-channel"}',
         ]
         for raw in examples:
             with self.subTest(raw=raw):
