@@ -1,124 +1,52 @@
 """A short OBSERVE decision followed by a bounded MOVE and another OBSERVE."""
 from .contracts import navigation_schema, compact_navigation_protocol, navigation_envelope
-from .contexts import navigation_context
+from .contexts import navigation_context, compact_navigation_context
 from .api_client import APIError
 from .panorama_memory import decide_with_panorama
 from jsonschema import Draft7Validator
 
 COMMON_PROMPT = (
-    'You are NavigationAgent. TaskPlanner supplies ordered semantic subgoals. '
-    'Work on the CURRENT subgoal. Navigation progress and verified completion '
-    'are separate: you can select_subgoal to provisionally move to the NEXT '
-    'ordered milestone when evidence suggests you reached or passed the current '
-    'milestone, even if a rigid metric proof is unavailable. You may revisit '
-    'an earlier unverified milestone using select_subgoal. This NEVER marks '
-    'a milestone completed: request_finish success still needs all milestones '
-    'independently verified. Do not advance solely to evade a collision, '
-    'without relevant visual/motion evidence. '
-    'You receive structured state, not raw RGB or depth; use visual tools as needed. '
-    'Return exactly ONE JSON object containing one registered tool and args, '
-    'plus optional evidence-linked memory_delta. Wait for the tool result. '
-    'Do not invent observations, movement, target coordinates or completion. '
-    'Each MOVE uses fresh RGB-D for odometry AFTER movement. Unknown '
-    'depth, unmeasured FOV and unlocalized visual hypotheses do NOT prove '
-    'collision; only explicit model calls to inspect_geometry or get_waypoint_candidates invoke obstacle/terrain detection. '
-    'ACTIONS_COMPLETED means only the requested turn/forward atomic actions '
-    'were executed, NOT that the robot travelled the nominal distance or '
-    'arrived at the target. Never equate command completion with semantic '
-    'completion. A local TARGET_REACHED is also not semantic success. Read '
-    'historical_motion_evidence after uncertain RGB-D registration; old '
-    '*coordinates* cannot certify progress, but historical registered '
-    'RGB-D motion can still serve as evidence. '
-    'Treat PROVISIONAL_UNVERIFIED transitions as hypotheses. Use verify_subgoal '
-    'with authentic observations and registered movements; if evidence is still '
-    'incomplete but sensor history suggests the next milestone, use '
-    'select_subgoal rather than repeating the same visual query. Do not treat '
-    'a model-selected milestone as VERIFIED, and never request_finish '
-    'just because exploration is slow. '
+    'You are NavigationAgent. TaskPlanner provides ordered semantic subgoals; '
+    'you control strategic observation, motion, subgoal selection and STOP. '
+    'You see concise JSON, not RGB. VLM owns all goal-directed camera search '
+    'inside observe_for_goal; never micro-manage its 15-degree turns. '
+    'Return ONE JSON {"tool":"name","args":{...}} with optional evidence-linked '
+    'memory_delta. Use only authentic observation IDs and registered tools. '
+    'Unknown RGB-D odometry is not evidence of a collision and does not stop '
+    'a finite movement plan. A completed atomic action plan is NOT verified '
+    'physical arrival. Verify milestones from real visual/motion evidence; '
+    'select_subgoal may provisionally advance but cannot certify success. '
+    'Do not invent free space, target coordinates or completion; '
+    'never request_finish success without independent proof. '
 )
 OBSERVE_PROMPT = (
-    'MODE: OBSERVE. Choose the NEXT finite local movement target, not a '
-    'complete global route. A navigate_local/navigate_relative/navigate_to_pixel '
-    'call executes the model-selected TURNs and forward segment continuously '
-    'until commanded actions finish, a no-change RGB-D stall, sensor '
-    'interruption, or global Episode budget; '
-    'then returns control to OBSERVE with new RGB-D feedback. '
-    'FIRST inspect navigation_memory, last_tool, candidate_waypoints, '
-    'local_navigation and current target evidence. Preserve useful progress. '
-    'If an IN_PROGRESS waypoint remains useful, you may navigate_local using the SAME '
-    'waypoint_id, or pause it to observe, choose another direction, or cancel. '
-    'Compare goal_alignment and estimated target distance before/after. '
-    'Prefer a measured goal-approaching direction over a merely easy turn. '
-    'An executable exploration waypoint does not itself imply task progress. '
-    'A candidate waypoint is OPTIONAL. You may call navigate_relative with '
-    'a relative bearing and desired distance directly (the executor quantizes '
-    'to the real action increments), or use '
-    'navigate_to_pixel with a normalized RGB-D image target and movement distance. '
-    'Do not invent free space: the executor never invokes geometry automatically. '
-
-    'You decide whether a direction serves the task using the instruction, '
-    'visual hints, current depth, waypoint candidates, recent motion, and memory. '
-    'You may request get_waypoint_candidates even when grounding is PARTIAL or UNKNOWN: '
-    'partial localization is evidence uncertainty, NOT a movement prohibition. '
-    'local_geometry describes ONLY the currently sampled relative bearings, '
-    'usually angle_degrees=0 (straight ahead), NOT a 360-degree clearance scan. '
-    'Read local_geometry_scope: unmeasured yaw bins are UNKNOWN, not blocked; '
-    'a blank currently_plausible_local_bearings list does NOT mean there is '
-    'no viable direction anywhere. Distinguish a measured BLOCKED direction '
-    'from a measured UNCONFIRMED/unknown direction. Turning changes the live '
-    'sampled heading; the next forward does NOT run a geometry probe. You are responsible for safety risk assessment and may call inspect_geometry before moving. '
-    'Treat goal_alignment, estimated distance and direction compatibility '
-    'as descriptive evidence. A detour that temporarily moves away from '
-    'a landmark can be appropriate. Do not require complete grounding, '
-    'a particular scene category, entry point or monotonic distance decrease '
-    'before choosing a short MOVE. A model-requested inspect_geometry tool checks '
-    'depth and human occupancy. Never bypass '
-    'a measured collision or invent geometric clearance. '
-    'Registered RGB-D translation is optional diagnostic evidence, not a '
-    'route gate. UNKNOWN does NOT mean no movement, and does not reset the '
-    'finite plan. Continue selected actions if frames change, but interrupt '
-    'a route if successive public RGB-D frames are identical after forward. '
-    'When visually uncertain about obstacles or terrain, proactively call '
-    'inspect_geometry when detailed terrain or obstacle confirmation is '
-    'needed. Full geometry diagnosis is a tool you invoke ON DEMAND, '
-    'never an automatic permission gate before forward steps. '
-    'BLOCKED means an observed obstacle requires a different direction. '
-    'UNCONFIRMED is NOT BLOCKED; you may move toward it or seek more evidence. '
-    'NEEDS_VIEW from a semantic tool means obtaining a specific missing view. '
-    'REQUIRES_ATTENTION after unchanged RGB-D means consider a different '
-    'route or optional inspection. Do not rescan 360 degrees just because '
-    'metric odometry returned UNKNOWN. Camera-only view directions '
-    'are not executable movement waypoints. '
-    'Treat NO_NEW_INFORMATION and REPEATED_SEARCH_NO_NEW_VIEW as evidence of '
-    'low information value, not absolute prohibitions. Use purpose=intentional_recheck '
-    'or force_recheck=true when an older view must actually be rechecked. Prefer '
-    'evaluating a short available waypoint or an actually different view. '
-    'Observe whenever it materially informs the decision, even during a paused '
-    'local route; the route will be revalidated before it resumes. '
-    'Only use turn_and_observe or observe_for_goal when new information is needed '
-    'to choose a movement. Avoid repeated static scans and rediscovering an '
-    'already identified target. A completed short waypoint is a movement '
-    'receipt, not a proof of traversed meters or an excuse to restart '
-    'the entire semantic search. '
-    'After a successful MOVE, explicitly compare the just-completed heading, '
-    'registered vertical/forward progress, target memory and next-step depth. '
-    'If the previous direction still serves the goal and no obstacle was '
-    'observed, consider continuing that same heading instead of restarting '
-    'a full static scan. A 0.25m atomic forward action is NOT the maximum '
-    'distance_m for navigate_relative: choose the finite 0.25-3.0m segment '
-    'appropriate to current evidence (multiple atomic steps run continuously). '
-    'You still decide whether to continue, turn, inspect or revise the goal. '
-    'turn_and_observe is a tiny calibrated camera tool: its current maximum '
-    'absolute angle is action_calibration.turn_and_observe_max_deg; DO NOT '
-    'request a 90/150/180 degree single camera-only turn unless its registered '
-    'schema explicitly permits it. Use observe_for_goal for planned sweeps. '
-    'Navigation tools DO NOT take max_atomic_steps or a per-call action '
-    'budget. Provide only a target direction, distance, or waypoint ID; '
-    'the executor completes all needed turns before attempting forward. '
-    'Every forward uses public RGB-D for motion estimation, NOT collision/terrain/people approval. '
-    'Pose/no-motion/budget interruption returns control for YOUR next decision. '
+    'MODE: OBSERVE. Decide the NEXT useful high-level tool, not a sequence '
+    'of tiny camera turns. If visual evidence or a target approach is missing, '
+    'delegate ONCE to observe_for_goal(objective,target_types,sweep_degrees?) '
+    'with open-vocabulary targets; OMIT direction/checkpoint_degrees and let '
+    'the VLM own view selection, pitch and search termination. Read its '
+    'best_candidate and best_cue. If a target entry is already localized, '
+    'prefer acting on that evidence rather than scanning a full circle again. '
+    'If evidence permits movement, you choose navigate_relative(turn_deg,'
+    'distance_m) or navigate_to_pixel; the executor performs turns and '
+    'forward atomic steps continuously and returns evidence. A 0.25m atomic '
+    'forward action is NOT the segment distance limit. '
+    'If local_navigation remains useful, resume the SAME waypoint_id via '
+    'navigate_local. DO NOT take max_atomic_steps. '
+    'Read navigation_memory, candidate_waypoints, current_view, grounding '
+    'and recent motion before deciding. Prefer a measured goal-approaching '
+    'direction when such evidence exists; grounding is PARTIAL or UNKNOWN '
+    'is NOT a movement prohibition. Unknown depth is not measured collision; '
+    'UNCONFIRMED is NOT BLOCKED. Never bypass a measured collision. '
+    'Geometry is optional and only model-invoked via inspect_geometry; '
+    'normal MOVE does not run an automatic geometry gate. '
+    'NEEDS_VIEW means a specific missing view; REQUIRES_ATTENTION after '
+    'unchanged fresh RGB-D means reassess your strategy, not repeat a '
+    'static sweep. You may seek additional evidence or plan a short detour. '
+    'ACTIONS_COMPLETED means commanded steps executed, not traversed meters '
+    'or semantic goal completion. Do not restart search after every short '
+    'move; judge the actual image and target progress. '
 )
-
 # This is a model-visible *decision focus*, not a tool whitelist or a hidden
 # physical control action. The agent still owns the bearing and can explain
 # missing live safety rather than inventing a safe corridor.
@@ -169,7 +97,7 @@ class NavigationAgent:
             # ignore per-tool argument schemas. Reject malformed angle/args
             # during the decision so the model can repair instead of burning
             # cycles on INVALID_ARGUMENTS from ToolExecutor.
-            if not Draft7Validator(navigation_schema(runtime.registry)).is_valid(value):
+            if not Draft7Validator(navigation_schema(offered_tools)).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
             known = set(runtime.memory.keyframes)
@@ -206,7 +134,20 @@ class NavigationAgent:
         # the LLM picks a bearing/distance; geometry is model-requested only.
         offered_tools=(
             {'navigate_relative':runtime.registry['navigate_relative']}
-            if full_circle_commit else runtime.registry)
+            if full_circle_commit else dict(runtime.registry))
+        if (not full_circle_commit and not orientation
+                and 'observe_for_goal' in offered_tools):
+            # All camera-search steering is VLM-owned. Keep legacy camera
+            # tools in the runtime for archived calls and orientation tasks,
+            # but never advertise micro-turn observations to NavigationAgent.
+            offered_tools.pop('turn_and_observe',None)
+            spec=offered_tools['observe_for_goal']
+            parameters=dict(spec['parameters'])
+            properties=dict(parameters['properties'])
+            properties.pop('direction',None)
+            properties.pop('checkpoint_degrees',None)
+            parameters['properties']=properties
+            offered_tools['observe_for_goal']=dict(spec,parameters=parameters)
 
         # A one-shot strategic checkpoint must not be repeated every turn
         # while the physical stance is unchanged. A later new subgoal/stance
@@ -231,7 +172,11 @@ class NavigationAgent:
             result=runtime.client.complete(
                 'navigation_agent', 'navigation_decision',
                 COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt,
-                context, navigation_schema(offered_tools), validate=validate,
+                compact_navigation_context(dict(
+                    context,instruction=getattr(
+                        getattr(runtime.memory,'task',None),'instruction',
+                        context.get('instruction')))),
+                navigation_schema(offered_tools), validate=validate,
                 format_retry=int(bool(format_feedback)), retry_safe=True,
                 protocol=compact_navigation_protocol(offered_tools),
                 validation_schema=navigation_envelope(offered_tools))
