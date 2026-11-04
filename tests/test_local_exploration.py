@@ -289,7 +289,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(waypoint['endpoint_estimate_valid'])
         self.assertEqual(waypoint['last_failure_reason'],'unknown_depth_or_fov')
         self.assertEqual(waypoint['execution_feasibility'],
-                         'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
+                         'MODEL_DECIDES_CONTINUE_OR_REPLAN')
         self.assertIn('observation_coverage',result)
         self.assertIn('observation_stagnation',result)
         self.assertEqual(result['local_geometry_scope']['sampled_relative_bearings_deg'], [0.])
@@ -324,7 +324,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertNotIn('pending_motion_continuity',state)
         self.assertEqual(state['recent_motion_intent']['status'],'BLOCKED')
         self.assertEqual(state['local_navigation']['execution_feasibility'],
-                         'REQUIRES_NEW_LIVE_SAFETY_EVIDENCE')
+                         'MODEL_DECIDES_CONTINUE_OR_REPLAN')
         self.assertIsNone(state['action_calibration']['per_tool_atomic_action_cap'])
         self.assertEqual(state['action_calibration']['navigation_execution_policy'],
             'continuous_until_route_or_pose_or_episode_budget')
