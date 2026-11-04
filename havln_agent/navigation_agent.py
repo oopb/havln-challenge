@@ -1,6 +1,7 @@
 """A short OBSERVE decision followed by a bounded MOVE and another OBSERVE."""
 from .contracts import navigation_schema, compact_navigation_protocol, navigation_envelope
 from .contexts import navigation_context, compact_navigation_context
+from .tool_menu import navigation_tool_menu
 from .api_client import APIError
 from .panorama_memory import decide_with_panorama
 from jsonschema import Draft7Validator
@@ -27,8 +28,9 @@ OBSERVE_PROMPT = (
     'the VLM own view selection, pitch and search termination. Read its '
     'best_candidate and best_cue. If a target entry is already localized, '
     'prefer acting on that evidence rather than scanning a full circle again. '
-    'If evidence permits movement, you choose navigate_relative(turn_deg,'
-    'distance_m) or navigate_to_pixel; the executor performs turns and '
+    'If evidence permits movement, choose navigate_relative(turn_deg,'
+    'distance_m) or a currently offered target-directed motion tool. '
+    'The executor performs turns and '
     'forward atomic steps continuously and returns evidence. A 0.25m atomic '
     'forward action is NOT the segment distance limit. '
     'If local_navigation remains useful, resume the SAME waypoint_id via '
@@ -135,24 +137,12 @@ class NavigationAgent:
             and not vlm_observation_just_finished
             and getattr(self,'_panorama_committed_signature',None)!=signature
             and 'navigate_relative' in runtime.registry)
-        # This is a temporary tool-choice contract, NOT an autonomous move:
-        # the LLM picks a bearing/distance; geometry is model-requested only.
-        offered_tools=(
-            {'navigate_relative':runtime.registry['navigate_relative']}
-            if full_circle_commit else dict(runtime.registry))
-        if (not full_circle_commit and not orientation
-                and 'observe_for_goal' in offered_tools):
-            # All camera-search steering is VLM-owned. Keep legacy camera
-            # tools in the runtime for archived calls and orientation tasks,
-            # but never advertise micro-turn observations to NavigationAgent.
-            offered_tools.pop('turn_and_observe',None)
-            spec=offered_tools['observe_for_goal']
-            parameters=dict(spec['parameters'])
-            properties=dict(parameters['properties'])
-            properties.pop('direction',None)
-            properties.pop('checkpoint_degrees',None)
-            parameters['properties']=properties
-            offered_tools['observe_for_goal']=dict(spec,parameters=parameters)
+        # Keep the execution registry intact, but advertise only strategic
+        # tools relevant to this decision. VLM owns all camera search steps;
+        # specialized historical/pixel/geometry tools reappear on evidence.
+        offered_tools=navigation_tool_menu(
+            runtime.registry,context,orientation=bool(orientation),
+            full_circle_commit=full_circle_commit)
 
         # A one-shot strategic checkpoint must not be repeated every turn
         # while the physical stance is unchanged. A later new subgoal/stance

@@ -408,9 +408,16 @@ class APIClient:
         response_format = {'type': config['response_format']}
         if config['response_format'] == 'json_schema':
             response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)
+        exposed_names = [
+            item.get('properties',{}).get('tool',{}).get('const')
+            for item in schema.get('oneOf',[])
+        ] if role == 'navigation_agent' and isinstance(schema,dict) else []
+        exposed_names = [name for name in exposed_names if isinstance(name,str)]
         request_metrics = dict(system_chars=len(system),
             tool_protocol_chars=len(protocol or ''),
             context_chars_before_encoding=context_chars,
+            offered_tool_count=len(exposed_names) if exposed_names else None,
+            offered_tool_names=exposed_names if exposed_names else None,
             native_schema_chars=len(canonical(response_format))
             if config['response_format'] == 'json_schema' else 0,
             schema_channels=['response_format'] if config['response_format']=='json_schema' else

@@ -39,7 +39,9 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("SAME waypoint_id", client.system)
         self.assertIn("grounding is PARTIAL or UNKNOWN", client.system)
         self.assertIn("navigate_relative", client.system)
-        self.assertIn("navigate_to_pixel", client.system)
+        # Pixel steering is offered only with a fresh localized visual box,
+        # not unconditionally in the strategic prompt/tool menu.
+        self.assertNotIn("navigate_to_pixel", client.system)
         self.assertIn("NOT a movement prohibition", client.system)
         self.assertIn("Never bypass a measured collision", client.system)
         self.assertIn("candidate_waypoints", client.system)
@@ -182,7 +184,11 @@ class PromptContractTests(unittest.TestCase):
             visual.panorama_direction_evidence.assert_called_once()
             agent.decide()
             self.assertNotIn('ONE-TIME PANORAMIC DIRECTION DECISION',client.system_history[1])
-            self.assertEqual(len(client.schema['oneOf']),2)
+            self.assertEqual(len(client.schema['oneOf']),1)
+            self.assertEqual(client.schema['oneOf'][0]['properties']['tool']['const'],
+                             'navigate_relative')
+            # Legacy turn_and_observe remains registered for execution but
+            # is not exposed after a completed panorama checkpoint.
             self.assertEqual(runtime.event.call_count,2)
             # Re-arm on a genuine new task/plan at the same location, not
             # on another model turn with identical physical and task evidence.
