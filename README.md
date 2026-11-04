@@ -131,6 +131,15 @@ registered visual/motion evidence. See
 [action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
+**Batch 4-13 direct VLM relay:** VLM-led observation no longer drops
+visual hypotheses because the free-form `target_type` differs from the
+requested `target_types`. Both positive and negative VLM statements, including
+low-confidence and missing-box observations, reach NavigationAgent as
+source-labeled `visual_reports` (up to eight compact recent frames; complete
+reports in diagnostics). Main-agent planning and movement authority stays
+unchanged. Real observation provenance, JSON schemas, camera action limits
+and independent task completion checks remain in place.
+
 **Batch 4-12 visual/progress follow-up:** VLM may now actually execute its
 requested LOOK/TURN after finding a visual candidate (up to three follow-up
 image checkpoints) instead of automatically terminating the scan. Expensive
