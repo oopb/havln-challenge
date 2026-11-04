@@ -142,7 +142,14 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             turn_steps=actions.count('TURN_LEFT')+actions.count('TURN_RIGHT'),
             look_steps=actions.count('LOOK_UP')+actions.count('LOOK_DOWN'),
             first_forward_step=next((i for i,a in enumerate(actions) if a=='MOVE_FORWARD'),None),
-            net_displacement_m_est=(pose['x']**2+pose['z']**2)**.5,
+            net_displacement_m_est=((pose['x']**2+pose['z']**2)**.5
+                if pose.get('position_coordinates_valid',True) else None),
+            registered_pose_chain_continuous=pose.get('global_chain_continuous',True),
+            unknown_forward_actions=pose.get('unknown_forward_actions',0),
+            commanded_action_plans_completed=sum(
+                r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
+                and r['result']['status']=='ACTIONS_COMPLETED'
+                for r in runtime.memory.tool_ledger),
             translation_m_est=sum(r['result'].get('translation_m') or 0 for r in runtime.memory.tool_ledger),
             translation_source='rgbd_estimate_only_not_physical_ground_truth',
             waypoint_completed=sum(r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel') and r['result']['status']=='TARGET_REACHED'
