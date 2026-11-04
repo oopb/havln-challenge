@@ -39,7 +39,9 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("SAME waypoint_id", client.system)
         self.assertIn("grounding is PARTIAL or UNKNOWN", client.system)
         self.assertIn("navigate_relative", client.system)
-        self.assertIn("navigate_to_pixel", client.system)
+        # Pixel steering is offered only with a fresh localized visual box,
+        # not unconditionally in the strategic prompt/tool menu.
+        self.assertNotIn("navigate_to_pixel", client.system)
         self.assertIn("NOT a movement prohibition", client.system)
         self.assertIn("Never bypass a measured collision", client.system)
         self.assertIn("candidate_waypoints", client.system)
