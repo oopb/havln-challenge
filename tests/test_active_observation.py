@@ -268,9 +268,11 @@ class ActiveObservationTests(unittest.TestCase):
             direction='left',sweep_degrees=90,checkpoint_degrees=30)
         Draft7Validator(spec['parameters']).validate(proper)
         self.assertFalse(Draft7Validator(spec['parameters']).is_valid(dict(
-            proper,sweep_degrees=360)))
+            proper,sweep_degrees=345)))
         self.assertTrue(Draft7Validator(spec['parameters']).is_valid(dict(
             proper,target_types=['person'])))
+        self.assertTrue(Draft7Validator(spec['parameters']).is_valid(dict(
+            objective='Find an entry',target_types=['entry'])))
         self.assertFalse(Draft7Validator(spec['parameters']).is_valid(dict(
             proper,target_types=[''])))
 
