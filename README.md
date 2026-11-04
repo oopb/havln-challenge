@@ -131,12 +131,17 @@ registered visual/motion evidence. See
 [action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
-**Active perception:** Navigation Agent can delegate a bounded `observe_for_goal` subtask. The
-controller turns in 15-degree Habitat actions, asks VLM only every 30/45 degrees,
-and returns a localized visual hypothesis or a completed-sweep report. It never
-moves forward and does not turn historical person/terrain evidence into a safety
-permit. Goal checkpoints send one live RGB image to VLM and do NOT trigger
-a geometry probe. See [active observation protocol](docs/active_observation.md).
+**VLM-led observation and smaller navigation requests:** NavigationAgent
+specifies WHAT visual evidence to find using `observe_for_goal`, then
+VisualPerception chooses successive real TURN/LOOK checkpoints without
+invoking the navigation LLM after every 15-degree camera turn. It distinguishes
+entries and approaches from distant visual cues and returns evidence-backed
+observation IDs and angles. Normal navigation requests now use compact goal,
+pose and target-memory summaries rather than repeatedly sending full historical
+panorama/geometry records. Detailed records remain queryable by tool. API
+logging includes prompt/protocol/context character counts. Legacy scripted
+observation remains available for archived calls. See
+[VLM-led active observation](docs/active_observation.md).
 
 
 ### Geometry mode: model-invoked only

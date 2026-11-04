@@ -14,6 +14,7 @@ on:
       - "tests/test_terminal_progress.py"
       - "tests/test_smoke50013_waypoints.py"
       - "tests/test_active_observation.py"
+      - "tests/test_vlm_led_observation.py"
       - "tests/test_odometry_gap_navigation.py"
       - "tests/test_motion_consensus.py"
       - "tests/test_compact_diagnostics.py"
@@ -73,6 +74,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_smoke50013_waypoints.py' -v
       - name: Check active observation subtasks
         run: python -m unittest discover -s tests -p 'test_active_observation.py' -v
+      - name: Check VLM-owned full observation and compact navigation contracts
+        run: python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
       - name: Check bounded navigation after uncertain RGB-D motion
         run: python -m unittest discover -s tests -p 'test_odometry_gap_navigation.py' -v
       - name: Check distributed static RGB-D motion consensus

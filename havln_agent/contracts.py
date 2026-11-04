@@ -33,17 +33,17 @@ def registry(camera, max_actions, pitch_deg=0.):
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
-        'observe_for_goal': ('Bounded active observation with OPEN-VOCABULARY target types, optional force_recheck and paused-waypoint preservation. Never moves forward and does not implicitly cancel a pending route.',
+        'observe_for_goal': ('Delegate the WHOLE active visual search to VLM: provide objective and target_types; VLM chooses yaw/pitch views and returns visual evidence. Optional sweep_degrees up to 360; omit direction to use VLM ownership. No forward motion.',
             dict(object_schema(dict(
                 objective=dict(TEXT,minLength=1),
                 target_types=dict(type='array',minItems=1,maxItems=3,uniqueItems=True,
                     items=dict(type='string',minLength=1,maxLength=80)),
                 direction=dict(enum=['left','right']),
-                sweep_degrees=dict(enum=[30,60,90,120]),
+                sweep_degrees=dict(enum=[30,60,90,120,180,270,360]),
                 checkpoint_degrees=dict(enum=[30,45]),
                 look=dict(enum=['none','up','down']),
                 force_recheck=dict(type='boolean'))),
-                required=['objective','target_types','direction','sweep_degrees'])),
+                required=['objective','target_types'])),
         'compare_views': ('Compare current and/or saved RGB keyframes for one question. Historical views never authorize motion.',
             object_schema(dict(observation_ids=ids, question=text))),
         'ground_landmark': ('Locate a visible target/entry/treads; metric projection uses local Depth.',
@@ -126,11 +126,16 @@ def compact_navigation_protocol(tools):
         required=schema.get('required',[])
         return '('+', '.join(name+('' if name in required else '?')+':'+kind(value)
             for name,value in schema.get('properties',{}).items())+')'
-    return ('Return exactly {"tool":"name","args":{...}}. Optional memory_delta is at most 4 '
-        'objects {"finding":"text","source_observation_ids":["existing ID"]}; hypotheses only. '
-        'Use only listed tools/args. ? means optional; all text <=1000 characters, IDs nonempty, '
-        'arrays unique. Tool signatures and purpose:\n'+'\n'.join(
-            name+signatures(spec['parameters'])+' '+spec['description'] for name,spec in tools.items()))
+    # Schema remains the authority. The plain-language protocol is an index,
+    # not a duplicate of every verbose registry description on every turn.
+    def brief(spec):
+        desc=spec['description'].split('.')[0].strip()
+        return desc[:105]
+    return ('Return one JSON {"tool":"name","args":{...}}. Optional memory_delta '
+        'uses existing observation IDs only (max 4). ? = optional. '
+        'Tools and exact argument signatures:\n'+'\n'.join(
+            name+signatures(spec['parameters'])+' : '+brief(spec)
+            for name,spec in tools.items()))
 
 
 def tool_result_schema():

@@ -118,6 +118,7 @@ def waypoint_summary(path):
 def tool_summary(result):
     value=fields(result,('tool','status','reason','suggestion','missing_evidence','recoverable','interrupted_status',
         'requested_actions','executed_actions','executed_motion','end_observation_id',
+        'observation_owner','best_candidate','best_cue',
         'movement_intent_feedback',
         'remaining_distance','endpoint_estimate_valid','reach_basis',
         'action_intent_completed','remaining_commanded_forward_actions',
@@ -157,6 +158,8 @@ def tool_summary(result):
             covered_turn_deg=result.get('covered_turn_deg'),
             planned_sweep_deg=result.get('planned_sweep_deg'),
             best_candidate=result.get('best_candidate'),
+            best_cue=result.get('best_cue'),
+            observation_owner=result.get('observation_owner'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
             note='visual_candidates_are_hypotheses; geometry_is_explicit_model_tool_not_motion_gate')
@@ -445,9 +448,11 @@ def navigation_context(runtime):
         recent_search=memory.observation_searches[-1]
         result['latest_observation_task']=dict(
             objective=recent_search['objective'],outcome=recent_search['outcome'],
+            mode=recent_search.get('mode','legacy_fixed_direction'),
             direction=recent_search['direction'],
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
+            best_cue=recent_search.get('best_cue'),
             searched_headings_deg=[p['heading_deg'] for p in recent_search['checkpoints']][-5:])
     if historical_hint:result['historical_hint']=historical_hint
     liveness=getattr(runtime,'navigation_liveness',None) or {}
@@ -456,3 +461,92 @@ def navigation_context(runtime):
             'consecutive_unchanged_decisions',
             'max_unchanged_evidence_decisions','review_requested','reason'))
     return result
+
+def compact_navigation_context(state):
+    """Small decision payload; full audit/memory remains available by tool."""
+    if not state:return {}
+    def short(x,n=160):return x[:n] if isinstance(x,str) else x
+    out={}
+    for key in ('instruction','goal','orientation','legal_look','actions_remaining',
+                'decision_liveness','format_feedback'):
+        if key in state:out[key]=state[key]
+    for key,names in (
+        ('task_selection',('current_subgoal_index','total_subgoals',
+            'verified_subgoals','unverified_subgoal_indices')),
+        ('pose',('heading_deg','pitch_deg','position_coordinates_valid',
+            'position_xz_m_est','confidence','place_id','viewpoint_generation')),
+        ('current_view',('observation_id','semantic_status','description',
+            'uncertainty','source_observation_id')),
+        ('action_calibration',('turn_step_deg','forward_step_m',
+            'direct_segment_max_m','remaining_episode_atomic_actions')),
+        ('local_navigation',('waypoint_id','status','last_failure_reason',
+            'next_action','forward_actions','forward_action_horizon')),
+        ('recent_motion_intent',('status','reason','executed_turn_actions',
+            'executed_forward_actions','actual_forward_attempted')),
+        ('recent_navigation_block',('reason','status','tool_call_id')),
+        ('observation_stagnation',('intervention','repeated_low_information',
+            'same_stance_observation_calls','low_information_calls')),
+        ('observation_coverage',('unique_heading_pitch_cells','coverage_fraction')),
+        ('panoramic_observation',('all_azimuths_observed','covered_yaw_bins',
+            'total_yaw_bins','coverage_fraction')),
+        ('historical_motion_evidence',('recorded_forward_steps',
+            'registered_forward_steps','observed_downward_m_est',
+            'observed_upward_m_est'))):
+        if state.get(key):out[key]=fields(state[key],names)
+    if 'current_view' in out:
+        for k in ('description','uncertainty'):
+            if k in out['current_view']:out['current_view'][k]=short(out['current_view'][k],220)
+    if state.get('navigation_memory'):
+        m=state['navigation_memory']
+        n=fields(m,('expected_vertical_motion','total_forward_actions',
+            'last_motion','last_progress_motion'))
+        n['recent_forward_motion']=[fields(v,('step','heading_deg',
+            'vertical_motion','vertical_change_m_est')) for v in
+            m.get('recent_forward_motion',[])[-3:]]
+        n['recent_failed_waypoints']=[fields(v,('reason','status',
+            'requested_motion')) for v in m.get('recent_failed_waypoints',[])[-2:]]
+        n['visual_targets']=[]
+        for v in m.get('visual_target_memory',[])[-2:]:
+            t=fields(v,('id','status','selected_observation_id',
+                'absolute_heading_deg','target_region'))
+            t['visual_evidence']=short(v.get('visual_evidence',''),150)
+            t['missing_evidence']=short(v.get('missing_evidence',''),100)
+            t['approach_candidates']=[dict(observation_id=a.get('observation_id'),
+                kind=a.get('kind'),absolute_heading_deg=a.get('absolute_heading_deg'),
+                evidence=short(a.get('evidence',''),90))
+                for a in v.get('approach_candidates',[])[:2]]
+            n['visual_targets'].append(t)
+        out['navigation_memory']=n
+    if state.get('grounding_evidence'):
+        out['grounding_evidence']=[fields(v,('target','status',
+            'source_observation_id','position','entry')) for v in
+            state['grounding_evidence'][:2]]
+    if state.get('candidate_waypoints'):
+        out['candidate_waypoints']=[fields(v,('id','bearing_deg',
+            'range_m','goal_alignment')) for v in state['candidate_waypoints'][:2]]
+    if state.get('last_tool'):
+        t=state['last_tool']
+        out['last_tool']=fields(t,('tool','status','reason','interrupted_status',
+            'executed_actions','end_observation_id','action_intent_completed',
+            'remaining_commanded_forward_actions','waypoint_id'))
+        if t.get('observation_task'):
+            v=t['observation_task']
+            out['last_tool']['observation_task']=dict(outcome=v.get('outcome'),
+                best_candidate=v.get('best_candidate'),
+                best_cue=v.get('best_cue'),
+                checked_views=v.get('checked_views',[])[-3:])
+        if t.get('measured_collision'):
+            out['last_tool']['measured_collision']=fields(t['measured_collision'],
+                ('reason','clearance','motion_state'))
+    if state.get('latest_observation_task'):
+        t=state['latest_observation_task']
+        out['latest_observation_task']=dict(mode=t.get('mode'),
+            objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
+            candidate=t.get('candidate'),best_cue=t.get('best_cue'),
+            searched_headings_deg=t.get('searched_headings_deg',[])[-4:])
+    if state.get('local_geometry'):out['local_geometry']=state['local_geometry'][:3]
+    if state.get('historical_hint'):
+        t=state['historical_hint']
+        out['historical_hint']=dict(observation_id=t.get('observation_id'),
+            description=short(t.get('description',''),150))
+    return out
