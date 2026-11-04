@@ -158,6 +158,8 @@ def tool_summary(result):
             covered_turn_deg=result.get('covered_turn_deg'),
             planned_sweep_deg=result.get('planned_sweep_deg'),
             best_candidate=result.get('best_candidate'),
+            best_cue=result.get('best_cue'),
+            observation_owner=result.get('observation_owner'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
             note='visual_candidates_are_hypotheses; geometry_is_explicit_model_tool_not_motion_gate')
