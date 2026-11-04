@@ -18,7 +18,7 @@ from .local_exploration import (covered_view, last_block, local_coverage,
 
 
 def meaningful_candidate(result, targets):
-    """A visible, localized, confident hypothesis worth escalating upstairs."""
+    """Legacy fixed-direction scan predicate, NOT a gate for VLM-led scans."""
     return (result.get('target_visible') is True
             and result.get('target_type') in targets
             and result.get('confidence') in ('medium', 'high')
@@ -356,7 +356,27 @@ class ObservationController:
                 if hypothesis:
                     hypothesis['relative_turn_deg_from_current']=round(
                         (hypothesis['heading_deg']-live_heading+180)%360-180,2)
+            # Relay all inspected RGB-frame VLM reports without applying any
+            # target-name match, confidence threshold or semantic relevance
+            # predicate. Real frame references let NavigationAgent judge.
+            reports=[dict(
+                observation_id=p['observation_id'],
+                heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
+                target_visible=p['visual'].get('target_visible'),
+                target_type=p['visual'].get('target_type'),
+                target_kind=p['visual'].get('target_kind'),
+                confidence=p['visual'].get('confidence'),
+                box=copy.deepcopy(p['visual'].get('box')),
+                evidence=p['visual'].get('evidence',''),
+                uncertainty=p['visual'].get('uncertainty',''),
+                next_action=p['visual'].get('next_action'),
+                turn_deg=p['visual'].get('turn_deg'),
+                reason=p['visual'].get('reason',''),
+                evidence_origin='vlm_current_rgb_frame',
+                usable_for_live_safety=False)
+                for p in record['checkpoints']]
             record.update(outcome=outcome,covered_turn_deg=turned,
+                visual_reports=copy.deepcopy(reports),
                 end_observation_id=r.memory.current['observation_id'],
                 candidate_refinement_views=(max(0,len(record['checkpoints'])-1
                     - candidate_found_checkpoint) if candidate_found_checkpoint is not None else 0),
@@ -378,6 +398,7 @@ class ObservationController:
                     heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'],
                     evidence_origin='vlm_current_frame',
                     visual=p['visual']) for p in record['checkpoints']],
+                visual_reports=copy.deepcopy(reports),
                 best_candidate=copy.deepcopy(best_candidate),
                 best_cue=copy.deepcopy(best_cue),
                 view_history=[dict(observation_id=p['observation_id'],
@@ -445,7 +466,11 @@ class ObservationController:
                 record['checkpoints'][-1]['visual']=visual
             else:
                 record['checkpoints'].append(point)
-            if meaningful_candidate(visual,target_types):
+            # VLM target_type is an OPEN VOCABULARY label, not an enum of
+            # NavigationAgent's target_types. Relay even low confidence and
+            # missing boxes as hypotheses; only the model decides relevance.
+            # The structural API schema still validates values/coordinates.
+            if visual.get('target_visible') is True:
                 candidate=dict(target_type=visual['target_type'],
                     confidence=visual['confidence'],box=visual['box'],
                     evidence=visual['evidence'],uncertainty=visual.get('uncertainty',''),
@@ -466,11 +491,14 @@ class ObservationController:
                               {'low':0,'medium':1,'high':2}[visual['confidence']])
                     if best_candidate is None or new_rank>=current_rank:
                         best_candidate=candidate
-                    r.memory.note_semantics(source,[
-                        visual['target_type']+': '+visual['evidence']])
+                    if visual.get('evidence','').strip():
+                        r.memory.note_semantics(source,[
+                            visual['target_type']+': '+visual['evidence']])
                     if candidate_found_checkpoint is None:
                         candidate_found_checkpoint=len(record['checkpoints'])-1
                 elif best_cue is None or visual['confidence']=='high':
+                    # UNKNOWN is still available as a visual hypothesis,
+                    # never silently erased because it lacks an exact label.
                     best_cue=candidate
             action=visual['next_action']
             # Rejected VLM camera choices are corrected with another VLM
