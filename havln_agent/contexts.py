@@ -351,7 +351,7 @@ def navigation_context(runtime):
             relative_motion_only=True,
             nominal_remaining_command_distance_m=round(max(0,
                 attempt.get('forward_action_horizon',0)-attempt.get('forward_actions',0))
-                *runtime.camera.forward_step,3),
+                *getattr(runtime.camera,'forward_step',0.25),3),
             unknown_odometry_is_diagnostic_only=True,
             forward_actions=attempt.get('forward_actions',0),
             forward_action_horizon=attempt.get('forward_action_horizon'),
