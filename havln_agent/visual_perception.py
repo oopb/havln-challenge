@@ -25,6 +25,48 @@ SEARCH_SCHEMA = object_schema(dict(
     suggested_next_view=dict(enum=['continue','look_up','look_down'])))
 
 
+# The VLM owns the camera-level search policy. Its outputs are visual
+# hypotheses plus the next real TURN/LOOK request, never a navigation MOVE.
+SCAN_GUIDANCE_SCHEMA = object_schema(dict(
+    target_visible=dict(type='boolean'),
+    target_type=dict(type='string',minLength=1,maxLength=80),
+    confidence=dict(enum=['low','medium','high']),
+    box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
+        items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
+    evidence=dict(type='string',maxLength=400),
+    uncertainty=dict(type='string',maxLength=300),
+    target_kind=dict(enum=['ENTRY','APPROACH','CUE','UNKNOWN']),
+    next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
+    turn_deg=dict(enum=[0,15,30,45,60,90]),
+    reason=dict(type='string',maxLength=250)))
+
+SCAN_GUIDANCE_PROMPT = (
+    'You are the VLM OBSERVATION SUBAGENT, responsible for visual search and '
+    'all camera turns/look changes within this delegated observation task. '
+    'NavigationAgent specified WHAT to find; YOU choose each next viewing '
+    'direction using the CURRENT real RGB image and short search history. '
+    'The robot stays stationary: you may request turn_left, turn_right, '
+    'look_up, look_down or finish, but NEVER forward motion, task success, '
+    'or collision clearance. turn_deg is an absolute multiple of 15 degrees '
+    '(15-90 for turns, 0 for look/finish). Robot yaw: LEFT positive, '
+    'RIGHT negative; pitch changes are NOT yaw. The harness will execute '
+    'the requested calibrated atomic camera actions before your NEXT image. '
+    'Search for a visually actionable region answering the specific objective '
+    'and open-vocabulary targets. A distant staircase/railing is a CUE, '
+    'not necessarily a reachable ENTRY; if an entry or approach is unclear, '
+    'inspect a DIFFERENT view or look down/up, not immediately finish. '
+    'Use target_kind ENTRY/APPROACH only if the visible image supports it; '
+    'otherwise CUE or UNKNOWN. Return an exact normalized image box when '
+    'target_visible and localized; do not hallucinate missing regions. '
+    'Avoid already-observed yaw/pitch combinations and useless 15-degree '
+    'micro-scans; larger calibrated turns are allowed. Finish when meaningful '
+    'visual evidence is sufficient OR the remaining views will not help; '
+    'state uncertainty. You only return evidence and the next camera action. '
+    'Do not invent robot motion, measured depth, safety or task completion. '
+    'Return ONE JSON object.'
+)
+
+
 def semantic_cache_context(value):
     if isinstance(value,list):return [semantic_cache_context(v) for v in value]
     if not isinstance(value,dict):return value
@@ -181,6 +223,47 @@ class VisualPerception:
             image_url=image_url(observation),cache=not force_recheck,
             normalize=lambda value: normalize_coordinates(value, SEARCH_SCHEMA),
             result_schema=SEARCH_SCHEMA)
+
+    def guide_scan_view(self, observation, source, objective, target_types,
+                        view_history, remaining_turn_deg, prior_targets=None):
+        """VLM-directed next camera action from one genuine current RGB view.
+
+        Provide only compact, source-labeled history, not a growing conversation
+        or full prior images. Every decision uses the current sensor image.
+        """
+        from .vision_protocol import coordinate_schema, coordinate_prompt
+        from .vision_protocol import normalize_coordinates
+        task=self.runtime.memory.task
+        index=task.current_subgoal_index
+        subgoal=(task.subgoals[index] if index<len(task.subgoals) else {})
+        pose=source['pose']
+        request=dict(mode='vlm_guided_observation',
+            instruction=task.instruction,
+            subgoal=fields(subgoal,('action','target','landmark','semantic_description')),
+            objective=objective,target_types=list(target_types),
+            observation_id=source['observation_id'],
+            heading_deg=round(__import__('math').degrees(pose['heading']),2),
+            pitch_deg=round(pose.get('pitch_deg',0),2),
+            remaining_turn_deg=int(remaining_turn_deg),
+            previously_inspected_views=list(view_history)[-5:],
+            prior_target_hypotheses=list(prior_targets or ())[-2:],
+            vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        def validate(value):
+            turns=value['next_action'] in ('turn_left','turn_right')
+            if turns and not value['turn_deg']:
+                raise APIError('vlm_turn_requires_positive_calibrated_angle',
+                               category='structured_field')
+            if not turns and value['turn_deg']!=0:
+                raise APIError('vlm_look_or_finish_requires_zero_turn',
+                               category='structured_field')
+        return self.complete(
+            'visual_perception','vlm_guided_observation',
+            SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
+            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy'),
+            image_url=image_url(observation,max_edge=640),cache=False,
+            validate=validate,
+            normalize=lambda value:normalize_coordinates(value,SCAN_GUIDANCE_SCHEMA),
+            result_schema=SCAN_GUIDANCE_SCHEMA)
 
     def grounding(self,observation,source,target):
         return ground(self,observation,Geometry(observation,self.runtime.camera,self.runtime.config['safety_margin']),
