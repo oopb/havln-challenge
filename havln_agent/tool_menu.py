@@ -144,6 +144,8 @@ def navigation_tool_menu(registry, state, *, orientation=False,
         props = dict(params['properties'])
         props.pop('direction', None)
         props.pop('checkpoint_degrees', None)
+        # Pitch and its refinements belong to VLM, not NavigationAgent.
+        props.pop('look', None)
         params['properties'] = props
         spec['parameters'] = params
         offered['observe_for_goal'] = spec
