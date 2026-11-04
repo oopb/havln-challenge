@@ -58,7 +58,21 @@ do not advertise this legacy variant or the standalone
 A staircase seen beyond a railing can be a **CUE** without a verified
 accessible entrance. Cues are preserved but do **not** automatically
 yield `TARGET_CANDIDATE_FOUND`. The VLM should refine the view
-when an entry remains uncertain. A localized, evidence-backed actionable
+when an entry remains uncertain. **Direct VLM evidence relay (Batch 4-13):** In VLM-led scans,
+`target_type` is a **free-form visual description**, not an enum that must
+exactly match NavigationAgent's `target_types`. No intermediate string
+match, minimum confidence, or required bounding-box predicate can suppress a
+VLM report. ObservationController records structured `visual_reports`
+from real inspected frames: observation ID, yaw, pitch, target visibility,
+free-form type, target kind, confidence, box (or null), visual evidence,
+uncertainty, and the suggested camera action. The latest eight compact
+reports appear in NavigationAgent's `latest_observation_task.visual_reports`
+with a current-relative bearing; all original reports remain in diagnostics.
+Negative and possibly mistaken visual hypotheses are also relayed. Best
+candidate/cue fields are optional conveniences, not information gates.
+Reports never prove physical clearance or subgoal completion.
+
+A localized, evidence-backed actionable
 target yields the named observation ID, bounding box, heading, pitch and
 current-relative bearing, with `usable_for_live_safety=false`.
 
