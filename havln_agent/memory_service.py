@@ -40,14 +40,19 @@ class MemoryService(MemoryRecords):
         # Do not silently retain a place node from the previous odometry chain
         # just because stale x/z estimates happen to be numerically nearby.
         if (place is None or place.get('motion_epoch') != pose.get('motion_epoch',0)
+                or place.get('viewpoint_generation',0) != pose.get('viewpoint_generation',0)
                 or separation(place) >= .5):
             near=[p for p in self.places.values() if p['motion_epoch']==pose.get('motion_epoch',0)
+                and p.get('viewpoint_generation',0)==pose.get('viewpoint_generation',0)
                 and separation(p) < .5]
             self.current_place_id=near[0]['id'] if near else 'P%d' % len(self.places)
             if self.current_place_id not in self.places:
                 self.places[self.current_place_id]=dict(id=self.current_place_id,
                     position=[pose['x'],pose['z']],height_y_m_est=pose.get('y',0), confidence='rgbd_estimate_not_global_localization',
-                    position_uncertainty_m=pose['position_uncertainty'], motion_epoch=pose.get('motion_epoch',0),
+                    position_uncertainty_m=(pose['position_uncertainty']
+                        if pose.get('position_coordinates_valid',True) else None),
+                    motion_epoch=pose.get('motion_epoch',0),
+                    viewpoint_generation=pose.get('viewpoint_generation',0),
                     observation_ids=[], headings_deg=[])
             place=self.places[self.current_place_id]
             if (previous is not None and previous != self.current_place_id

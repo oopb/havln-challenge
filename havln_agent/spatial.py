@@ -13,7 +13,7 @@ def validity(source, current, now, max_age):
         return dict(status='UNKNOWN', current_view=False, usable_for_navigation=False,
                     reasons=['missing_observation_source'])
     age = max(0, now - source['captured_at'])
-    same_view = all(source['pose'].get(k) == current['pose'].get(k) for k in ('x', 'z', 'heading', 'pitch_deg', 'motion_epoch'))
+    same_view = all(source['pose'].get(k) == current['pose'].get(k) for k in ('x', 'z', 'heading', 'pitch_deg', 'motion_epoch', 'viewpoint_generation'))
     same_image = source['rgb_hash'] == current['rgb_hash']
     if same_view and same_image and source.get('image_scope', 'current') == 'current':
         age = max(0, now - source.get('revalidated_at', source['captured_at']))
@@ -32,7 +32,8 @@ def validity(source, current, now, max_age):
 def relative_pose_error(source, pose):
     """Shared odometry prefixes cancel only within one explicitly known chain."""
     if all('motion_error_total' in p and 'motion_epoch' in p for p in (source, pose)):
-        if source['motion_epoch'] != pose['motion_epoch']:
+        if (source['motion_epoch'] != pose['motion_epoch']
+                or source.get('unknown_forward_actions',0) != pose.get('unknown_forward_actions',0)):
             return float('inf')
         return abs(pose['motion_error_total'] - source['motion_error_total'])
     return source.get('position_uncertainty', 0.05) + pose.get('position_uncertainty', 0.05)

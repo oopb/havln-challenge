@@ -119,14 +119,16 @@ image analysis, add `--frames all`; for logs only use `--frames none`.
 The original run directory remains intact on the server.
 
 
-**Odometry recovery:** If one forward RGB-D registration fails, the controller
-keeps a bounded short straight segment, preserving post-action RGB-D odometry
-without automatically running any geometry/human/terrain veto. Distributed low-residual static matches
-can now recover an otherwise-rejected metric translation; if still unresolved
-at the segment horizon, the tool reports an UNKNOWN remaining distance and
-establishes a new *local-only* observation anchor. It never invents the lost
-translation or calls the endpoint reached. See
-[odometry recovery contract](docs/odometry_recovery.md).
+**Action-driven motion with optional odometry:** NavigationAgent selects
+a finite yaw and forward action count. The executor completes the requested
+calibrated atomic actions without relying on an RGB-D metric position estimate.
+An UNKNOWN translation never resets motion_epoch or stops an otherwise changing
+RGB-D route; identical pre/post RGB-D still interrupts to avoid blind repeated
+forward attempts. Completed plans return `ACTIONS_COMPLETED`, *not* physical
+`TARGET_REACHED`: a nominal command distance is never fabricated as measured
+motion. Genuine stair descent and subgoal completion still require independent
+registered visual/motion evidence. See
+[action-driven motion and optional odometry](docs/odometry_recovery.md).
 
 
 **Active perception:** Navigation Agent can delegate a bounded `observe_for_goal` subtask. The

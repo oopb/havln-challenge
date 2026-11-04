@@ -55,7 +55,14 @@ def runtime():
     r.record_tool=None
     r.frames={}
     r.refresh_callback=Mock(side_effect=lambda:frame())
-    r.step_callback=Mock(side_effect=lambda action:(frame(),False))
+    forward_index=[0]
+    def step(action):
+        result=frame()
+        if action=='MOVE_FORWARD':
+            forward_index[0]+=1
+            result.depth[:]=1.4+0.01*forward_index[0]
+        return result,False
+    r.step_callback=Mock(side_effect=step)
     r.accept_observation(frame())
     return r
 
@@ -70,7 +77,9 @@ class DirectMovementExecutionTests(unittest.TestCase):
         # single finite 0.5m route must complete without asking for a resume.
         with patch('havln_agent.tools.estimate_translation',return_value=motion):
             result=r._navigate_relative(30,.5)
-        self.assertEqual(result['status'],'TARGET_REACHED')
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertTrue(result['action_intent_completed'])
+        self.assertFalse(result['target_reached'])
         self.assertEqual([x['action'] for x in r.memory.actions],
                          ['TURN_LEFT','TURN_LEFT','MOVE_FORWARD','MOVE_FORWARD'])
         self.assertIsNone(r.motion_controller.target)
@@ -93,7 +102,8 @@ class DirectMovementExecutionTests(unittest.TestCase):
         with patch('havln_agent.tools.estimate_translation',return_value=motion):
             outcome=r.execute(dict(tool='navigate_relative',
                 args=dict(turn_deg=30,distance_m=.5)),binding)
-        self.assertEqual(outcome['status'],'TARGET_REACHED')
+        self.assertEqual(outcome['status'],'ACTIONS_COMPLETED')
+        self.assertFalse(outcome['movement_intent_feedback']['endpoint_estimate_valid'])
         self.assertEqual(outcome['executed_actions'],4)
         self.assertEqual(outcome['requested_actions'],4)
         self.assertEqual(outcome['movement_intent_feedback'][
@@ -128,8 +138,9 @@ class DirectMovementExecutionTests(unittest.TestCase):
             uncertainty_m=.01)
         with patch('havln_agent.tools.estimate_translation',return_value=motion):
             arrived=r._navigate_relative(0,.5)
-        self.assertEqual(arrived['status'],'TARGET_REACHED')
-        self.assertEqual(arrived['reason'],'original_endpoint_reached')
+        self.assertEqual(arrived['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(arrived['reason'],'model_requested_forward_actions_executed')
+        self.assertFalse(arrived['target_reached'])
         self.assertEqual(len(r.memory.actions),2)
         self.assertIsNone(r.motion_controller.target)
 
@@ -139,6 +150,7 @@ class DirectMovementExecutionTests(unittest.TestCase):
             reason='inconsistent_with_forward_camera_motion')
         # The test fixture returns byte-identical RGB and depth frames, as
         # observed in 13 real forward actions in evaluation episode 4.
+        r.step_callback=Mock(side_effect=lambda action:(r.observation,False))
         with patch('havln_agent.tools.estimate_translation',return_value=unknown):
             result=r._navigate_relative(0,.75)
         self.assertEqual(len(r.memory.actions),1)
@@ -158,10 +170,36 @@ class DirectMovementExecutionTests(unittest.TestCase):
         self.assertFalse(result['endpoint_estimate_valid'])
         self.assertIsNone(result['remaining_distance'])
         self.assertFalse(result['remaining_path']['endpoint_estimate_valid'])
-        self.assertEqual(r.motion_controller.motion_epoch,1)
+        self.assertEqual(r.motion_controller.motion_epoch,0)
+        self.assertEqual(r.motion_controller.unknown_forward_actions,1)
+        self.assertFalse(r.motion_controller.global_chain_continuous)
         self.assertTrue(any(e['event']=='no_observed_forward_motion'
                             for e in r.memory.events))
         self.assertEqual(r.motion_controller.z,0.)
+
+    def test_unknown_metric_odometry_does_not_interrupt_changed_view_action_plan(self):
+        r=runtime()
+        unknown=dict(status='UNKNOWN',
+            reason='inconsistent_or_dynamic_correspondences',
+            vertical_motion='UNKNOWN')
+        with patch('havln_agent.tools.estimate_translation',return_value=unknown):
+            done=r._navigate_relative(0,.75)
+        self.assertEqual(done['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(done['commanded_forward_actions'],3)
+        self.assertEqual(done['remaining_commanded_forward_actions'],0)
+        self.assertFalse(done['target_reached'])
+        self.assertFalse(done['endpoint_estimate_valid'])
+        self.assertIsNone(done['remaining_distance'])
+        self.assertEqual(len(r.memory.actions),3)
+        self.assertEqual(r.motion_controller.motion_epoch,0)
+        self.assertEqual(r.motion_controller.unknown_forward_actions,3)
+        self.assertEqual(r.motion_controller.viewpoint_generation,3)
+        self.assertFalse(r.motion_controller.pose()['position_coordinates_valid'])
+        self.assertEqual(r.motion_controller.position_uncertainty,.05)
+        self.assertEqual(r.motion_controller.z,0.)
+        self.assertEqual(r.memory.actions[-1]['result']['rgbd_motion']['status'],'UNKNOWN')
+        self.assertFalse(any(e['event']=='no_observed_forward_motion'
+                             for e in r.memory.events))
 
     def test_direct_route_starts_unverified_before_first_live_probe(self):
         r=runtime()

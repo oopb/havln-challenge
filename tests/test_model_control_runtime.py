@@ -54,7 +54,7 @@ class ModelControlRuntimeTests(unittest.TestCase):
         r.memory.note_candidates.assert_called_once()
         self.assertEqual(r.memory.note_candidates.call_args.args[0][0]['id'],'direct_0000')
         self.assertEqual(result['requested_motion']['authorization'],
-                         'live_per_atomic_action_only')
+                         'model_selected_atomic_actions_not_metric_arrival')
 
     def test_model_continuous_intent_is_quantized_not_rejected(self):
         r=direct_runtime()

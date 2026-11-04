@@ -94,34 +94,31 @@ class RelativeMotionTests(unittest.TestCase):
     def update_capture(agent):
         agent.observation.captured_at=time.monotonic()
 
-    def test_unknown_first_move_allows_one_more_checked_forward_then_reanchors(self):
+    def test_unknown_first_move_does_not_reset_finite_action_plan(self):
         r,path,actions,geometry=self.agent()
         result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(geometry.diagnose_calls,0)
-        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
-        self.assertEqual(result['reason'],
-            'relative_forward_horizon_exhausted_without_verified_pose')
-        self.assertEqual(result['recovery']['mode'],'REANCHOR_CURRENT_RGBD')
-        self.assertIsNone(r.motion_controller.target)
-        self.assertEqual(r.motion_controller.motion_epoch,1)
-        self.assertEqual(r.motion_controller.z,.25) # only measured second motion
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(result['reason'],'model_requested_forward_actions_executed')
+        self.assertTrue(result['action_intent_completed'])
         self.assertFalse(result['target_reached'])
         self.assertIsNone(result['remaining_distance'])
+        self.assertEqual(result['remaining_commanded_forward_actions'],0)
         self.assertFalse(result['endpoint_estimate_valid'])
-        self.assertEqual(result['recovery']['local_anchor_observation_id'],'obs_0002')
-        self.assertTrue(result['recovery']['missing_translation_still_unknown'])
-        self.assertEqual(r.motion_controller.pose()['coordinate_scope'],
-                         'reanchored_local_relative')
+        self.assertEqual(r.motion_controller.motion_epoch,0)
+        self.assertEqual(r.motion_controller.unknown_forward_actions,1)
+        self.assertEqual(r.motion_controller.z,.25) # only registered motion
+        self.assertFalse(r.motion_controller.global_chain_continuous)
+        self.assertIsNone(r.motion_controller.target)
 
     def test_unknown_motion_finishes_intent_without_second_model_call(self):
         r,path,actions,geometry=self.agent()
         result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
-        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
-        self.assertEqual(result['recovery']['executed_forward_actions'],2)
-        self.assertEqual(result['recovery']['mode'],'REANCHOR_CURRENT_RGBD')
-        self.assertIsNone(r.motion_controller.target)
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(result['commanded_forward_actions'],2)
+        self.assertTrue(result['odometry_unknown_during_route'])
         self.assertFalse(result['endpoint_estimate_valid'])
 
     def test_geometry_does_not_automatically_veto_model_selected_forward(self):
@@ -129,29 +126,26 @@ class RelativeMotionTests(unittest.TestCase):
         result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(geometry.diagnose_calls,0)
-        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
-        self.assertEqual(result['reason'],
-                         'relative_forward_horizon_exhausted_without_verified_pose')
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
 
-    def test_relative_motion_cannot_steer_to_stale_global_endpoint(self):
+    def test_resume_uses_original_model_bearing_not_stale_metric_endpoint(self):
         r,path,actions,geometry=self.agent()
-        # Simulate a previously accepted unknown-motion segment that the
-        # environment interrupted, then an external change in heading.
         r.motion_controller.target=(0.,.5)
         r.memory.active_attempt=dict(target=path,interruptions=[],
             unknown_motion_seen=True,forward_actions=1,
             forward_action_horizon=2,unknown_observation_ids=['obs_0001'])
         r.motion_controller.accept_feedback('MOVE_FORWARD',dict(status='UNKNOWN'))
         r.motion_controller.accept_feedback('TURN_LEFT',None)
-        result=r._execute_waypoint('current')
-        self.assertEqual(actions,[])
-        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
-        self.assertEqual(result['reason'],'relative_motion_heading_changed')
+        self.assertEqual(r.motion_controller.route_action(path,1,2),'TURN_RIGHT')
+        self.assertEqual(r.motion_controller.motion_epoch,0)
+        self.assertEqual(r.motion_controller.unknown_forward_actions,1)
 
-    def test_normal_measured_steps_still_reach_target(self):
+    def test_normal_measured_steps_complete_command_but_not_goal(self):
         r,path,actions,geometry=self.agent(outcomes=['ESTIMATED','ESTIMATED'])
         result=r._execute_waypoint('p0')
-        self.assertEqual(result['status'],'TARGET_REACHED')
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertFalse(result['target_reached'])
+        self.assertTrue(result['action_intent_completed'])
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(r.motion_controller.motion_epoch,0)
 
@@ -175,46 +169,41 @@ class RelativeMotionTests(unittest.TestCase):
         self.assertEqual(memory.routes,{})
         self.assertEqual(record['place_id'],'P1')
 
-    def test_old_global_target_is_stale_but_new_local_target_valid(self):
+    def test_old_observed_stance_waypoint_stales_without_epoch_reset(self):
         r,old,actions,geometry=self.agent()
         source=old['source']['pose']
-        r.motion_controller.accept_feedback('MOVE_FORWARD',dict(status='UNKNOWN'))
+        r.motion_controller.accept_feedback('MOVE_FORWARD',
+            dict(status='UNKNOWN',observed_frame_change=True))
         self.assertFalse(r.motion_controller.pose()['global_chain_continuous'])
-        self.assertFalse(r.motion_controller.pose()['local_anchor_observation_id'])
-        self.assertTrue(r.motion_controller.anchor_relative_frame('obs_new'))
+        self.assertEqual(r.motion_controller.motion_epoch,0)
+        self.assertEqual(r.motion_controller.viewpoint_generation,1)
         r.observation.captured_at=time.monotonic()
-        # An old global target must stay invalid even after a fresh local
-        # anchor is established; the unknown motion is not reconstructed.
         stale=r.motion_controller.validate(r,old)
-        self.assertEqual(stale['status'],'NEEDS_VIEW')
-        self.assertEqual(stale['reason'],'pose_uncertainty_requires_reconfirmation')
+        self.assertEqual(stale['status'],'STALE_TARGET')
+        self.assertEqual(stale['reason'],'viewpoint_changed_since_waypoint_proposal')
         new_pose=r.motion_controller.pose()
-        self.assertNotEqual(source['motion_epoch'],new_pose['motion_epoch'])
+        self.assertEqual(source['motion_epoch'],new_pose['motion_epoch'])
         new_path=dict(id='new',angle=0.,distance=.25,
             source=dict(subgoal=0,pose=new_pose))
         current=r.motion_controller.validate(r,new_path)
         self.assertEqual(current['status'],'OK')
         self.assertEqual(current['validation']['next_atomic_action'],'MOVE_FORWARD')
-        self.assertEqual(current['validation']['relative_motion_only'],False)
+        self.assertFalse(current['validation']['endpoint_estimate_valid'])
         self.assertFalse(current['validation']['requires_post_turn_recheck'])
 
-    def test_navigation_llm_receives_unknown_distance_and_local_anchor(self):
+    def test_navigation_llm_receives_command_completion_not_fake_distance(self):
         from havln_agent.contexts import tool_summary
-        result=dict(tool='navigate_local',status='PARTIAL',
-            interrupted_status='REQUIRES_ATTENTION',
-            reason='relative_forward_horizon_exhausted_without_verified_pose',
+        result=dict(tool='navigate_local',status='ACTIONS_COMPLETED',
+            reason='model_requested_forward_actions_executed',
             endpoint_estimate_valid=False,remaining_distance=None,
-            recovery=dict(mode='REANCHOR_CURRENT_RGBD',
-                local_anchor_observation_id='obs_0099',
-                coordinate_scope='new_local_relative_only',
-                missing_translation_still_unknown=True))
+            action_intent_completed=True,remaining_commanded_forward_actions=0,
+            commanded_forward_actions=2,reach_basis='atomic_action_receipts_not_verified_metric_arrival')
         summary=tool_summary(result)
         self.assertIsNone(summary['remaining_distance'])
         self.assertFalse(summary['endpoint_estimate_valid'])
-        self.assertEqual(summary['recovery']['local_anchor_observation_id'],'obs_0099')
-        self.assertEqual(summary['interrupted_status'],'REQUIRES_ATTENTION')
+        self.assertEqual(summary['status'],'ACTIONS_COMPLETED')
 
-    def test_one_step_horizon_cannot_retry_unknown_motion(self):
+    def test_one_step_horizon_completes_after_one_receipt_not_metric_arrival(self):
         r,path,actions,geometry=self.agent()
         path['distance']=.25
         r._revalidate_path.return_value=dict(
@@ -222,8 +211,9 @@ class RelativeMotionTests(unittest.TestCase):
             executable_segment=dict(path_id='p0'))
         result=r._execute_waypoint('p0')
         self.assertEqual(actions,['MOVE_FORWARD'])
-        self.assertEqual(result['status'],'REQUIRES_ATTENTION')
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertFalse(result['target_reached'])
+        self.assertEqual(result['remaining_commanded_forward_actions'],0)
 
 
 if __name__ == '__main__':

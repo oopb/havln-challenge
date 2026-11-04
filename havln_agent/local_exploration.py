@@ -16,9 +16,10 @@ def angular_separation(a, b):
 
 
 def same_stance(a, b, horizontal_tolerance=.12, height_tolerance=.12):
-    """Unknown translation / new odometry epoch invalidates old exploration."""
+    """A changed post-forward view is a new stance even without metric odometry."""
     return (bool(a) and bool(b)
             and a.get('motion_epoch', 0) == b.get('motion_epoch', 0)
+            and a.get('viewpoint_generation',0) == b.get('viewpoint_generation',0)
             and math.hypot(a.get('x', 1e5)-b.get('x', -1e5),
                            a.get('z', 1e5)-b.get('z', -1e5)) <= horizontal_tolerance
             and abs(a.get('y', 1e5)-b.get('y', -1e5)) <= height_tolerance)
@@ -332,7 +333,7 @@ def last_block(memory, pose, *, max_recent_actions=150):
                 'navigate_local','navigate_relative','navigate_to_pixel'):
             continue
         result = item.get('result') or {}
-        if result.get('status') == 'TARGET_REACHED':
+        if result.get('status') in ('TARGET_REACHED','ACTIONS_COMPLETED'):
             return None
         if result.get('status') != 'BLOCKED' and result.get('interrupted_status') != 'BLOCKED':
             if ('MOVE_FORWARD' not in (result.get('executed_motion') or [])

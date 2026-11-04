@@ -137,7 +137,7 @@ def tool_result_schema():
     return dict(type='object', properties=dict(
         status=dict(enum=['OK','PARTIAL','NEEDS_VIEW','BLOCKED','INVALID_ARGUMENTS',
             'INVALID_TARGET','STALE_TARGET','STALE_OBSERVATION','API_ERROR','API_UNAVAILABLE',
-            'TARGET_REACHED','INSUFFICIENT_EVIDENCE','RECORDED','VERIFIED','REJECTED',
+            'TARGET_REACHED','ACTIONS_COMPLETED','INSUFFICIENT_EVIDENCE','RECORDED','VERIFIED','REJECTED',
             'FINISHED','CANCELLED','LOCALIZED','UNKNOWN','EXECUTED','EXECUTABLE','STOPPED','BUDGET_LIMIT',
             'INTERRUPTED','TOOL_ERROR','REQUIRES_ATTENTION','NO_NEW_INFORMATION']),
         tool=dict(type='string'), tool_call_id=dict(type='string'),

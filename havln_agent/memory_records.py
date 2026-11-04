@@ -126,6 +126,7 @@ class MemoryRecords:
             old_pose=old['pose']
             if (old.get('subgoal') != self.task.current_subgoal_index
                     or old_pose.get('motion_epoch') != pose.get('motion_epoch')
+                    or old_pose.get('viewpoint_generation',0) != pose.get('viewpoint_generation',0)
                     or math.hypot(old_pose['x']-pose['x'],old_pose['z']-pose['z']) > .08
                     or abs(angle_error(old_pose['heading'],pose['heading'])) >
                         math.radians(self.camera.turn_angle/2)
@@ -225,7 +226,7 @@ class MemoryRecords:
 
     def record_tool(self, call, result, request_context):
         call,result,request_context=copy.deepcopy((call,result,request_context))
-        successful=result['status'] in {'OK','EXECUTABLE','LOCALIZED','RECORDED','VERIFIED','FINISHED','CANCELLED','PARTIAL','TARGET_REACHED'}
+        successful=result['status'] in {'OK','EXECUTABLE','LOCALIZED','RECORDED','VERIFIED','FINISHED','CANCELLED','PARTIAL','TARGET_REACHED','ACTIONS_COMPLETED'}
         related=[r for r in self.tool_ledger if not r['resolved'] and r['call']==call]
         record=dict(call_id=result['tool_call_id'],actor=request_context['actor'],
             subgoal_id=request_context['subgoal_id'],call=call,result=result,request_context=request_context,

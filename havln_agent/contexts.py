@@ -120,6 +120,9 @@ def tool_summary(result):
         'requested_actions','executed_actions','executed_motion','end_observation_id',
         'movement_intent_feedback',
         'remaining_distance','endpoint_estimate_valid','reach_basis',
+        'action_intent_completed','remaining_commanded_forward_actions',
+        'nominal_remaining_command_distance_m','commanded_forward_actions',
+        'commanded_forward_horizon','odometry_unknown_during_route',
         'vertical_motion','vertical_translation_m_est','semantic_direction_mismatch','waypoint_type','waypoint_arrival_completes_task','completion_confirmed','criteria_verdicts','missing','supported','information_options'))
     if result.get('status') in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION') or result.get('safety'):
         collision=collision_summary(result)
@@ -266,12 +269,17 @@ def navigation_context(runtime):
         navigation_mode=getattr(runtime, 'navigation_mode', 'OBSERVE'),
         navigation_memory=navigation_memory,
         pose=dict(place_id=memory.current_place_id,heading_deg=math.degrees(pose['heading']),
-            pitch_deg=runtime.pitch_deg,position_xz_m_est=[pose['x'],pose['z']],
+            pitch_deg=runtime.pitch_deg,
+            position_xz_m_est=([pose['x'],pose['z']]
+                if pose.get('position_coordinates_valid',True) else None),
             height_y_m_est=pose['y'],
             confidence=('estimated_relative' if pose.get('global_chain_continuous',True)
-                        else 'local_relative_only' if pose.get('local_anchor_observation_id')
-                        else 'unknown_after_unregistered_motion'),
-            position_uncertainty_m=pose['position_uncertainty'],
+                        else 'action_only_after_unknown_translation'),
+            position_uncertainty_m=(pose['position_uncertainty']
+                if pose.get('position_coordinates_valid',True) else None),
+            viewpoint_generation=pose.get('viewpoint_generation',0),
+            unknown_forward_actions=pose.get('unknown_forward_actions',0),
+            position_coordinates_valid=pose.get('position_coordinates_valid',True),
             motion_epoch=pose.get('motion_epoch',0),
             coordinate_scope=pose.get('coordinate_scope','episode_relative'),
             global_chain_continuous=pose.get('global_chain_continuous',True),
@@ -326,28 +334,31 @@ def navigation_context(runtime):
                  (entry.get('call') or {}).get('args',{}).get('waypoint_id'))
                    ==runtime.active_waypoint_id), {})
         last_status=recent_attempt.get('interrupted_status') or recent_attempt.get('status')
-        pending_valid=not unverified and last_status not in (
+        pending_valid=last_status not in (
             'NEEDS_VIEW','BLOCKED','REQUIRES_ATTENTION','STALE_TARGET')
         result['local_navigation']=dict(waypoint_id=runtime.active_waypoint_id,
             status='IN_PROGRESS',
             route_status='IN_PROGRESS',
-            execution_feasibility=('REQUIRES_NEW_LIVE_SAFETY_EVIDENCE'
-                if not pending_valid else 'NOT_YET_REVALIDATED'),
+            execution_feasibility=('MODEL_DECIDES_CONTINUE_OR_REPLAN'
+                if not pending_valid else 'FINITE_ACTION_PLAN_PENDING'),
             last_execution_status=last_status,
             last_failure_reason=(recent_attempt.get('reason') if not pending_valid else None),
-            next_action=(
-                'MOVE_FORWARD_PENDING_LIVE_SAFETY' if unverified else
-                runtime.motion_controller.next_action()),
-            remaining_distance_m=(None if unverified else
-                round(math.hypot(target[0]-pose['x'],target[1]-pose['z']),3)),
-            endpoint_estimate_valid=not unverified,
-            relative_motion_only=unverified,
+            next_action=runtime.motion_controller.route_action(
+                attempt['target'],attempt.get('forward_actions',0),
+                attempt.get('forward_action_horizon',1)) if attempt.get('target') else None,
+            remaining_distance_m=None,
+            endpoint_estimate_valid=False,
+            relative_motion_only=True,
+            nominal_remaining_command_distance_m=round(max(0,
+                attempt.get('forward_action_horizon',0)-attempt.get('forward_actions',0))
+                *getattr(runtime.camera,'forward_step',0.25),3),
+            unknown_odometry_is_diagnostic_only=True,
             forward_actions=attempt.get('forward_actions',0),
             forward_action_horizon=attempt.get('forward_action_horizon'),
             suggestion=('old_waypoint_is_not_a_currently_executable_direction; '
                         'obtain specific new evidence or choose a different model-led route'
                 if not pending_valid else
-                'waypoint_is_pending_only; live safety must be revalidated before motion'))
+                'waypoint_is_pending_only; it resumes finite model action counts without metric pose gating'))
     # Persistent physical obstruction: use the END pose, and recognize
     # PARTIAL + interrupted_status=BLOCKED from a waypoint that moved first.
     # Historical depth is evidence of failure, never fresh motion permission.
