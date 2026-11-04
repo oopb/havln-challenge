@@ -333,7 +333,7 @@ def last_block(memory, pose, *, max_recent_actions=150):
                 'navigate_local','navigate_relative','navigate_to_pixel'):
             continue
         result = item.get('result') or {}
-        if result.get('status') == 'TARGET_REACHED':
+        if result.get('status') in ('TARGET_REACHED','ACTIONS_COMPLETED'):
             return None
         if result.get('status') != 'BLOCKED' and result.get('interrupted_status') != 'BLOCKED':
             if ('MOVE_FORWARD' not in (result.get('executed_motion') or [])
