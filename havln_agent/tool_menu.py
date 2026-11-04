@@ -110,6 +110,10 @@ def contextual_tool_names(state, *, orientation=False):
     # or explicit geometry probe, rather than guessing scene-specific rules.
     requested = set(last.get('information_options') or ())
     result.update(requested.intersection(CONTEXTUAL_TOOLS))
+    # A tool suggestion must never reintroduce ordinary single-step camera
+    # control. Only genuine orientation instructions need that legacy tool.
+    if not orientation:
+        result.discard('turn_and_observe')
     if last.get('tool') == 'verify_subgoal' and last.get('status') in (
             'REJECTED', 'INSUFFICIENT_EVIDENCE'):
         result.add('compare_views')
