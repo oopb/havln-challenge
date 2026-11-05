@@ -268,7 +268,7 @@ class AgentRuntime(ToolExecutor):
         # Do not repeatedly pay for an identical RGB-D/pose VLM request.
         # A changed viewpoint or live human frame produces a different key.
         pose=source['pose']
-        key=(source['rgb_hash'],source['depth_hash'],
+        key=(self.memory.episode_id,source['rgb_hash'],source['depth_hash'],
              pose['heading'],pose.get('pitch_deg',self.pitch_deg),
              pose.get('viewpoint_generation',0))
         previous=getattr(self,'_last_obstacle_vision',None)
