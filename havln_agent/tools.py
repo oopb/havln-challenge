@@ -266,9 +266,10 @@ class ToolExecutor:
             pending = self._prepare_forward()
             if pending:
                 return pending
-        # Motion execution does not implicitly invoke Geometry, terrain,
-        # collision probes or human occupancy checks. Those are information
-        # tools that NavigationAgent chooses to request explicitly.
+        # Runtime._prepare_forward() has already applied the conservative
+        # live central-obstacle Depth probe for MOVE_FORWARD. Full terrain
+        # geometry / other-bearing inspection remain NavigationAgent tools.
+        # Do not run a second probe or override the model's route here.
         diagnostics, candidates = [], []
         geometry, safety_check, front = None, None, None
         before, before_record = self.observation, dict(self.memory.current)
