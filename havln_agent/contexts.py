@@ -5,7 +5,8 @@ import time
 from .progress import turn_evidence, current_visual_evidence, registered_motion_history
 from .memory_records import task_tokens
 from .local_exploration import (last_block, local_coverage,
-    multi_pitch_coverage, panorama_coverage, observation_stagnation)
+    multi_pitch_coverage, panorama_coverage, observation_stagnation,
+    recent_forward_stall_evidence)
 
 
 def fields(value,names):
@@ -167,7 +168,8 @@ def tool_summary(result):
     if 'pixel_target' in result:value['pixel_target']=result['pixel_target']
     if 'geometry' in result:
         value['geometry']=fields(result['geometry']['front'],('motion_state','depth_state','clearance',
-            'rejection_reasons','terrain_support','human_evidence'))
+            'nearest_obstacle_distance','nearest_collision_point','unknown_fraction',
+            'rejection_reasons','terrain_support','human_evidence','human_occupancy'))
     if 'geometry' in value and 'terrain_support' in value['geometry']:
         value['geometry']['terrain_support']=fields(value['geometry']['terrain_support'],
             ('status','reason','direction','initial_height_m','end_height_m','max_step_height_m','scope'))
@@ -527,6 +529,9 @@ def navigation_context(runtime):
                 move_result.get('status'),
             reason=move_result.get('reason'),
             **receipt)
+    stall=recent_forward_stall_evidence(memory,pose,runtime.camera.turn_angle)
+    if stall:
+        result['forward_stall_evidence']=stall
     if stagnation['repeated_low_information']:
         stagnation['intervention']=(
             'DIRECTIONAL_ACTION_DECISION_REQUIRED'
@@ -620,6 +625,14 @@ def compact_navigation_context(state):
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_visual_hypotheses',
             'last_verification','interpretation','model_choices'))
+    if state.get('forward_stall_evidence'):
+        s=state['forward_stall_evidence']
+        out['forward_stall_evidence']=fields(s,(
+            'total_failed_forward_attempts','current_heading_deg',
+            'current_heading_failed_forward_attempts','failed_bearings',
+            'last_failed_step','last_failed_observation_id','evidence',
+            'collision_proven','depth_obstacle_inspected',
+            'interpretation','model_options'))
     if state.get('navigation_memory'):
         m=state['navigation_memory']
         n=fields(m,('expected_vertical_motion','total_forward_actions',
@@ -669,6 +682,23 @@ def compact_navigation_context(state):
         if t.get('measured_collision'):
             out['last_tool']['measured_collision']=fields(t['measured_collision'],
                 ('reason','clearance','motion_state'))
+        # Explicit model-requested depth inspection must actually reach the
+        # next model decision, not be silently dropped by compaction.
+        if t.get('tool')=='inspect_geometry':
+            if t.get('geometry'):
+                out['last_tool']['geometry']=fields(t['geometry'],(
+                    'motion_state','depth_state','clearance',
+                    'nearest_obstacle_distance','nearest_collision_point',
+                    'unknown_fraction','rejection_reasons','human_occupancy',
+                    'human_evidence','terrain_support'))
+            if t.get('directions'):
+                out['last_tool']['directions']=[
+                    fields(d,('bearing_deg','status','reason','clearance_m',
+                              'support')) for d in t['directions'][:7]]
+            if t.get('alternatives'):
+                out['last_tool']['alternatives']=[
+                    fields(d,('bearing_deg','status','reason','clearance_m'))
+                    for d in t['alternatives'][:5]]
     if state.get('latest_observation_task'):
         t=state['latest_observation_task']
         out['latest_observation_task']=dict(mode=t.get('mode'),
