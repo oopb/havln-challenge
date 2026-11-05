@@ -416,6 +416,37 @@ def image_url(observation, max_edge=None):
     return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
 
 
+def depth_image_url(observation, camera, max_edge=640, display_max_m=5.0):
+    """Encode PUBLIC Depth as a metrically labeled *visualization* for VLM.
+
+    Pixel alignment is by normalized image coordinates; RGB and Depth may
+    have different resolutions. Near=dark, far=bright, invalid=magenta.
+    This does not create hidden geometry, navigation permission or a map.
+    """
+    raw=np.asarray(observation.depth, dtype=np.float64)
+    if raw.ndim==3 and raw.shape[-1]==1:
+        raw=raw[:,:,0]
+    if raw.ndim!=2:
+        raise ValueError('Expected 2D public Depth for VLM observation')
+    metres=(raw*(camera.max_depth-camera.min_depth)+camera.min_depth
+            if camera.normalized else raw)
+    valid=(np.isfinite(raw) & np.isfinite(metres)
+           & (metres>camera.min_depth) & (metres<=camera.max_depth))
+    if camera.normalized:
+        valid &= (raw>0) & (raw<=1)
+    brightness=np.uint8(np.clip(
+        np.nan_to_num(metres,nan=display_max_m,posinf=display_max_m,
+                      neginf=0) / display_max_m,0,1)*255)
+    visualization=np.repeat(brightness[:,:,None],3,axis=2)
+    visualization[~valid]=[255,0,255]
+    frame=Image.fromarray(visualization,'RGB')
+    if max_edge and max(frame.size)>max_edge:
+        frame.thumbnail((max_edge,max_edge),Image.Resampling.NEAREST)
+    buf=io.BytesIO()
+    frame.save(buf,format='PNG')
+    return 'data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
+
+
 def perceive(client, observation, task_context, image_context):
     """Answer one question from one RGB image; all metric work remains local."""
     result = client.complete(

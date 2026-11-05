@@ -21,7 +21,7 @@ def guidance(action='finish',turn=0,kind='UNKNOWN',visible=False):
         confidence='high' if visible else 'low',
         box=[.1,.2,.7,.9] if visible else None,
         evidence='Walkable opening visible' if visible else '',
-        uncertainty='',target_kind=kind,
+        uncertainty='',target_kind=kind,candidate_approach=False,
         next_action=action,turn_deg=turn,reason='search policy')
 
 
