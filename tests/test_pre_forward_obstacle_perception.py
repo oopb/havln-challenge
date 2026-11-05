@@ -97,6 +97,8 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
                          ['MOVE_FORWARD','MOVE_FORWARD'])
         g.central_forward_obstruction.assert_not_called()
         r.visual_perception.describe_obstacle.assert_not_called()
+        self.assertEqual(r.memory.actions[0]['result']
+                         ['forward_depth_preflight']['status'],'UNCONFIRMED')
 
     def test_side_only_depth_block_does_not_prevent_forward(self):
         r,g=self.blocked_runtime(center(False))
@@ -107,6 +109,8 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertEqual(r.step_callback.call_count,2)
         r.visual_perception.describe_obstacle.assert_not_called()
+        self.assertFalse(r.memory.actions[0]['result']
+                         ['forward_depth_preflight']['center_confirmed'])
 
     def test_vlm_failure_preserves_measured_block_and_navigation_authority(self):
         r,g=self.blocked_runtime()
