@@ -8,7 +8,8 @@ observation objective and open-vocabulary targets, then decide if/where/how
 far to navigate or whether to request an explicit geometry inspection.
 
 **VisualPerception (VLM)** owns the **whole camera observation subtask**.
-At each checkpoint it receives the current genuine RGB image, task and
+At each checkpoint it receives the current genuine RGB image AND a calibrated
+rendering of PUBLIC Depth, task and
 goal, absolute current heading/pitch, remaining turn budget, and a short
 history of previously inspected real views and prior target hypotheses.
 It chooses the **next camera action** (turn left/right by 15–90 calibrated
@@ -18,8 +19,11 @@ image. There is **no NavigationAgent inference between camera steps**.
 **ObservationController** applies calibrated TURN/LOOK actions, persists
 real frame/angle receipts, enforces pitch/turn/episode limits and prevents
 returning to an already-inspected heading/pitch within the same task.
-No forward movement, simulator ground-truth reads or automatic geometry
-probes occur inside observation.
+No forward movement or simulator ground-truth reads occur inside observation.
+A **model-proposed approach heading** does trigger one local, conservative
+PUBLIC Depth central-occupancy probe on that CURRENT viewing bearing.
+This is not full terrain or route geometry certification; only confirmed
+centerline occupancy is returned to the VLM as a blocked candidate.
 
 ## Recommended tool call
 
@@ -37,11 +41,12 @@ probes occur inside observation.
 The `objective` now states **both** the current visual question and the
 visible cue(s) one might expect near the END of the current semantic milestone,
 if a meaningful endpoint is visually identifiable. NavigationAgent writes
-this reference in the **existing objective string**; no new tool argument,
-VLM field, verification call, or extra camera sweep is added. For a descent,
+this reference in the **existing objective string**; the new RGB-D approach
+agent reuses this same tool signature, but adds a model-visible
+`candidate_approach` flag to its internal scan output. For a descent,
 the cue might be descending treads transitioning to level flooring; for a
 doorway, the visible opening/interior beyond the door. The VLM checks only
-the current real RGB evidence and reports absence or uncertainty rather than
+the current real RGB-D evidence and reports absence or uncertainty rather than
 assuming the endpoint is present. Seeing a distant floor or room is NOT proof
 that the robot has reached it. This also must NOT make the VLM suppress other
 useful visual facts or unilaterally change the goal. Only NavigationAgent
@@ -117,8 +122,10 @@ and requestable memory records.
 
 VLM has no power to invoke `MOVE_FORWARD`, `STOP`, physical safety
 clearance or semantic task completion. Geometry and terrain checks remain
-an **explicit NavigationAgent tool choice** in this simulator-specific
-experimental pipeline, and Habitat remains responsible for its physics.
+an **explicit NavigationAgent tool choice** for FULL diagnostics. A small
+central public-Depth candidate probe runs inside observation only after VLM
+proposes the CURRENT robot yaw as a possible approach; Habitat remains
+responsible for its physics.
 
 A repeated requested view triggers up to two same-frame VLM correction calls
 with explicit rejected-action feedback and the inspected yaw/pitch map. This
@@ -151,3 +158,61 @@ python -m unittest discover -s tests -p 'test_active_observation.py' -v
 
 Closed-loop Habitat measurements still require rerunning on the user's
 simulation host.
+
+
+## RGB-D local approach-search loop (November 2026)
+
+Every genuine VLM checkpoint receives two ordered images:
+
+1. Current RGB.
+2. Current public Depth, rendered as grayscale in **meters** over [0, 5] m
+   (near=black; far=white; farther than 5 m clips to white; missing/invalid
+   pixels are magenta). RGB/Depth are related by normalized image coordinates;
+   do NOT assume identical pixel resolution or mistake bright far flooring for
+   directly walkable free space. This is only a visualization of Depth, not a
+   semantic collision certificate.
+
+The VLM still receives the current subgoal, instruction, absolute yaw/pitch,
+up to 12 prior in-task VLM observation summaries, and up to 2 earlier target
+hypotheses. **Raw prior images and full API conversation are not replayed**.
+
+The VLM can request a calibrated TURN/LOOK action, or nominate the current
+camera heading as a short-range motion *hypothesis* with
+`candidate_approach=true`. The controller invokes ONLY
+`Geometry.central_forward_obstruction()` for this candidate against the
+same current public Depth (not `assess_step()` or `inspect_geometry`).
+It performs **no forward action**.
+
+- If the centerline probe finds confirmed measured occupancy: persist its
+  observation ID, absolute bearing, depth hash, measured near-field evidence
+  and BLOCKED status. Retry the VLM on the SAME RGB-D frame with an explicit
+  `view_correction`; the VLM can choose a new camera bearing/pitch and inspect
+  the resulting REAL RGB-D frame **inside the same observation task**.
+  Re-proposing the same blocked bearing on unchanged Depth terminates
+  `NO_RELIABLE_CANDIDATE` without another camera action.
+- If no confirmed center obstruction exists, hand off the VLM's bearing as
+  `APPROACH_CANDIDATE_FOUND` with `probe.status=UNCONFIRMED`. This
+  deliberately does **not** mean path clearance has been certified.
+- If there is no useful different viewing direction after a blocker, the
+  VLM may finish `NO_RELIABLE_CANDIDATE`, with rejected bearings preserved.
+  Re-asking exactly the same observation objective at the same place and
+  starting RGB is deduplicated; no forced forward/steering, extra Agent or
+  hard-coded staircase rule is introduced.
+
+The result keeps `best_approach`, `approach_candidates`,
+`blocked_approaches`, existing `best_candidate`, `best_cue` and all VLM
+`visual_reports`. Direction records carry **absolute yaw and observation
+ID** and remain available to NavigationAgent through compact context after
+subsequent tool calls. NavigationAgent alone selects MOVEMENT direction,
+distance, subgoal changes and stopping.
+
+The existing conservative pre-MOVE Depth check remains as a fresh last-step
+safeguard against changed live obstacles. Full `inspect_geometry` is still
+available only on deliberate NavigationAgent request, but not needed for
+ordinary VLM candidate-search. Do not repeatedly use full stair-terrain
+`BLOCKED` results as evidence that all navigation directions are impossible.
+
+Run the new regression:
+```bash
+python -m unittest discover -s tests -p 'test_rgbd_vlm_approach_search.py' -v
+```
