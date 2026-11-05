@@ -203,3 +203,33 @@ The full-azimuth checkpoint now has two separate model calls. **Panoramic visual
 **Dedicated navigation decision:** NavigationAgent receives the VLM's selected observation ID, visual evidence and uncertainty, per-image relative angles, the current instruction, task, and previous navigation failures. This request uses a standalone prompt and only the finite `navigate_relative(turn_deg, distance_m)` tool. The NavigationAgent chooses the bearing and distance itself; the executor performs the turns and rechecks live depth/terrain/people before forward motion. A historical image or VLM suggestion cannot bypass an actual collision veto.
 
 The VLM review is cached in memory only across a structured-output retry for the *same* episode/plan/stance and selected observation IDs. Events include reviewed image IDs and angular offsets for audit. Normal decisions, and orientation-only milestones, are unaffected. The visual endpoint must support multiple image inputs; a text-only visual model cannot perform this evidence review. The NavigationAgent endpoint can remain text-only.
+
+
+## Batch 4-15: repeated forward into a visually obstructed heading
+
+When Habitat executes `MOVE_FORWARD` but both the *actual* post-action RGB
+and Depth arrays are byte-identical to the pre-action arrays, ToolExecutor
+interrupts the local segment with `REQUIRES_ATTENTION`. This is evidence of
+**no observable movement**, not proof of a particular collision or obstacle
+identity. Glass/railing, a person, simulator contact and other causes must
+not be inferred from the unchanged hashes alone.
+
+The model's normal compact decision context now includes
+`forward_stall_evidence`: recent failed forward attempts **grouped by the
+absolute body heading** at the same estimated physical stance. Interleaved
+camera observation and turn actions do not erase that record, while a changed
+post-forward RGB-D view or physical stance breaks the streak. This is only
+history, never a hard blacklisted direction or forced detour.
+
+`inspect_geometry` remains **NavigationAgent-invoked only** (no automatic
+movement veto). Its actually measured front clearance, closest depth collision
+pixel, uncertainty, human mask occupancy and sampled alternate headings are
+kept in `last_tool` through compact-context projection so NavigationAgent can
+make the *next* decision. A depth obstacle point is not automatically labeled
+human, glass or railing; stale depth never authorizes a later forward action.
+
+To investigate a repeated stall, NavigationAgent can call `inspect_geometry`
+at the current live RGB-D stance, or choose a genuinely different task-relevant
+route or view. It must not interpret the visibility of a floor on the other
+side of a barrier as evidence of near-field robot-body clearance. There is
+no new LLM, special stair rule, forced movement, or geometry gate.
