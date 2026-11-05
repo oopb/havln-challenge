@@ -644,7 +644,9 @@ class ToolExecutor:
                 self.executable_segment=None
                 return self._navigation_feedback(
                     path,checked,result['status'],result.get('reason'),
-                    **({'safety':result['safety']} if 'safety' in result else {}))
+                    **{k:result[k] for k in (
+                        'safety','obstacle_observation','information_options')
+                        if k in result})
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
                 attempt['forward_actions']+=1
