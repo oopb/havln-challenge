@@ -310,6 +310,7 @@ class ObservationController:
                     or prev.get('target_types')!=list(target_types)
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
+                    or prev.get('start_depth_hash')!=initial.get('depth_hash')
                     or not comparable_scan_pose(prev.get('start_pose'),start)
                     or now-prev.get('started_monotonic',-1e9)>30):
                 continue
