@@ -155,6 +155,30 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         self.assertEqual(side.movement_probe()['state'],'BLOCKED')
         self.assertFalse(side.central_forward_obstruction()['confirmed'])
 
+    def test_single_rgb_visual_request_is_geometry_focused_and_has_no_actions(self):
+        vp=VisualPerception(SimpleNamespace(client=None))
+        frame=Observation(np.zeros((64,64,3),np.uint8),
+            np.full((64,64),.3,np.float32),
+            'descend the stairs',time.monotonic())
+        source=dict(observation_id='obs_0065',
+            pose=dict(heading=0,pitch_deg=-60))
+        with patch('havln_agent.visual_perception.image_url',
+                   return_value='data:image/png;base64,AAAA'):
+            with patch.object(vp,'complete',return_value=visual_result()) as call:
+                returned=vp.describe_obstacle(frame,source,center())
+        args,kwargs=call.call_args
+        self.assertEqual(args[:2],
+            ('visual_perception','near_field_obstacle_description'))
+        self.assertEqual(args[3]['depth_focus_xy_norm'],[.48,.51])
+        self.assertEqual(args[3]['depth_region_xyxy_norm'],[.4,.3,.6,.7])
+        self.assertEqual(args[3]['observation_id'],'obs_0065')
+        self.assertEqual(args[3]['pitch_deg'],-60)
+        self.assertEqual(args[4],OBSTACLE_VISUAL_SCHEMA)
+        self.assertEqual(kwargs['result_schema'],OBSTACLE_VISUAL_SCHEMA)
+        self.assertFalse(kwargs['cache'])
+        self.assertIn('never',args[2].lower())
+        self.assertEqual(returned,visual_result())
+
     def test_visual_observer_has_no_waypoint_or_completion_schema(self):
         from havln_agent.navigation_agent import OBSERVE_PROMPT
         self.assertIn('last_tool.obstacle_observation',OBSERVE_PROMPT)
