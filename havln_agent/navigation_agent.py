@@ -84,7 +84,7 @@ OBSERVE_PROMPT = (
     'obstacle location, uncertainty, and measured alternative bearings '
     'before your next decision; a historical depth result never guarantees '
     'future clearance around moving people. '
-    'You may seek additional evidence or plan a short detour. 
+    'You may seek additional evidence or plan a short detour. '
     'ACTIONS_COMPLETED means commanded steps executed, not traversed meters '
     'or semantic goal completion. Do not restart search after every short '
     'move; judge the actual image and target progress. If verified RGB-D '
