@@ -176,7 +176,7 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         self.assertEqual(args[4],OBSTACLE_VISUAL_SCHEMA)
         self.assertEqual(kwargs['result_schema'],OBSTACLE_VISUAL_SCHEMA)
         self.assertFalse(kwargs['cache'])
-        self.assertIn('never',args[2].lower())
+        self.assertIn('Do not choose camera turns',args[2])
         self.assertEqual(returned,visual_result())
 
     def test_visual_observer_has_no_waypoint_or_completion_schema(self):
