@@ -4,7 +4,7 @@ import math
 
 from .api_client import TEXT,object_schema,APIError,BudgetExceeded
 from .grounding import ground
-from .perception import Geometry,image_url,perceive,perceive_views
+from .perception import Geometry,image_url,depth_image_url,perceive,perceive_views
 from .contexts import fields
 
 # A one-frame, geometry-directed visual description. No model-created pixel box,
@@ -46,6 +46,7 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     evidence=dict(type='string',maxLength=400),
     uncertainty=dict(type='string',maxLength=300),
     target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
+    candidate_approach=dict(type='boolean'),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
     reason=dict(type='string',maxLength=250)))
@@ -54,7 +55,12 @@ SCAN_GUIDANCE_PROMPT = (
     'You are the VLM OBSERVATION SUBAGENT, responsible for visual search and '
     'all camera turns/look changes within this delegated observation task. '
     'NavigationAgent specified WHAT to find; YOU choose each next viewing '
-    'direction using the CURRENT real RGB image and short search history. '
+    'direction using the CURRENT real RGB and metric-labeled Depth images '
+    'and the short search history. The first image is RGB; the second is '
+    'Depth when supplied (near black, far white, MAGENTA invalid). The '
+    'display range in the request is meters, not raw normalized sensor units. '
+    'Depth is a perspective measurement, not proof a visible floor is '
+    'reachable through a railing, glass or a person. '
     'The robot stays stationary: you may request turn_left, turn_right, '
     'look_up, look_down or finish, but NEVER forward motion, task success, '
     'or collision clearance. turn_deg is an absolute multiple of 15 degrees '
@@ -92,7 +98,25 @@ SCAN_GUIDANCE_PROMPT = (
     'If a wall or ambiguous surface occupies '
     'the frame, do not label it a floor, doorway or traversable region solely '
     'because the instruction expects one. Prefer CUE/UNKNOWN when uncertain. '
-    'Detecting a visual candidate does NOT by itself terminate this task: '
+    'You are also a LOCAL APPROACH SEARCH AGENT: find a plausible direction '
+    'from the CURRENT ROBOT position, not just a distant target. If the '
+    'camera currently faces a visually promising approach or exploratory '
+    'short forward direction, mark candidate_approach=true. This requests '
+    'a local one-step Depth obstacle probe at the CURRENT body heading '
+    '(not a global path certificate); NO forward is performed by you. '
+    'If the candidate is at another bearing, first turn the camera there '
+    'and inspect fresh RGB-D, rather than assuming its clearance from '
+    'the current image. When candidate_approach=true, preferably choose '
+    'next_action=finish; the controller probes first and then hands a '
+    'non-blocked hypothesis to NavigationAgent. BLOCKED candidate feedback '
+    'is returned to YOU in view_correction and recent observation history '
+    'within THIS SAME observation task: choose a different direction/look, '
+    'or finish with uncertainty when no useful new direction remains. '
+    'Never insist on proof of traversability: UNKNOWN or a side-only Depth '
+    'hit is NOT a confirmed blocker and can be handed off as uncertain. '
+    'Avoid re-proposing the same blocked current bearing on identical RGB-D. '
+    'You never execute MOVE_FORWARD, decide a route distance or complete '
+    'semantic goals. Detecting a visual candidate does NOT by itself terminate this task: '
     'if another real camera view would resolve a concrete ambiguity, choose '
     'that look/turn; choose finish when enough evidence is collected. '
     'Avoid already-observed yaw/pitch combinations and useless 15-degree '
@@ -101,7 +125,9 @@ SCAN_GUIDANCE_PROMPT = (
     'choose a DIFFERENT real view (often look down/up) within this SAME '
     'subtask. Never repeat a rejected action. Finish when meaningful '
     'visual evidence is sufficient OR the remaining views will not help; '
-    'state uncertainty. You only return evidence and the next camera action. '
+    'state uncertainty. Return candidate_approach as a boolean on EVERY '
+    'output, with the CURRENT camera heading as its proposed forward bearing '
+    'when true. You only return evidence and the next camera action. '
     'Do not invent robot motion, measured depth, safety or task completion. '
     'Return ONE JSON object.'
 )
@@ -290,6 +316,21 @@ class VisualPerception:
             observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
             prior_target_hypotheses=list(prior_targets or ())[-2:],
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        images=[image_url(observation,max_edge=640)]
+        camera=getattr(self.runtime,'camera',None)
+        if camera is not None and getattr(observation,'depth',None) is not None:
+            images.append(depth_image_url(observation,camera,max_edge=640,
+                                          display_max_m=5.0))
+            request['sensor_images']=['current_rgb','current_depth_gray_m']
+            request['depth_visualization']=dict(
+                display_min_m=0.0,display_max_m=5.0,
+                near_color='black',far_color='white',
+                invalid_color='magenta',clip_beyond_max_m=True,
+                alignment='same_normalized_pixel_coordinates_as_rgb',
+                raw_depth_normalized=bool(camera.normalized),
+                note='visual_depth_reference_not_collision_certificate')
+        else:
+            request['sensor_images']=['current_rgb']
         if view_correction is not None:
             request['view_correction']=view_correction
         def validate(value):
@@ -304,7 +345,7 @@ class VisualPerception:
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
             request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy'),
-            image_url=image_url(observation,max_edge=640),cache=False,
+            image_url=images,cache=False,
             validate=validate,
             normalize=lambda value:normalize_coordinates(value,SCAN_GUIDANCE_SCHEMA),
             result_schema=SCAN_GUIDANCE_SCHEMA)
