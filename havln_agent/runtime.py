@@ -10,6 +10,7 @@ import threading
 import time
 
 from .observation import array_hash
+from .api_client import APIError, BudgetExceeded
 from .grounding import project_grounding
 from .progress import current_visual_evidence, stair_motion_direction
 from .motion import registered_action, landing_support
@@ -240,9 +241,97 @@ class AgentRuntime(ToolExecutor):
         return value
 
     def _prepare_forward(self):
-        # A nonlocalized visual human hypothesis is not evidence of occupancy
-        # in the next body sweep. Measured occupancy remains a motion veto.
-        return None
+        """Fresh Depth -> (confirmed central obstacle) -> one RGB VLM -> NAV.
+
+        Called once immediately before each atomic MOVE_FORWARD. Uncertain
+        depth, side-only geometry and ordinary stair edges do not authorize
+        an automatic veto. The VLM describes only the same current RGB frame;
+        it never changes the motion command or selects a route.
+        """
+        geometry=self.geometry()
+        probe=forward_probe(geometry)
+        self._last_forward_depth_probe=dict(
+            status=probe['state'],reason=probe.get('reason'),
+            observation_id=self.memory.current['observation_id'],
+            check_mode='automatic_central_near_field_depth',
+            center_confirmed=False)
+        if probe['state'] != 'BLOCKED':
+            return None
+        center=geometry.central_forward_obstruction()
+        if not center['confirmed']:
+            # The generic wide body sweep also sees nearby side walls/risers.
+            # They are useful diagnostic data, not enough to suppress actual
+            # model-authored motion; physical collision still belongs to Habitat.
+            self.event('forward_side_depth_ambiguity',
+                source='live_depth',geometry_state=probe['state'],
+                reason=center['reason'],
+                center_support_pixels=center['central_support_pixels'],
+                physical_collision_proven=False)
+            return None
+
+        source=self.source()
+        self._last_forward_depth_probe.update(
+            status='BLOCKED',center_confirmed=True,
+            reason='measured_centerline_obstacle')
+        # Do not repeatedly pay for an identical RGB-D/pose VLM request.
+        # A changed viewpoint or live human frame produces a different key.
+        pose=source['pose']
+        key=(self.memory.episode_id,source['rgb_hash'],source['depth_hash'],
+             pose['heading'],pose.get('pitch_deg',self.pitch_deg),
+             pose.get('viewpoint_generation',0))
+        previous=getattr(self,'_last_obstacle_vision',None)
+        if previous and previous['key']==key:
+            visual=copy.deepcopy(previous['visual'])
+            reused=True
+        else:
+            reused=False
+            try:
+                visual=self.visual_perception.describe_obstacle(
+                    self.observation,source,center)
+                visual=dict(visual,status='OK',
+                    evidence_origin='current_RGB_VLM_hypothesis')
+            except (APIError,BudgetExceeded,ValueError,RuntimeError) as error:
+                # A vision outage must never erase measured obstacle evidence
+                # or convert a confirmed near-field obstacle into free space.
+                visual=dict(status='UNAVAILABLE',visible=False,
+                    description='',visual_relation='unknown',
+                    uncertainty='visual_description_unavailable',
+                    error_type=type(error).__name__)
+            self._last_obstacle_vision=dict(key=key,visual=copy.deepcopy(visual))
+        depth=probe['depth']
+        safety=dict(
+            path_state=depth['path_state'],
+            clearance=depth['clearance'],
+            required_forward_step=depth['required_forward_step'],
+            nearest_obstacle_distance=depth.get('nearest_obstacle_distance'),
+            nearest_collision_travel=depth.get('nearest_collision_travel'),
+            nearest_collision_point=depth.get('nearest_collision_point'),
+            rejection_reasons=depth.get('rejection_reasons',[]),
+            collision_points=depth.get('collision_points',0),
+            unknown_sweep_pixels=depth.get('unknown_sweep_pixels',0),
+            human_occupancy=depth.get('human_occupancy',{}),
+            geometry_invocation='automatic_one_step_central_obstacle_only',
+            model_selected_route_unchanged=True)
+        combined=dict(
+            source_observation_id=source['observation_id'],
+            depth=dict(center,wide_probe_state=probe['state'],
+                clearance_m=depth['clearance'],
+                body_step_m=self.camera.forward_step),
+            visual=visual,
+            visual_reused_for_identical_frame=reused,
+            identity_is_visual_hypothesis_only=True,
+            next_action_selected_by='navigation_agent')
+        self.event('pre_forward_obstacle_reported',
+            source='live_depth_plus_visual_perception',
+            depth_observation_id=source['observation_id'],
+            central_support_pixels=center['central_support_pixels'],
+            visual_status=visual['status'],visual_reused=reused,
+            atomic_move_not_executed=True,
+            navigation_choice_unchanged=True)
+        return dict(status='BLOCKED',reason='measured_centerline_obstacle',
+            safety=safety,obstacle_observation=combined,
+            information_options=['navigate_relative','observe_for_goal',
+                'inspect_geometry','get_waypoint_candidates'])
 
     def _observe_for_goal(self, objective, target_types, direction=None,
                           sweep_degrees=360, checkpoint_degrees=30,

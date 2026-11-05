@@ -257,6 +257,7 @@ class ToolExecutor:
         if action != 'STOP' and len(self.memory.actions) >= self.config['max_steps'] - 1:
             return dict(status='BUDGET_LIMIT', reason='action_budget_reserved_for_stop')
         if action == 'MOVE_FORWARD':
+            self._last_forward_depth_probe = None
             try:
                 self.refresh()
             except (APIError, AttributeError, RuntimeError, ValueError):
@@ -266,11 +267,14 @@ class ToolExecutor:
             pending = self._prepare_forward()
             if pending:
                 return pending
-        # Motion execution does not implicitly invoke Geometry, terrain,
-        # collision probes or human occupancy checks. Those are information
-        # tools that NavigationAgent chooses to request explicitly.
+        # Runtime._prepare_forward() has already applied the conservative
+        # live central-obstacle Depth probe for MOVE_FORWARD. Full terrain
+        # geometry / other-bearing inspection remain NavigationAgent tools.
+        # Do not run a second probe or override the model's route here.
         diagnostics, candidates = [], []
         geometry, safety_check, front = None, None, None
+        live_preflight=(getattr(self,'_last_forward_depth_probe',None)
+                        if action=='MOVE_FORWARD' else None)
         before, before_record = self.observation, dict(self.memory.current)
         pose = self.motion_controller.pose()
         checked_at = time.monotonic()
@@ -286,6 +290,7 @@ class ToolExecutor:
             motion = dict(motion, observed_frame_change=changed_depth or changed_rgb)
         self.motion_controller.accept_feedback(action,motion)
         feedback = dict(
+            forward_depth_preflight=live_preflight,
             visual_change=changed_depth or changed_rgb,
             depth_changed=changed_depth,
             rgb_changed=changed_rgb,
@@ -368,17 +373,21 @@ class ToolExecutor:
             post_observation=frame_info(after, self.camera),
             observation_age_seconds=checked_at - before.captured_at,
             safety=dict(
-                status='NOT_CHECKED_MODEL_DIRECTED',
+                status=('CENTRAL_DEPTH_PREFLIGHT_EXECUTED' if live_preflight
+                        else 'NOT_CHECKED_MODEL_DIRECTED'),
                 checked_action=action,
                 front=front,
                 captured_at=before.captured_at,
                 checked_at=checked_at,
-                scope=('geometry_not_automatically_checked' if action == 'MOVE_FORWARD'
+                scope=('central_depth_preflight' if live_preflight
+                       else 'geometry_not_automatically_checked' if action == 'MOVE_FORWARD'
                        else 'no_forward_displacement'),
+                forward_depth_preflight=live_preflight,
                 human_semantics=geometry.human_status if geometry is not None else None,
                 terrain_evidence=safety_check['support'] if safety_check is not None else None,
                 dynamic_motion_prediction='UNAVAILABLE',
-                geometry_invocation='explicit_model_tool_only',
+                geometry_invocation=('automatic_centerline_depth_only'
+                    if live_preflight else 'explicit_model_tool_only'),
                 physical_obstacle_proven=False,
             ),
             scene=self.memory.scene_memory['scene'] if self.memory.scene_memory else None,
@@ -392,7 +401,9 @@ class ToolExecutor:
                 dict(
                     stage='geometry_policy',
                     action=action,
-                    reason='not_invoked_implicitly' if action == 'MOVE_FORWARD' else 'turn_or_stop',
+                    reason=('central_depth_preflight' if live_preflight
+                            else 'not_invoked_implicitly' if action == 'MOVE_FORWARD'
+                            else 'turn_or_stop'),
                 ),
                 dict(stage='executor', action=action, reason='environment_step_completed'),
             ],
@@ -644,7 +655,9 @@ class ToolExecutor:
                 self.executable_segment=None
                 return self._navigation_feedback(
                     path,checked,result['status'],result.get('reason'),
-                    **({'safety':result['safety']} if 'safety' in result else {}))
+                    **{k:result[k] for k in (
+                        'safety','obstacle_observation','information_options')
+                        if k in result})
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
                 attempt['forward_actions']+=1

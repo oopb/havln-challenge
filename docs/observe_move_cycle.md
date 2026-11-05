@@ -233,3 +233,49 @@ at the current live RGB-D stance, or choose a genuinely different task-relevant
 route or view. It must not interpret the visibility of a floor on the other
 side of a barrier as evidence of near-field robot-body clearance. There is
 no new LLM, special stair rule, forced movement, or geometry gate.
+
+
+## Preventive live obstacle evidence (Depth -> one-frame VLM -> NavigationAgent)
+
+During a model-authored `navigate_relative`/`navigate_local`, each next
+`MOVE_FORWARD` first refreshes the **current public RGB-D**. A fast depth
+body sweep (`Geometry.movement_probe`) and **conservative central-travel
+evidence** check run locally before asking Habitat to move. This is a
+one-atomic-step measurement, not the full `assess_step` terrain or waypoint
+certification. The central check requires a spatially coherent measured patch
+crossing the middle of the body corridor and above nominal step height;
+close side walls and stair risers are *not* automatically vetoed.
+
+- If there is **no confirmed central occupancy** (including UNKNOWN depth
+  and side-only sweep hits), execute the NavigationAgent-selected atomic move.
+  A missed/unmeasured collision can still be reported by the normal post-step
+  RGB-D feedback. UNKNOWN never implies proven free space.
+- If there **is** measured central occupancy, **do not send that atomic
+  MOVE_FORWARD**. Inspect the same current RGB frame with one lightweight
+  `VisualPerception.describe_obstacle` request, focused on the Depth-indicated
+  normalized image region. The VLM only describes visible surfaces, people,
+  rails, apparent glass and their visual relation to any distant floor.
+- Return one joint `obstacle_observation` record (real observation ID, depth
+  pixel/clearance, VLM description and uncertainty) through the normal
+  navigation tool receipt, surviving compact context. **NavigationAgent**
+  alone chooses what to do next; no automatic turn, recovery, semantic
+  verification or additional VLM panorama is initiated.
+- Repeated identical RGB-D/pose obstacle checks reuse the prior single-frame
+  VLM answer within that episode. A changed RGB-D/pose or moving person
+  invalidates this reuse. If visual API is unavailable, the measured obstacle
+  remains reported without hallucinated semantic identity.
+
+A depth point is not itself evidence of a glass panel or a human identity.
+Glass can be absent in rendered depth despite physical collision. The
+ordinary VLM-led observation prompt also emphasizes any visibly intervening
+railing/transparent panel between the robot and a distant target.
+
+**Observed Batch 4-15 sensor audit:** standard full-width fast body sweep
+would flag both `obs_0065` (repeated unchanged forward) and `obs_0106`
+(actual descent). In the conservative **center** region, the former has
+coherent near-field occupancy while the latter has only side occupancy.
+Do not substitute the old full-width result as an automatic hard veto.
+Recheck this distinction in live Habitat episodes and track false blocks.
+
+Independent `inspect_geometry` remains available for full terrain and
+other-heading diagnostics only when NavigationAgent requests it.
