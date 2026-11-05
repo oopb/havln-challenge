@@ -584,6 +584,12 @@ class ObservationController:
                     continue
                 approach_candidates.append(proposal)
                 best_approach=proposal
+                # Persist the accepted bearing's *visual* evidence rather
+                # than retaining a higher-confidence but blocked landmark
+                # from an earlier viewing direction as the top approach.
+                if (visual.get('target_visible') is True and
+                        visual.get('target_kind') in ('ENTRY','APPROACH')):
+                    best_candidate=candidate
                 return finish('APPROACH_CANDIDATE_FOUND',
                     reason='vlm_chose_current_bearing_without_confirmed_center_obstacle')
             # Rejected VLM camera choices are corrected with another VLM
