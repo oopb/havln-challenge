@@ -250,6 +250,11 @@ class AgentRuntime(ToolExecutor):
         """
         geometry=self.geometry()
         probe=forward_probe(geometry)
+        self._last_forward_depth_probe=dict(
+            status=probe['state'],reason=probe.get('reason'),
+            observation_id=self.memory.current['observation_id'],
+            check_mode='automatic_central_near_field_depth',
+            center_confirmed=False)
         if probe['state'] != 'BLOCKED':
             return None
         center=geometry.central_forward_obstruction()
@@ -265,6 +270,9 @@ class AgentRuntime(ToolExecutor):
             return None
 
         source=self.source()
+        self._last_forward_depth_probe.update(
+            status='BLOCKED',center_confirmed=True,
+            reason='measured_centerline_obstacle')
         # Do not repeatedly pay for an identical RGB-D/pose VLM request.
         # A changed viewpoint or live human frame produces a different key.
         pose=source['pose']
