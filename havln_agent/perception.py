@@ -295,6 +295,55 @@ class Geometry:
                     check_mode='fast_live_depth_body_sweep',
                     diagnostic_tool='inspect_geometry' if state != 'EXECUTABLE' else None)
 
+    def central_forward_obstruction(self):
+        """Conservative live Depth evidence for a *central* body obstruction.
+
+        The ordinary cylindrical probe may report BLOCKED for a side wall or
+        stair edge that lies near the footprint boundary, even when a real
+        forward step succeeds. Do not promote such side-only samples to an
+        automatic motion veto. Require a coherent measured patch crossing the
+        robot's central travel corridor, above nominal negotiable step height.
+        This is not terrain certification, nor a semantic obstacle label.
+        """
+        cam = self.camera
+        radius = cam.robot_radius + self.margin
+        # Center of the swept footprint, not the whole width where grazing
+        # side surfaces have produced false positive blocks in Habitat.
+        central_half_width = radius * 0.25
+        measured = (self.obstacles
+            & (self.height > cam.max_step_height + 0.03)
+            & (np.abs(self.x) <= central_half_width)
+            & (self.z > cam.robot_radius)
+            & (self.z <= cam.forward_step + radius))
+        count = int(measured.sum())
+        # Resolution-scaled spatial support; do not veto on a single noisy ray.
+        minimum = max(4, int(self.camera.width * self.camera.height * 0.0002))
+        if count < minimum:
+            return dict(confirmed=False,central_support_pixels=count,
+                required_support_pixels=minimum,
+                reason='no_coherent_centerline_obstacle',
+                side_obstacles_may_remain=True)
+        depth_candidates = np.where(measured, self.z, np.inf)
+        row, col = np.unravel_index(int(np.argmin(depth_candidates)),
+                                    depth_candidates.shape)
+        rows, cols = np.where(measured)
+        w, h = cam.width, cam.height
+        return dict(confirmed=True,central_support_pixels=count,
+            required_support_pixels=minimum,
+            nearest_along_m=round(float(self.z[row,col]), 3),
+            nearest_depth_m=round(float(self.depth[row,col]), 3),
+            nearest_height_m=round(float(self.height[row,col]), 3),
+            source_pixel_xy=[int(col),int(row)],
+            focus_point_xy_norm=[round((col + .5) / w, 4),
+                                 round((row + .5) / h, 4)],
+            focus_region_xyxy_norm=[
+                round(float(cols.min()) / w, 4),
+                round(float(rows.min()) / h, 4),
+                round(float(cols.max() + 1) / w, 4),
+                round(float(rows.max() + 1) / h, 4)],
+            identity='unverified_depth_obstacle',
+            reason='measured_high_centerline_occupancy_not_terrain_or_identity_proof')
+
     def assess_step(self, angle=0.):
         from . import terrain
         key=round(float(angle),6)
