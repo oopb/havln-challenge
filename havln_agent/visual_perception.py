@@ -1,10 +1,20 @@
 """One visual question per request; semantic reuse is keyed by image and question."""
 import copy
+import math
 
 from .api_client import TEXT,object_schema,APIError,BudgetExceeded
 from .grounding import ground
 from .perception import Geometry,image_url,perceive,perceive_views
 from .contexts import fields
+
+# A one-frame, geometry-directed visual description. No model-created pixel box,
+# trajectory, clearance decision or task-completion verdict is accepted.
+OBSTACLE_VISUAL_SCHEMA = object_schema(dict(
+    visible=dict(type='boolean'),
+    description=dict(type='string',maxLength=240),
+    visual_relation=dict(type='string',maxLength=240),
+    uncertainty=dict(type='string',maxLength=240)))
+
 
 ENTRY_SCHEMA=object_schema(dict(stairs=dict(enum=['visible','possible','unknown','absent']),
     entry_visible=dict(type='boolean'),candidate_bearing=dict(enum=['left','front','right','unknown']),
@@ -312,6 +322,41 @@ class VisualPerception:
             item['from_observation_id']=aliases[item['from_observation_id']]
             item['to_observation_id']=aliases[item['to_observation_id']]
         return value,frames
+
+    def describe_obstacle(self, observation, source, depth_evidence):
+        """One current RGB frame, aligned to a measured Depth obstacle region.
+
+        The VLM acts as eyes only: it may describe a visible person, railing,
+        barrier or uncertain surface, but never decides collision, path safety
+        or the next motion. No turn/look tool is available here.
+        """
+        request=dict(
+            mode='describe_measured_obstacle',
+            observation_id=source['observation_id'],
+            heading_deg=round(math.degrees(source['pose']['heading']),2),
+            pitch_deg=source['pose'].get('pitch_deg',observation.pitch_deg),
+            depth_focus_xy_norm=depth_evidence.get('focus_point_xy_norm'),
+            depth_region_xyxy_norm=depth_evidence.get('focus_region_xyxy_norm'),
+            visual_question=('Describe only what is visibly present at the '
+                'Depth-indicated region and whether a surface/person/railing '
+                'appears between the camera and any visible distant target.'))
+        return self.complete(
+            'visual_perception','near_field_obstacle_description',
+            'You are a visual observer, not a navigator. Use ONLY the supplied '
+            'single current RGB frame. Depth has measured nearby central '
+            'occupancy and supplies the normalized focus point/region; those '
+            'coordinates are search hints, not proof of an object identity. '
+            'Describe the visible object or structure at that region and its '
+            'visual relationship to more distant floor or navigation landmarks. '
+            'If the region is ambiguous, out of view, partly transparent or '
+            'the object cannot be classified, state that explicitly. '
+            'Do not fabricate a person, glass, railing or passable opening. '
+            'Do not choose camera turns, motion, collision clearance, path '
+            'safety, bypass or semantic task completion. Return one short '
+            'schema-valid JSON object.',
+            request,OBSTACLE_VISUAL_SCHEMA,
+            image_url=image_url(observation,max_edge=640),cache=False,
+            result_schema=OBSTACLE_VISUAL_SCHEMA)
 
     def entry(self,question):
         r=self.runtime
