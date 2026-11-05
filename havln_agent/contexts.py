@@ -129,7 +129,7 @@ def compact_vlm_reports(reports, limit=8):
             'observation_id','heading_deg','pitch_deg','target_visible',
             'target_type','target_kind','confidence','box','evidence',
             'uncertainty','next_action','reason','relative_turn_deg_from_current',
-            'usable_for_live_safety'))
+            'candidate_approach','approach_probe','usable_for_live_safety'))
         for name,max_chars in (('evidence',180),('uncertainty',120),('reason',90)):
             if isinstance(item.get(name),str):
                 item[name]=item[name][:max_chars]
@@ -182,6 +182,9 @@ def tool_summary(result):
             planned_sweep_deg=result.get('planned_sweep_deg'),
             best_candidate=result.get('best_candidate'),
             best_cue=result.get('best_cue'),
+            best_approach=result.get('best_approach'),
+            approach_candidates=result.get('approach_candidates',[])[:3],
+            blocked_approaches=result.get('blocked_approaches',[])[:6],
             visual_reports=compact_vlm_reports(result.get('visual_reports')),
             observation_owner=result.get('observation_owner'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
@@ -589,6 +592,9 @@ def navigation_context(runtime):
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
             candidate=recent_search.get('candidate'),
             best_cue=recent_search.get('best_cue'),
+            best_approach=recent_search.get('best_approach'),
+            approach_candidates=recent_search.get('approach_candidates',[])[-3:],
+            blocked_approaches=recent_search.get('blocked_approaches',[])[-6:],
             visual_reports=[dict(report,
                 relative_turn_deg_from_current=round(
                     (report['heading_deg']-math.degrees(pose['heading'])+180)%360-180,2))
@@ -692,6 +698,9 @@ def compact_navigation_context(state):
             out['last_tool']['observation_task']=dict(outcome=v.get('outcome'),
                 best_candidate=v.get('best_candidate'),
                 best_cue=v.get('best_cue'),
+                best_approach=v.get('best_approach'),
+                approach_candidates=v.get('approach_candidates',[])[-3:],
+                blocked_approaches=v.get('blocked_approaches',[])[-4:],
                 checked_views=v.get('checked_views',[])[-3:])
             # Older or synthetic tool receipts may not have an observation
             # search record. Otherwise latest_observation_task is the single
@@ -741,6 +750,9 @@ def compact_navigation_context(state):
         out['latest_observation_task']=dict(mode=t.get('mode'),
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
             candidate=t.get('candidate'),best_cue=t.get('best_cue'),
+            best_approach=t.get('best_approach'),
+            approach_candidates=t.get('approach_candidates',[])[-3:],
+            blocked_approaches=t.get('blocked_approaches',[])[-4:],
             visual_reports=compact_vlm_reports(t.get('visual_reports')),
             searched_headings_deg=t.get('searched_headings_deg',[])[-4:])
     if state.get('local_geometry'):out['local_geometry']=state['local_geometry'][:3]
