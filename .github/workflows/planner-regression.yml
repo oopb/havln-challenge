@@ -15,6 +15,7 @@ on:
       - "tests/test_smoke50013_waypoints.py"
       - "tests/test_active_observation.py"
       - "tests/test_vlm_led_observation.py"
+      - "tests/test_rgbd_vlm_approach_search.py"
       - "tests/test_direct_vlm_evidence_relay.py"
       - "tests/test_visual_endpoint_reference.py"
       - "tests/test_batch412_progress_and_observation.py"
@@ -91,6 +92,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_direct_vlm_evidence_relay.py' -v
       - name: Check visual endpoint references do not become completion verdicts
         run: python -m unittest discover -s tests -p 'test_visual_endpoint_reference.py' -v
+      - name: Check RGB-D VLM local approach search and blocked bearing retry
+        run: python -m unittest discover -s tests -p 'test_rgbd_vlm_approach_search.py' -v
       - name: Check VLM-owned full observation and compact navigation contracts
         run: python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
       - name: Check bounded navigation after uncertain RGB-D motion
