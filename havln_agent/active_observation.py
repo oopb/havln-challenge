@@ -304,7 +304,8 @@ class ObservationController:
             if (prev.get('mode')!='vlm_led'
                     or prev.get('outcome') not in (
                         'TARGET_CANDIDATE_FOUND','VLM_SEARCH_FINISHED',
-                        'SEARCH_REGION_COVERED_NO_MATCH','CUE_ONLY')
+                        'SEARCH_REGION_COVERED_NO_MATCH','CUE_ONLY',
+                        'APPROACH_CANDIDATE_FOUND','NO_RELIABLE_CANDIDATE')
                     or prev.get('objective','').strip().casefold()!=objective.strip().casefold()
                     or prev.get('target_types')!=list(target_types)
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
@@ -318,6 +319,9 @@ class ObservationController:
                 covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
                 checkpoints=[],best_candidate=copy.deepcopy(prev.get('candidate')),
                 best_cue=copy.deepcopy(prev.get('best_cue')),
+                best_approach=copy.deepcopy(prev.get('best_approach')),
+                approach_candidates=copy.deepcopy(prev.get('approach_candidates',[])),
+                blocked_approaches=copy.deepcopy(prev.get('blocked_approaches',[])),
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
