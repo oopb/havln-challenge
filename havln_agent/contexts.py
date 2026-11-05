@@ -189,7 +189,7 @@ def tool_summary(result):
             observation_owner=result.get('observation_owner'),
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
-            note='visual_candidates_are_hypotheses; geometry_is_explicit_model_tool_not_motion_gate')
+            note='approach_candidates_are_hypotheses; only_measured_central_obstacles_are_rejected_inside_observation; navigation_agent_owns_motion')
     if 'obstacle_observation' in result:
         item=result['obstacle_observation']
         value['obstacle_observation']=dict(
