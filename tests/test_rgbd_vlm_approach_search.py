@@ -131,6 +131,19 @@ class RGBDApproachAgentTests(unittest.TestCase):
         self.assertEqual(again['best_approach']['heading_deg'],0)
         self.assertEqual(len(r.visual_perception.calls),1)
 
+    def test_rgb_equal_but_depth_changed_invalidates_completed_search_cache(self):
+        r,g=make_runtime([candidate(),candidate()],[False,False])
+        r.memory.current['rgb_hash']='same_rgb'
+        r.memory.current['depth_hash']='depth_A'
+        first=ObservationController(r).scan_vlm(
+            'Find entry',['stairs'],sweep_degrees=90)
+        r.memory.current['depth_hash']='depth_B'
+        again=ObservationController(r).scan_vlm(
+            'Find entry',['stairs'],sweep_degrees=90)
+        self.assertEqual(first['outcome'],'APPROACH_CANDIDATE_FOUND')
+        self.assertEqual(again['outcome'],'APPROACH_CANDIDATE_FOUND')
+        self.assertEqual(len(r.visual_perception.calls),2)
+
     def test_approach_and_rejection_survive_last_tool_and_latest_observation(self):
         r,g=make_runtime([
             candidate(),
