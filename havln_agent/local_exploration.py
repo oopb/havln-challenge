@@ -29,6 +29,64 @@ def bearing_from_pose(pose):
     return wrap_heading(math.degrees(pose['heading']))
 
 
+def recent_forward_stall_evidence(memory, pose, turn_degrees=15):
+    """Source-linked, same-stance failed forward attempts, NOT collision proof.
+
+    The robot can turn or request VLM views between failed advances. Keep the
+    history until an actually changed post-forward RGB-D view or a new stance.
+    Neither a commanded step nor a camera-only turn is evidence of progress.
+    No automatic geometry probe or movement restriction is performed here.
+    """
+    failures = []
+    subgoal = getattr(getattr(memory, 'task', None), 'current_subgoal_index', None)
+    for action in reversed(getattr(memory, 'actions', ())):
+        if action.get('action') != 'MOVE_FORWARD':
+            continue
+        feedback = action.get('result') or {}
+        # Changed RGB-D may reflect a changed viewpoint, not metric motion;
+        # still it invalidates an assertion of SAME unchanged evidence.
+        if feedback.get('visual_change') or feedback.get('rgb_changed') or feedback.get('depth_changed'):
+            break
+        if ((feedback.get('motion_alert') or {}).get('reason')
+                != 'no_observed_frame_change_after_forward'):
+            break
+        if action.get('subgoal') != subgoal or not same_stance(action.get('pose'), pose):
+            break
+        failures.append(action)
+    if not failures:
+        return None
+    bins = max(1, round(360.0 / turn_degrees))
+    grouped = {}
+    for action in failures:
+        heading = bearing_from_pose(action['pose'])
+        key = round(heading / turn_degrees) % bins
+        item = grouped.setdefault(key, dict(
+            absolute_heading_deg=round(heading, 2),
+            failed_forward_attempts=0,
+            latest_step=action['step'],
+            latest_observation_id=(action.get('result') or {}).get('observation_after')))
+        item['failed_forward_attempts'] += 1
+        item['first_step'] = min(item.get('first_step', action['step']), action['step'])
+    directions = sorted(grouped.values(), key=lambda x:-x['latest_step'])
+    current = bearing_from_pose(pose)
+    same_heading = sum(
+        item['failed_forward_attempts'] for item in directions
+        if angular_separation(item['absolute_heading_deg'], current) <= turn_degrees / 2)
+    return dict(
+        total_failed_forward_attempts=len(failures),
+        current_heading_deg=round(current, 2),
+        current_heading_failed_forward_attempts=same_heading,
+        failed_bearings=directions[:4],
+        last_failed_step=failures[0]['step'],
+        last_failed_observation_id=(failures[0].get('result') or {}).get('observation_after'),
+        evidence='identical_RGB_and_depth_after_executed_MOVE_FORWARD',
+        collision_proven=False,
+        depth_obstacle_inspected=False,
+        interpretation='stalled_bearing_is_historical_action_feedback_not_a_live_collision_map',
+        model_options='choose_a_new_bearing_or_call_inspect_geometry_for_live_forward_clearance; '
+            'do_not_confuse_visible_distant_floor_with_current_robot_body_clearance')
+
+
 def covered_view(records, pose, subgoal, bearing, pitch, turn_degrees=15):
     """Newest comparable exact camera direction; NEVER a live safety check."""
     for record in reversed(records):
