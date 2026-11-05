@@ -80,6 +80,8 @@ class RGBDApproachAgentTests(unittest.TestCase):
         self.assertEqual(len(result['blocked_approaches']),1)
         self.assertEqual(result['blocked_approaches'][0]['heading_deg'],0)
         self.assertEqual(result['blocked_approaches'][0]['probe']['status'],'BLOCKED')
+        self.assertEqual(result['visual_reports'][0]['approach_probe']['status'],'BLOCKED')
+        self.assertEqual(result['visual_reports'][1]['next_action'],'turn_left')
         self.assertEqual(len(r.visual_perception.calls),3)
         second=r.visual_perception.calls[1]
         self.assertEqual(second['view_correction']['reason'],
