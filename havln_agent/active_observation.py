@@ -480,7 +480,14 @@ class ObservationController:
                 pitch_deg=r.pitch_deg,
                 new_static_information=bool(r.memory.current.get(
                     'new_visual_information',True)),visual=visual)
-            if retrying and record['checkpoints'] and (
+            # A rejected camera micro-action can replace its same-frame
+            # proposal. But a BLOCKED approach has genuine Depth evidence,
+            # so preserve its own checkpoint and attach the next VLM
+            # interpretation as a separate same-frame report.
+            replace_rejected_view=(retrying and
+                (correction or {}).get('reason')
+                    != 'candidate_forward_measured_center_obstacle')
+            if replace_rejected_view and record['checkpoints'] and (
                     record['checkpoints'][-1]['observation_id']==source['observation_id']):
                 record['checkpoints'][-1]['visual']=visual
             else:
