@@ -187,6 +187,21 @@ def tool_summary(result):
             checked_views=[fields(p,('observation_id','heading_deg','pitch_deg',
                 'evidence_origin')) for p in result.get('checkpoints',[])],
             note='visual_candidates_are_hypotheses; geometry_is_explicit_model_tool_not_motion_gate')
+    if 'obstacle_observation' in result:
+        item=result['obstacle_observation']
+        value['obstacle_observation']=dict(
+            source_observation_id=item.get('source_observation_id'),
+            depth=fields(item.get('depth') or {},(
+                'confirmed','central_support_pixels','nearest_along_m',
+                'nearest_depth_m','nearest_height_m',
+                'focus_point_xy_norm','focus_region_xyxy_norm',
+                'clearance_m','body_step_m','identity','reason')),
+            visual=fields(item.get('visual') or {},(
+                'status','visible','description','visual_relation',
+                'uncertainty','evidence_origin','error_type')),
+            visual_reused_for_identical_frame=item.get('visual_reused_for_identical_frame'),
+            identity_is_visual_hypothesis_only=True,
+            next_action_selected_by='navigation_agent')
     if 'alternatives' in result:value['alternatives']=result['alternatives']
     if 'view_directions' in result:value['view_directions']=result['view_directions'][:6]
     if 'scan' in result:
@@ -373,9 +388,9 @@ def navigation_context(runtime):
                 min(runtime.config.get('tool_max_actions',3),
                     max(1,runtime.config['max_steps']-1-len(memory.actions))),
             unknown_depth_is_obstacle=False,
-            geometry_policy='only_explicit_inspect_geometry_or_get_waypoint_candidates',
-            geometry_autorun_during_move=False,
-            motion_veto='simulator_action_legality_and_pose_tracking_only',
+            geometry_policy='automatic_conservative_centerline_depth_probe; full_terrain_only_explicit_model_tool',
+            geometry_autorun_during_move='central_obstacle_only',
+            motion_veto='measured_centerline_occupancy_or_simulator_action_legality',
             direct_segment_max_m=3.0,
             navigation_execution_policy='continuous_until_route_or_pose_or_episode_budget',
             per_tool_atomic_action_cap=None,
@@ -434,7 +449,12 @@ def navigation_context(runtime):
     if recent:
         result['candidate_waypoints']=recent
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
-    result['motion_tools_note']='navigate_relative and navigate_to_pixel never run an implicit collision probe; geometry is measured only when the model explicitly calls inspect_geometry or get_waypoint_candidates. RGB-D estimates movement after executing each action.'
+    result['motion_tools_note']=('navigate_relative and navigate_to_pixel run a lightweight live Depth '
+        'central-obstruction check immediately before each atomic forward action. '
+        'Only coherent measured central occupancy interrupts motion for one-frame '
+        'VLM obstacle description; side-only and uncertain Depth are not automatic '
+        'vetoes. Full terrain geometry remains model-invoked with inspect_geometry. '
+        'RGB-D estimates movement after each executed action.')
     if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
         target=runtime.motion_controller.target
         attempt=memory.active_attempt or {}
@@ -681,7 +701,24 @@ def compact_navigation_context(state):
                     v.get('visual_reports'))
         if t.get('measured_collision'):
             out['last_tool']['measured_collision']=fields(t['measured_collision'],
-                ('reason','clearance','motion_state'))
+                ('reason','clearance','motion_state','path_state',
+                'nearest_obstacle_distance','nearest_collision_travel',
+                'nearest_collision_point','people','identity_note'))
+        if t.get('obstacle_observation'):
+            v=t['obstacle_observation']
+            visual=fields(v.get('visual') or {},(
+                'status','visible','description','visual_relation',
+                'uncertainty','evidence_origin','error_type'))
+            for name in ('description','visual_relation','uncertainty'):
+                if isinstance(visual.get(name),str):
+                    visual[name]=visual[name][:200]
+            out['last_tool']['obstacle_observation']=dict(
+                source_observation_id=v.get('source_observation_id'),
+                depth=v.get('depth'),visual=visual,
+                visual_reused_for_identical_frame=v.get(
+                    'visual_reused_for_identical_frame'),
+                identity_is_visual_hypothesis_only=True,
+                next_action_selected_by='navigation_agent')
         # Explicit model-requested depth inspection must actually reach the
         # next model decision, not be silently dropped by compaction.
         if t.get('tool')=='inspect_geometry':
