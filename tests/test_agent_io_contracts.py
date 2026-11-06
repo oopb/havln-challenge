@@ -58,7 +58,9 @@ class AgentIOContractsTests(unittest.TestCase):
         self.assertEqual(len(r.visual_perception.calls),2)
         self.assertEqual(result['outcome'],'APPROACH_CANDIDATE_FOUND')
         self.assertEqual(len(result['approach_candidates']),2)
-        self.assertEqual(result['best_approach']['expected_progress'],'ADVANCE')
+        self.assertEqual(result['best_approach']['expected_progress'],'DETOUR')
+        self.assertEqual(result['approach_candidates'][0]['expected_progress'],
+                         'ADVANCE')
         self.assertFalse(result['usable_for_live_safety'])
         g.assess_step.assert_not_called()
 

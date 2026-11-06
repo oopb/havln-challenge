@@ -711,13 +711,10 @@ class ObservationController:
                            p['heading_deg']==proposal['heading_deg']
                            for p in approach_candidates):
                     approach_candidates.append(proposal)
-                # Ranking is for presentation only; NavigationAgent still
-                # receives ALL measured candidates and owns route choice.
-                ranks={'ADVANCE':3,'DETOUR':2,'UNKNOWN':1,'REVERSE':0}
-                if (best_approach is None or
-                    ranks.get(proposal['expected_progress'],1)>=
-                    ranks.get(best_approach.get('expected_progress','UNKNOWN'),1)):
-                    best_approach=proposal
+                # Keep the VLM's final chosen hypothesis as the summary.
+                # Do not impose Python semantic priority between ADVANCE,
+                # DETOUR and REVERSE; NavigationAgent evaluates ALL options.
+                best_approach=proposal
                 if candidate_found_checkpoint is None:
                     candidate_found_checkpoint=len(record['checkpoints'])-1
                 # Persist the accepted bearing's *visual* evidence rather
