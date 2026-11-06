@@ -551,14 +551,27 @@ class ObservationController:
                 blocked_approaches=copy.deepcopy(blocked_approaches),
                 rejected_view_requests=copy.deepcopy(rejected_views))
             store=getattr(r.memory,'note_active_observation_target',None)
-            # Persist the selected APPROACH with its progress classification,
-            # not an older visually salient but currently blocked landmark.
-            hypothesis=(best_approach if best_approach and
-                best_approach.get('target_kind') in ('ENTRY','APPROACH','TARGET','CUE')
-                else best_candidate or best_cue)
-            if hypothesis and callable(store):
-                store(hypothesis,objective,target_types,
-                    goal=getattr(r,'active_subgoal',None))
+            # Persist ALL actionable hypotheses and attach stable IDs before
+            # delivering them. NavigationAgent can explicitly select one ID
+            # and later compare the prediction with measured motion.
+            proposed=approach_candidates[:] if approach_candidates else []
+            if not proposed and (best_candidate or best_cue):
+                proposed=[best_candidate or best_cue]
+            if callable(store):
+                for proposal in proposed:
+                    saved=store(proposal,objective,target_types,
+                        goal=getattr(r,'active_subgoal',None))
+                    if saved:
+                        proposal['candidate_id']=saved['id']
+                        for selected in (best_approach,best_candidate,best_cue):
+                            if (selected and
+                                    selected.get('observation_id')==proposal.get('observation_id')
+                                    and selected.get('heading_deg')==proposal.get('heading_deg')):
+                                selected['candidate_id']=saved['id']
+                # record/update fields must include IDs, not stale copies.
+                record['best_approach']=copy.deepcopy(best_approach)
+                record['approach_candidates']=copy.deepcopy(approach_candidates)
+                record['candidate']=copy.deepcopy(best_candidate)
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),

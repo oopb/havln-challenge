@@ -355,6 +355,12 @@ class MemoryRecords:
             heading=pose.get('heading')
             if not isinstance(heading,(int,float)):
                 continue
+            exact=result.get('blocked_at')
+            if exact and exact.get('observation_id'):
+                blocked.append(dict(exact,
+                    subgoal=entry.get('subgoal_id'),
+                    evidence='measured_block_at_post_turn_stance'))
+                continue
             blocked.append(dict(
                 heading_deg=round(math.degrees(heading)%360,1),
                 source_observation_id=result.get('end_observation_id'),
@@ -368,6 +374,10 @@ class MemoryRecords:
         return dict(successful_segments=segments[-8:],
             blocked_at_prior_stances=blocked[-6:],
             current_subgoal=self.task.current_subgoal_index,
+            latest_route_prediction_feedback=copy.deepcopy(
+                self.evidence.route_outcomes[-5:]),
+            latest_exact_blocked_at=copy.deepcopy(
+                self.evidence.obstacle_blocks[-4:]),
             interpretation='past_success_is_progress_evidence_not_live_motion_clearance')
 
     def confirm_subgoal_observation(self, verification, objective):

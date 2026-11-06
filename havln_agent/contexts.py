@@ -316,6 +316,7 @@ def navigation_progress_review(memory):
             kind=target.get('target_kind'),
             status=target.get('status'),
             heading_deg=target.get('absolute_heading_deg'),
+            candidate_id=target.get('id'),
             pitch_deg=target.get('pitch_deg'),
             evidence=(target.get('visual_evidence') or '')[:130],
             expected_progress=target.get('expected_progress','UNKNOWN'),
@@ -344,6 +345,8 @@ def navigation_progress_review(memory):
         observed_direction_reversal=changed_direction,
         latest_directional_step=(directed[-1] if directed else None),
         latest_visual_hypotheses=latest_targets,
+        route_prediction_feedback=copy.deepcopy(memory.evidence.route_outcomes[-5:]),
+        latest_blocked_stances=copy.deepcopy(memory.evidence.obstacle_blocks[-4:]),
         last_verification=(fields(last_verifier,('status','evidence',
             'uncertainty','source_observation_id')) if last_verifier else None),
         interpretation='local_measured_segments_are_historical_not_global_pose; '
@@ -686,7 +689,8 @@ def compact_navigation_context(state):
             'unknown_forward_steps','observed_downward_m_est',
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_directional_step',
-            'latest_visual_hypotheses',
+            'latest_visual_hypotheses','route_prediction_feedback',
+            'latest_blocked_stances',
             'last_verification','interpretation','model_choices'))
     if state.get('route_progress'):
         out['route_progress']=state['route_progress']
