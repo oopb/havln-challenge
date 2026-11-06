@@ -54,8 +54,10 @@ OBSERVATION_INTERVENTION_PROMPT = (
     'the available evidence is insufficient. YOU choose the direction, '
     'route, target and whether new observations are genuinely needed. '
     'Repeating the same absolute view without changed evidence is unlikely '
-    'to help. You may request Observation Agent RGB-D terrain evidence; '
-    'human observations. Do NOT fabricate a free corridor. '
+    'to help. Ask Observation Agent for new RGB-D and measured geometry '
+    'only when a specific unanswered obstacle question remains. '
+    'Safety depends on fresh measured central obstacles; an old view is '
+    'not enduring forward clearance. Do NOT fabricate a free corridor. '
 )
 BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'OBSERVATION-LOOP / NO CONFIRMED SAMPLED BEARING (issued ONCE per task/stance): '
@@ -64,7 +66,7 @@ BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'and not known to be blocked. Do NOT call a turning-only MOVE a successful forward '
     'attempt, and do NOT invent clearance. Choose the next task-relevant '
     'strategy yourself: a genuinely different local goal/detour, a specific '
-    'live geometry or view test that could change the decision, a semantic '
+    'new VLM RGB-D observation that could change the decision, a semantic '
     'task revision, or an explicitly evidence-backed movement direction '
     'for the simulator to execute. Do not merely toggle between already '
     'seen pitch levels or arbitrarily change relative headings. The model '
