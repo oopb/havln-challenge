@@ -136,6 +136,7 @@ class MemoryService(MemoryRecords):
             observation_objective=objective,
             target_type=candidate.get('target_type'),
             target_kind=kind,confidence=candidate.get('confidence'),
+            expected_progress=candidate.get('expected_progress','UNKNOWN'),
             status=status,selected_observation_id=identifier,
             source_observation_ids=[identifier],
             absolute_heading_deg=absolute,

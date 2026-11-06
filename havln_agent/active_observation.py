@@ -521,7 +521,11 @@ class ObservationController:
                 blocked_approaches=copy.deepcopy(blocked_approaches),
                 rejected_view_requests=copy.deepcopy(rejected_views))
             store=getattr(r.memory,'note_active_observation_target',None)
-            hypothesis=best_candidate or best_cue
+            # Persist the selected APPROACH with its progress classification,
+            # not an older visually salient but currently blocked landmark.
+            hypothesis=(best_approach if best_approach and
+                best_approach.get('target_kind') in ('ENTRY','APPROACH','TARGET','CUE')
+                else best_candidate or best_cue)
             if hypothesis and callable(store):
                 store(hypothesis,objective,target_types,
                     goal=getattr(r,'active_subgoal',None))
@@ -657,6 +661,7 @@ class ObservationController:
                     confidence=visual['confidence'],box=visual['box'],
                     evidence=visual['evidence'],uncertainty=visual.get('uncertainty',''),
                     target_kind=visual['target_kind'],
+                    expected_progress=visual.get('expected_progress','UNKNOWN'),
                     observation_id=source['observation_id'],
                     semantic_source_observation_id=source['observation_id'],
                     heading_deg=point['heading_deg'],pitch_deg=point['pitch_deg'],

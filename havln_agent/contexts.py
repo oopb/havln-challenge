@@ -183,6 +183,7 @@ def tool_summary(result):
             best_candidate=result.get('best_candidate'),
             best_cue=result.get('best_cue'),
             best_approach=result.get('best_approach'),
+            navigation_feedback=result.get('navigation_feedback'),
             observation_mode=result.get('observation_mode'),
             verification=result.get('verification'),
             subgoal_transition=result.get('subgoal_transition'),
@@ -294,6 +295,7 @@ def navigation_progress_review(memory):
             heading_deg=target.get('absolute_heading_deg'),
             pitch_deg=target.get('pitch_deg'),
             evidence=(target.get('visual_evidence') or '')[:130],
+            expected_progress=target.get('expected_progress','UNKNOWN'),
             evidence_class='VLM_HYPOTHESIS_NOT_NAVIGATION_PROOF'))
         if len(latest_targets)==3:
             break
@@ -597,6 +599,7 @@ def navigation_context(runtime):
             candidate=recent_search.get('candidate'),
             best_cue=recent_search.get('best_cue'),
             best_approach=recent_search.get('best_approach'),
+            navigation_feedback=recent_search.get('navigation_feedback'),
             observation_mode=recent_search.get('intent'),
             verification=recent_search.get('verification'),
             approach_candidates=recent_search.get('approach_candidates',[])[-3:],
@@ -680,7 +683,7 @@ def compact_navigation_context(state):
         for v in m.get('visual_target_memory',[])[-2:]:
             t=fields(v,('id','status','target_type','target_kind',
                 'selected_observation_id','absolute_heading_deg',
-                'pitch_deg','target_region'))
+                'pitch_deg','target_region','expected_progress'))
             t['visual_evidence']=short(v.get('visual_evidence',''),150)
             t['missing_evidence']=short(v.get('missing_evidence',''),100)
             t['approach_candidates']=[dict(observation_id=a.get('observation_id'),
@@ -707,6 +710,7 @@ def compact_navigation_context(state):
                 best_candidate=v.get('best_candidate'),
                 best_cue=v.get('best_cue'),
                 best_approach=v.get('best_approach'),
+                navigation_feedback=v.get('navigation_feedback'),
                 observation_mode=v.get('observation_mode'),
                 verification=v.get('verification'),
                 subgoal_transition=v.get('subgoal_transition'))
@@ -764,6 +768,7 @@ def compact_navigation_context(state):
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
             candidate=t.get('candidate'),best_cue=t.get('best_cue'),
             best_approach=t.get('best_approach'),
+            navigation_feedback=t.get('navigation_feedback'),
             observation_mode=t.get('observation_mode'),
             verification=t.get('verification'),
             approach_candidates=t.get('approach_candidates',[])[-3:],
