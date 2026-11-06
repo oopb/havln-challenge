@@ -416,6 +416,64 @@ class AgentRuntime(ToolExecutor):
                         self.set_semantic_goal()
         return result
 
+    def _review_completed_subgoal(self, subgoal_id, reason,
+                                  evidence_observation_ids=None):
+        """Explicit, auditable review of a previously completed milestone."""
+        if (not subgoal_id.startswith('sg_') or
+                not subgoal_id[3:].isdigit()):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_subgoal_id')
+        index=int(subgoal_id[3:])
+        task=self.memory.task
+        if index not in task.completed_subgoals or index>=task.current_subgoal_index:
+            return dict(status='INVALID_TARGET',
+                reason='review_requires_prior_completed_subgoal')
+        completion=next((v for v in reversed(task.completion_evidence)
+            if v['subgoal']==index and v.get('status','ACTIVE')=='ACTIVE'),None)
+        if not completion:
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='original_completion_receipt_missing')
+        original_id=completion['verification']['source_observation_id']
+        current_id=self.memory.current['observation_id']
+        if original_id==current_id:
+            return dict(status='NO_NEW_INFORMATION',
+                reason='no_newer_view_since_original_completion')
+        cited=list(dict.fromkeys([original_id]+list(
+            evidence_observation_ids or [])+[current_id]))
+        if len(cited)>3:
+            cited=[original_id]+[i for i in cited[1:-1]][-1:]+[current_id]
+        for prev in reversed(self.memory.evidence.completion_reviews):
+            if (prev.get('subgoal_index')==index
+                    and prev.get('current_observation_id')==current_id
+                    and set(prev.get('evidence_observation_ids',()))==set(cited)):
+                return dict(status='NO_NEW_INFORMATION',
+                    reason='identical_completion_review_already_recorded',
+                    prior_verdict=prev['verdict'])
+        try:
+            frames=[self._vision_frame(identifier) for identifier in cited]
+        except (KeyError,ValueError,OSError,RuntimeError):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='historical_RGBD_frame_not_available',
+                requested_observation_ids=cited)
+        if any(source.get('observation_id')!=identifier
+               or getattr(obs,'depth',None) is None for identifier,(obs,source)
+               in zip(cited,frames)):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='saved_RGBD_source_provenance_mismatch')
+        history=self.memory.route_progress_summary()
+        surface=[m for m in self.memory.evidence.surface_measurements
+            if m.get('observation_id') in cited][-3:]
+        verdict=self.visual_perception.review_completion(
+            task.subgoals[index],completion,frames,history,surface)
+        outcome=self.memory.apply_completion_review(
+            index,verdict['verdict'],verdict['rationale'],
+            verdict['evidence_observation_ids'],current_id)
+        outcome.update(vlm_review=verdict,review_target=subgoal_id,
+            requested_reason=reason)
+        if outcome.get('review_outcome')=='REOPENED':
+            self._cancel_local_navigation('prior_milestone_reopened')
+            self.set_semantic_goal()
+        return outcome
+
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
         actions = ['TURN_LEFT' if relative_turn_deg > 0 else 'TURN_RIGHT']*count

@@ -91,12 +91,22 @@ def registry(camera, max_actions, pitch_deg=0.):
         'select_subgoal': ('Legacy provisional navigation selection; not exposed to NavigationAgent. Completed milestones advance only after Observation Agent VERIFY.',
             object_schema(dict(subgoal_index=dict(type='integer',minimum=0),
                 reason=text,observation_ids=ids))),
+        'review_completed_subgoal': ('Review a previously CONFIRMED milestone '
+            'only when newer real RGB-D or motion evidence credibly conflicts '
+            'with its original source-backed confirmation. Observation Agent '
+            'compares the original and current RGB-D, decides UPHOLD, REOPEN or '
+            'UNCERTAIN; only explicit REOPEN updates task state, preserving all '
+            'executed-action history. Do not re-VERIFY prior sg via current VERIFY.',
+            object_schema(dict(subgoal_id=text,
+                reason=dict(TEXT,minLength=8,maxLength=600),
+                evidence_observation_ids=ids),
+                required=['subgoal_id','reason'])),
         'request_task_review': ('Request a semantic review for a specific task change or major new evidence.', object_schema(dict(reason=text))),
         'request_finish': ('Propose verified completion, or explicitly abort. Runtime owns STOP and completion checks.',
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal','review_completed_subgoal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 

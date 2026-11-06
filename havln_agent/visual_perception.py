@@ -36,6 +36,30 @@ SEARCH_SCHEMA = object_schema(dict(
     suggested_next_view=dict(enum=['continue','look_up','look_down'])))
 
 
+COMPLETION_REVIEW_SCHEMA=object_schema(dict(
+    verdict=dict(enum=['UPHOLD','REOPEN','UNCERTAIN']),
+    rationale=dict(type='string',minLength=8,maxLength=1600),
+    uncertainty=dict(type='string',maxLength=600),
+    evidence_observation_ids=dict(type='array',minItems=2,maxItems=5,
+        uniqueItems=True,items=dict(type='string',minLength=1,maxLength=64)),
+    missing_evidence=dict(type='string',maxLength=600)))
+COMPLETION_REVIEW_PROMPT=(
+    'You are Observation Agent reviewing one PREVIOUSLY CONFIRMED milestone. '
+    'A confirmed prior milestone may have been wrong. Compare the genuine '
+    'confirmation RGB-D and newer RGB-D, calibrated local surface evidence, '
+    'real executed motion and original completion_description. '
+    'Return UPHOLD only if original completion remains supported; REOPEN only '
+    'if newer evidence credibly contradicts physical completion; UNCERTAIN '
+    'if old/new perspectives cannot distinguish whether the robot reached it. '
+    'Seeing a staircase again is NOT by itself proof that a descent was '
+    'unfinished. Equally, merely seeing a distant floor is NOT proof arrival. '
+    'Depth-derived heights are local estimates with unknown surface identity '
+    'and cannot alone prove success. State concrete support and contradiction. '
+    'Cite BOTH original and newer real observation IDs. No motion, navigation '
+    'permission or task-state change is performed by this visual decision.'
+)
+
+
 # The VLM owns the camera-level search policy. Its outputs are visual
 # hypotheses plus the next real TURN/LOOK request, never a navigation MOVE.
 SCAN_GUIDANCE_SCHEMA = object_schema(dict(
@@ -421,6 +445,44 @@ class VisualPerception:
             image_url=image_url(observation),cache=not force_recheck,
             normalize=lambda value: normalize_coordinates(value, SEARCH_SCHEMA),
             result_schema=SEARCH_SCHEMA)
+
+    def review_completion(self, goal, original, frames, motion_history,
+                          surface_evidence=None):
+        """Compare actual saved RGB-D and current RGB-D for past milestone."""
+        if len(frames)<2:
+            raise APIError('completion_review_requires_two_real_views',
+                           category='structured_field')
+        identifiers=[source['observation_id'] for _,source in frames]
+        if len(identifiers)!=len(set(identifiers)):
+            raise APIError('completion_review_duplicate_observations',
+                           category='structured_field')
+        images=[]
+        for observation,_source in frames:
+            images.append(image_url(observation,max_edge=640))
+            images.append(depth_image_url(observation,self.runtime.camera,
+                max_edge=640,display_max_m=5.0))
+        request=dict(mode='review_completed_subgoal',
+            original_goal=goal,
+            original_confirmation=original,
+            actual_motion_history=motion_history,
+            surface_evidence=surface_evidence or [],
+            image_order=[dict(observation_id=src['observation_id'],
+                heading_deg=round(math.degrees(src['pose']['heading'])%360,2),
+                pitch_deg=src['pose'].get('pitch_deg'),
+                rgb_image_index=2*i,depth_image_index=2*i+1,
+                scope='current' if i==len(frames)-1 else 'historical')
+                for i,(_obs,src) in enumerate(frames)],
+            height_reference='robot_local_not_global_ground_truth')
+        def validate(value):
+            cited=set(value['evidence_observation_ids'])
+            if not cited.issubset(identifiers) or identifiers[0] not in cited or (
+                    identifiers[-1] not in cited):
+                raise APIError('completion_review_requires_original_and_newer_image_citations',
+                               category='structured_field')
+        return self.complete('visual_perception','review_completed_subgoal',
+            COMPLETION_REVIEW_PROMPT,request,COMPLETION_REVIEW_SCHEMA,
+            image_url=images,cache=False,validate=validate,
+            result_schema=COMPLETION_REVIEW_SCHEMA)
 
     def guide_scan_view(self, observation, source, objective, target_types,
                         view_history, remaining_turn_deg, prior_targets=None,

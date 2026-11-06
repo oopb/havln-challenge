@@ -401,7 +401,8 @@ class MemoryRecords:
                 or not verification['evidence'].strip()):
             return dict(status='INVALID_EVIDENCE',
                 reason='confirmation_requires_real_current_subgoal_RGBD')
-        recorded=dict(subgoal=index,evidence=verification['evidence'],
+        recorded=dict(subgoal=index,status='ACTIVE',
+            evidence=verification['evidence'],
             objective=objective,observation_ids=ids,
             executed_steps=[a['step'] for a in self.actions
                 if a.get('subgoal')==index and a.get('action')=='MOVE_FORWARD'],
@@ -429,6 +430,68 @@ class MemoryRecords:
             subgoal=index,next_subgoal=next_index,observation_ids=ids)
         return dict(status='CONFIRMED',subgoal=index,
             next_subgoal=next_index,observation_ids=ids)
+
+    def apply_completion_review(self, subgoal_index, verdict, evidence,
+                                observation_ids, current_observation_id):
+        """Record model-owned review and atomically restore an invalid milestone.
+
+        This changes task bookkeeping, not physics or semantic judgement.
+        Prior registered movement remains in self.actions forever.
+        """
+        task=self.task
+        record=next((item for item in reversed(task.completion_evidence)
+            if item['subgoal']==subgoal_index and item.get('status','ACTIVE')
+            =='ACTIVE'),None)
+        if record is None or subgoal_index not in task.completed_subgoals:
+            return dict(status='NOT_APPLICABLE',reason='subgoal_not_confirmed')
+        if subgoal_index>=task.current_subgoal_index:
+            return dict(status='INVALID_TARGET',reason='review_requires_prior_milestone')
+        originals=set(record.get('observation_ids',()))
+        observed={o['observation_id']:o for o in self.observations}
+        observed_ids=set(observation_ids)
+        if (not originals.intersection(observed_ids)
+                or current_observation_id not in observed_ids
+                or current_observation_id not in observed):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='review_requires_original_and_current_real_RGBD')
+        previous_ids=[i for i in record['observation_ids'] if i in observed]
+        baseline_step=max(observed[i]['step'] for i in previous_ids) if previous_ids else -1
+        if observed[current_observation_id]['step']<=baseline_step:
+            return dict(status='NO_NEW_INFORMATION',
+                reason='review_requires_newer_sensor_observation')
+        review=dict(subgoal_index=subgoal_index,verdict=verdict,
+            evidence=evidence,original_observation_ids=list(originals),
+            evidence_observation_ids=list(dict.fromkeys(observation_ids)),
+            current_observation_id=current_observation_id,
+            at_action_step=len(self.actions),
+            source='source_backed_VLM_review_not_simulator_ground_truth')
+        self.evidence.note_completion_review(review)
+        self.event('completed_subgoal_reviewed',**review)
+        if verdict!='REOPEN':
+            return dict(status='OK',review_outcome=verdict,
+                current_subgoal_index=task.current_subgoal_index,
+                review=review)
+        # A later dependent milestone cannot remain completed if its
+        # prerequisite completion was explicitly withdrawn.
+        affected=[i for i in task.completed_subgoals if i>=subgoal_index]
+        for item in task.completion_evidence:
+            if item['subgoal'] in affected and item.get('status','ACTIVE')=='ACTIVE':
+                item['status']='SUPERSEDED'
+                item['superseded_by_review']=len(self.evidence.completion_reviews)-1
+        task.completed_subgoals=[
+            i for i in task.completed_subgoals if i<subgoal_index]
+        task.current_subgoal_index=subgoal_index
+        task.subgoal_started=task.subgoal_start_steps.get(
+            str(subgoal_index),0)
+        self.progress_stage='IN_PROGRESS'
+        self.progress_feedback=None
+        self.event('subgoal_reopened_from_visual_review',
+            subgoal=subgoal_index,invalidated_dependents=affected,
+            preserves_action_history=True)
+        return dict(status='OK',review_outcome='REOPENED',
+            reopened_subgoal=subgoal_index,
+            superseded_subgoals=affected,
+            current_subgoal_index=subgoal_index,review=review)
 
     def stats(self):
         outcomes = {}
