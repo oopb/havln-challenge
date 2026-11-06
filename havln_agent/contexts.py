@@ -265,6 +265,9 @@ def navigation_progress_review(memory):
         if direction in ('UP','DOWN'):
             directed.append(dict(step=row['step'],direction=direction,
                 observation_id=row.get('observation_after'),
+                heading_deg=row.get('heading_deg'),
+                delta_y_m_est=round(displacement,3),
+                uncertainty_m_est=round(uncertainty,3),
                 motion_epoch=row.get('motion_epoch')))
     # Only actual chronological, registered measurement events are described.
     segments=[]

@@ -216,6 +216,9 @@ def registered_motion_history(memory, subgoal=None):
         translation = motion.get('translation_m') or {}
         rows.append(dict(
             step=action['step'],motion_epoch=action['pose'].get('motion_epoch',0),
+            heading_deg=(round(math.degrees(action['pose']['heading'])%360,2)
+                if isinstance(action['pose'].get('heading'),(int,float))
+                else None),
             status='ESTIMATED' if valid else 'UNKNOWN',
             vertical_motion=motion.get('vertical_motion','UNKNOWN') if valid else 'UNKNOWN',
             delta_y_m=translation.get('y_up') if valid else None,
