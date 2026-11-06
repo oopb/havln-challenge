@@ -44,7 +44,7 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     confidence=dict(enum=['low','medium','high']),
     box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
-    evidence=dict(type='string',maxLength=400),
+    evidence=dict(type='string',maxLength=1200),
     uncertainty=dict(type='string',maxLength=300),
     target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
     candidate_approach=dict(type='boolean'),
@@ -67,7 +67,9 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     reason=dict(type='string',maxLength=250),
     missing_evidence=dict(type='string',maxLength=350),
     evidence_observation_ids=dict(type='array',maxItems=8,uniqueItems=True,
-                                  items=dict(type='string',minLength=1,maxLength=64))))
+                                  items=dict(type='string',minLength=1,maxLength=64)),
+    candidate_surface_box=dict(type='array',minItems=4,maxItems=4,
+        items=dict(type='number',minimum=0,maximum=1))))
 # Optional model-authored advice is never permission to MOVE or change subgoals.
 _ADVICE_FIELDS=dict(
     observation_summary=dict(type='string',maxLength=750),
@@ -79,6 +81,7 @@ for _schema in (SCAN_GUIDANCE_SCHEMA,VERIFY_GUIDANCE_SCHEMA):
 
 VERIFY_GUIDANCE_SCHEMA['required'].remove('missing_evidence')
 VERIFY_GUIDANCE_SCHEMA['required'].remove('evidence_observation_ids')
+VERIFY_GUIDANCE_SCHEMA['required'].remove('candidate_surface_box')
 
 VERIFY_GUIDANCE_PROMPT = (
     'You are Observation Agent confirming one semantic navigation subgoal. '
@@ -113,6 +116,14 @@ VERIFY_GUIDANCE_PROMPT = (
     'recommended_next. PROCEED_NEXT_TASK is appropriate only after '
     'CONFIRMED; a historically successful bearing is not current '
     'collision clearance, especially after a measured obstacle. '
+    'If a visible floor/landing surface matters to completion, optionally '
+    'return its candidate_surface_box normalized xyxy, representing the '
+    'VISIBLE patch, not an asserted current support surface. A follow-up '
+    'same-frame response may include a depth-based height estimate '
+    'in view_correction.surface_evidence; compare measured height to the '
+    'robot LOCAL origin, but do not assume identity, reachability or '
+    'arrival from a low distant surface. If that estimate contradicts '
+    'your earlier judgment, reconsider the verdict explicitly. '
     'The geometry report is a measurement, not the sole completion verdict. '
     'Use finish when evidence suffices; turn angle must be 15-90 degrees and '
     'look/finish angle must be zero. Return one schema-valid JSON object.')
@@ -130,6 +141,11 @@ SCAN_GUIDANCE_PROMPT = (
     'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
+    'When yaw scanning at a steep downward pitch has produced similar '
+    'close-up views, consult view_coverage.by_pitch and consider a '
+    'legal look_up to inspect distant layout or finish with uncertainty '
+    'instead of re-scanning the same pitch. Do not force a pitch change '
+    'when an immediate near-field obstacle must be inspected. '
     'Depth is a perspective measurement, not proof a visible floor is '
     'reachable through a railing, glass or a person. '
     'The robot stays stationary: you may request turn_left, turn_right, '
@@ -410,7 +426,8 @@ class VisualPerception:
                         view_history, remaining_turn_deg, prior_targets=None,
                         observed_yaw_pitch=None, view_correction=None,
                         session=None, mode='APPROACH', route_history=None,
-                        geometry_evidence=None, historical_frames=None):
+                        geometry_evidence=None, historical_frames=None,
+                        view_coverage=None):
         """Real current RGB-D, measured facts, full session and relevant past views."""
         from .vision_protocol import coordinate_schema, coordinate_prompt
         from .vision_protocol import normalize_coordinates
@@ -487,6 +504,7 @@ class VisualPerception:
         else:
             request['route_history_reference']='initial_session_message'
         request['measured_geometry']=geometry_evidence or {}
+        request['view_coverage']=view_coverage or {}
         # Check same-frame presence BEFORE expensive RGB/Depth encoding.
         # A correction about unchanged obs_XXXX reuses full prior images.
         prior_current_ids,prior_historical_ids=session_frame_ids(session)
@@ -589,7 +607,8 @@ class VisualPerception:
                 evidence_observation_ids=result.get('evidence_observation_ids',[]),
                 observation_summary=result.get('observation_summary',''),
                 navigation_suggestion=result.get('navigation_suggestion',''),
-                recommended_next=result.get('recommended_next','UNKNOWN'))
+                recommended_next=result.get('recommended_next','UNKNOWN'),
+                candidate_surface_box=result.get('candidate_surface_box'))
         result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),

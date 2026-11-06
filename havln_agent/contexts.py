@@ -346,6 +346,10 @@ def navigation_progress_review(memory):
         latest_directional_step=(directed[-1] if directed else None),
         latest_visual_hypotheses=latest_targets,
         route_prediction_feedback=copy.deepcopy(memory.evidence.route_outcomes[-5:]),
+        recent_surface_measurements=copy.deepcopy(
+            memory.evidence.surface_measurements[-3:]),
+        recent_verification_evidence=copy.deepcopy(
+            memory.evidence.verifications[-3:]),
         latest_blocked_stances=copy.deepcopy(memory.evidence.obstacle_blocks[-4:]),
         last_verification=(fields(last_verifier,('status','evidence',
             'uncertainty','source_observation_id')) if last_verifier else None),
@@ -690,7 +694,8 @@ def compact_navigation_context(state):
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_directional_step',
             'latest_visual_hypotheses','route_prediction_feedback',
-            'latest_blocked_stances',
+            'latest_blocked_stances','recent_surface_measurements',
+            'recent_verification_evidence',
             'last_verification','interpretation','model_choices'))
     if state.get('route_progress'):
         out['route_progress']=state['route_progress']

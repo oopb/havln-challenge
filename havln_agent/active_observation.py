@@ -423,6 +423,7 @@ class ObservationController:
         max_candidate_refinement_views=3
         rejected_views=[]
         pending_view_correction=None
+        measured_surface_regions=set()
         consecutive_replans=0
         max_replans=2
         # A VLM decision always refers to ONE real current-frame observation.
@@ -536,6 +537,10 @@ class ObservationController:
                 measured_motion_is_distinct_from_visual_hypothesis=True,
                 advice_only_not_motion_authorization=True,
                 evidence_scope='real_RGBD_and_measurement_plus_VLM_hypothesis')
+            if verification:
+                latest_forward=next((a['step'] for a in reversed(r.memory.actions)
+                    if a.get('action')=='MOVE_FORWARD'),None)
+                r.memory.evidence.note_verification(verification,latest_forward)
             record.update(verification=copy.deepcopy(verification),
                 navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
@@ -646,6 +651,20 @@ class ObservationController:
                 options['observed_yaw_pitch']=[
                     dict(heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'])
                     for p in record['checkpoints'][-12:]]
+                # Count real VLM checkpoints by pitch, not intermediate TURN.
+                by_pitch={}
+                for past in record['checkpoints']:
+                    pitch_key=str(round(past['pitch_deg'],1))
+                    by_pitch.setdefault(pitch_key,set()).add(
+                        round(past['heading_deg']/r.camera.turn_angle))
+                available_pitch=[
+                    x for x in range(-60,61,int(r.camera.tilt_angle))]
+                options['view_coverage']=dict(
+                    current_pitch_deg=r.pitch_deg,
+                    by_pitch={k:len(v) for k,v in by_pitch.items()},
+                    uninspected_pitch_levels=[x for x in available_pitch
+                        if str(round(x,1)) not in by_pitch],
+                    purpose='information_gain_not_mandatory_camera_motion')
                 geometry_facts={}
                 try:
                     geom=r.geometry()
@@ -731,6 +750,30 @@ class ObservationController:
                     # never silently erased because it lacks an exact label.
                     best_cue=candidate
             action=visual['next_action']
+            # VLM selects the visible region; calibrated Depth measures it.
+            # The same-frame second call lets VLM use that fact itself.
+            surface_box=visual.get('candidate_surface_box')
+            surface_key=(source['observation_id'],
+                tuple(surface_box) if surface_box is not None else None)
+            if (mode=='VERIFY' and surface_box is not None and
+                    surface_key not in measured_surface_regions):
+                from .surface_measurement import measure_surface_region
+                measured_surface_regions.add(surface_key)
+                try:
+                    measured=measure_surface_region(
+                        r.geometry(),surface_box,source['observation_id'])
+                except (ValueError,TypeError,AttributeError):
+                    measured=dict(status='INSUFFICIENT_DEPTH',
+                        observation_id=source['observation_id'],
+                        reason='surface_measurement_unavailable',
+                        measured_completion=False)
+                r.memory.evidence.note_surface(measured)
+                record.setdefault('surface_evidence',[]).append(measured)
+                pending_view_correction=dict(
+                    reason='requested_surface_depth_measurement',
+                    surface_evidence=measured,
+                    required_next='reassess_current_milestone_using_RGBD_and_height_then_finish_or_inspect_specific_missing_view')
+                continue
             # A semantic verdict is FINAL only when the VLM itself chooses
             # finish; a tentative CONFIRMED with a requested look/turn must
             # obtain that fresh RGB-D checkpoint first.
