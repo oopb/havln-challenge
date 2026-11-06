@@ -9,6 +9,26 @@ from .local_exploration import (last_block, local_coverage,
     recent_forward_stall_evidence)
 
 
+def latest_observation_for_subgoal(memory,index):
+    """Only current milestone observations can define the active objective.
+
+    Previous milestone reports remain available as historical evidence, not
+    as unscoped instructions for the NavigationAgent.
+    """
+    return next((item for item in reversed(memory.observation_searches)
+                 if item.get('subgoal')==index),None)
+
+
+def last_tool_result_for_subgoal(memory,index):
+    """Ignore the previous milestone's last tool receipt after transition."""
+    if not memory.tool_ledger:
+        return None
+    entry=memory.tool_ledger[-1]
+    if entry.get('subgoal_id') not in (None,'sg_%d'%index):
+        return None
+    return entry.get('result')
+
+
 def fields(value,names):
     return {key:value[key] for key in names if key in value}
 
@@ -358,10 +378,7 @@ def navigation_context(runtime):
         landmark=language.get('landmark','')+' '+language.get('target',''),top_k=3)['observations']
     # A verified sg_0 report is historical evidence, not the sg_1 tool
     # feedback. Never re-feed the prior goal's prose as the current one.
-    last_entry=memory.tool_ledger[-1] if memory.tool_ledger else None
-    last=(last_entry.get('result') if last_entry and
-          last_entry.get('subgoal_id') in (None,'sg_%d'%index)
-          else None)
+    last=last_tool_result_for_subgoal(memory,index)
     navigation_memory = (memory.navigation_summary() if hasattr(memory, 'navigation_summary') else {})
     grounding_hints = []
     for item in reversed(memory.groundings):
@@ -598,9 +615,7 @@ def navigation_context(runtime):
                     landmarks=[fields(l,('name','direction')) for l in scene_hint.get('landmarks',[])[:4]],
                     evidence_state='historical_hypothesis_not_live_safety')
                 break
-    recent_search=next((item for item in
-        reversed(memory.observation_searches)
-        if item.get('subgoal')==index),None)
+    recent_search=latest_observation_for_subgoal(memory,index)
     if recent_search:
         result['latest_observation_task']=dict(
             objective=recent_search['objective'],outcome=recent_search['outcome'],
