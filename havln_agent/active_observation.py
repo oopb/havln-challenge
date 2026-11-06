@@ -356,11 +356,19 @@ class ObservationController:
                         'TARGET_CANDIDATE_FOUND','VLM_SEARCH_FINISHED',
                         'SEARCH_REGION_COVERED_NO_MATCH','CUE_ONLY',
                         'APPROACH_CANDIDATE_FOUND','NO_RELIABLE_CANDIDATE',
-                        'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN')
+                        'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN',
+                        'VISION_UNAVAILABLE')
                     or prev.get('intent','APPROACH')!=mode
                     or prev.get('target_types')!=list(target_types)
-                    or ' '.join(prev.get('objective','').casefold().split())
-                       !=' '.join(objective.casefold().split())
+                    # VERIFY always assesses the current subgoal's completion.
+                    # Rewording that question must not trigger another expensive
+                    # panorama from identical RGB-D at the same physical stance.
+                    or (mode!='VERIFY' and
+                        ' '.join(prev.get('objective','').casefold().split())
+                        !=' '.join(objective.casefold().split()))
+                    or (prev.get('outcome')=='VISION_UNAVAILABLE' and
+                        (mode!='VERIFY' or
+                         now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
@@ -377,6 +385,7 @@ class ObservationController:
                 outcome='REPEATED_SEARCH_NO_NEW_VIEW',
                 reason='unchanged_RGBD_stance_and_observation_intent_reuse',
                 verification=copy.deepcopy(prev.get('verification')),
+                navigation_feedback=copy.deepcopy(prev.get('navigation_feedback')),
                 observation_mode=mode,
                 covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
                 checkpoints=[],best_candidate=rebound(prev.get('candidate')),
@@ -464,8 +473,9 @@ class ObservationController:
                 status=final_status,
                 evidence=(last_visual.get('verification_evidence','')
                     if outcome in ('SUBGOAL_CONFIRMED','SUBGOAL_NOT_YET') else ''),
-                final_verdict=outcome in ('SUBGOAL_CONFIRMED',
-                    'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN'),
+                # UNCERTAIN from a depleted checkpoint budget is not a
+                # final VLM judgement. Only the VLM's own explicit finish is.
+                final_verdict=(reason=='vlm_semantic_subgoal_observation'),
                 uncertainty=last_visual.get('uncertainty',''),
                 source_observation_id=(record['checkpoints'][-1]['observation_id']
                     if record['checkpoints'] else None),
@@ -475,7 +485,59 @@ class ObservationController:
                     'evidence_observation_ids',[])),
                 missing_evidence=last_visual.get('missing_evidence',''),
                 source='vlm_real_rgbd_history') if mode=='VERIFY' else None)
+            # A concise narrative is useful to NavigationAgent, but it must
+            # never replace measurement provenance, clearance, or the actual
+            # final VERIFY result. Conflicting suggested transitions are
+            # discarded while keeping the original observation evidence.
+            advice_status=last_visual.get('recommended_next','UNKNOWN')
+            invalid_advice=(mode=='VERIFY' and (
+                (final_status!='CONFIRMED' and
+                 advice_status=='PROCEED_NEXT_TASK')
+                or (final_status=='CONFIRMED' and
+                    advice_status=='CONTINUE_CURRENT_TASK')
+                or (reason!='vlm_semantic_subgoal_observation' and
+                    advice_status!='GATHER_MORE_EVIDENCE')))
+            if invalid_advice:
+                advice_status='UNKNOWN'
+            summary=(last_visual.get('observation_summary') or
+                last_visual.get('verification_evidence') or
+                last_visual.get('evidence') or '')
+            if (mode=='VERIFY' and
+                    reason!='vlm_semantic_subgoal_observation'):
+                # A provisional VLM arrival statement is not completion,
+                # even if a later sensor action failed or the scan budget ended.
+                summary=('The verification did not reach a final judgement; '
+                    'previous VLM claims are provisional and the current '
+                    'subgoal remains unconfirmed.')
+            default_suggestion=(
+                'Current subgoal is confirmed; inspect the next ordered task '
+                'for a grounded route before moving.'
+                if mode=='VERIFY' and final_status=='CONFIRMED' else
+                'Current subgoal remains unfinished. Use previously measured '
+                'progress, but inspect current obstacles before choosing '
+                'whether to continue or detour.'
+                if mode=='VERIFY' and final_status=='NOT_YET' else
+                'The verification is inconclusive. Seek the specific missing '
+                'evidence rather than repeating the same unchanged view.'
+                if mode=='VERIFY' else
+                'Choose from the observed candidate bearings; none is '
+                'permanent collision clearance.')
+            narrative=dict(
+                observation_summary=summary[:750],
+                navigation_suggestion=((
+                    (last_visual.get('navigation_suggestion') or
+                     default_suggestion)[:600])
+                    if not invalid_advice else default_suggestion),
+                recommended_next=advice_status,
+                observation_mode=mode,
+                outcome=outcome,
+                evidence_observation_ids=list(dict.fromkeys(
+                    p['observation_id'] for p in record['checkpoints'])),
+                measured_motion_is_distinct_from_visual_hypothesis=True,
+                advice_only_not_motion_authorization=True,
+                evidence_scope='real_RGBD_and_measurement_plus_VLM_hypothesis')
             record.update(verification=copy.deepcopy(verification),
+                navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
                 outcome=outcome,covered_turn_deg=turned,
                 visual_reports=copy.deepcopy(reports),
@@ -489,13 +551,18 @@ class ObservationController:
                 blocked_approaches=copy.deepcopy(blocked_approaches),
                 rejected_view_requests=copy.deepcopy(rejected_views))
             store=getattr(r.memory,'note_active_observation_target',None)
-            hypothesis=best_candidate or best_cue
+            # Persist the selected APPROACH with its progress classification,
+            # not an older visually salient but currently blocked landmark.
+            hypothesis=(best_approach if best_approach and
+                best_approach.get('target_kind') in ('ENTRY','APPROACH','TARGET','CUE')
+                else best_candidate or best_cue)
             if hypothesis and callable(store):
                 store(hypothesis,objective,target_types,
                     goal=getattr(r,'active_subgoal',None))
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),
+                navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
                 historical_context_observation_ids=list(
                     record['historical_context_observation_ids']),
@@ -531,7 +598,10 @@ class ObservationController:
         if look!='none':
             failed=do_action('LOOK_DOWN' if look=='down' else 'LOOK_UP')
             if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))
-        max_checks=min(16,max(3,math.ceil(sweep_degrees/30)+5))
+        # Verification is a bounded assessment, not another full search.
+        # Search and obstacle exploration retain their existing view budget.
+        max_checks=min(5 if mode=='VERIFY' else 16,
+                       max(3,math.ceil(sweep_degrees/30)+5))
         for _ in range(max_checks):
             if r.done:
                 return finish('INTERRUPTED','PARTIAL','environment_done')
@@ -621,6 +691,7 @@ class ObservationController:
                     confidence=visual['confidence'],box=visual['box'],
                     evidence=visual['evidence'],uncertainty=visual.get('uncertainty',''),
                     target_kind=visual['target_kind'],
+                    expected_progress=visual.get('expected_progress','UNKNOWN'),
                     observation_id=source['observation_id'],
                     semantic_source_observation_id=source['observation_id'],
                     heading_deg=point['heading_deg'],pitch_deg=point['pitch_deg'],

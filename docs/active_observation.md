@@ -332,3 +332,61 @@ The model-visible transcript replays prior messages rather than repeating route 
 and visual summaries in every newly appended turn. The first turn holds the
 relevant motion context; later turns retain compact covered-yaw data and fresh
 geometry measurements. All historical images remain available in the transcript.
+
+
+## Batch 4-18: verification loops and grounded natural-language feedback
+
+The archived Batch 4-18 API trace contained 12 visual schema validation
+failures. All were valid-looking VERIFY responses rejected only because
+\`verification_evidence\` had 455–592 characters against the former 450-character
+limit. VERIFY accepts up to 1800 characters and encourages concise, source-backed
+evidence rather than repeating an entire RGB-D inference call for an extra
+few characters.
+
+VERIFY is **an assessment of completion**, not a new search for the destination:
+if current RGB-D proves the robot has not arrived, VLM should finish with
+NOT_YET immediately. If genuinely uncertain it can inspect a targeted missing
+view, including pitch. Verification-specific observation calls use at most
+5 VLM checkpoints. Exhausting the checkpoint budget returns UNCERTAIN
+with \`final_verdict=false\`, never a fabricated completion. Paraphrasing the
+same verification at unchanged robot pose and RGB-D reuses the recent
+result; transient VISION_UNAVAILABLE errors use a short retry cooldown,
+with an explicit \`force_recheck\` escape hatch.
+
+Every Observation Agent task returns \`navigation_feedback\` with
+\`observation_summary\`, \`navigation_suggestion\`, \`recommended_next\`, real
+\`evidence_observation_ids\` and an explicit
+\`advice_only_not_motion_authorization=true\`. The VLM's optional free-text
+feedback is accepted alongside structured observation/verification evidence.
+On older models that omit optional fields, a conservative summary and
+task-state recommendation are derived from the validated evidence/status.
+A NOT_YET report cannot advocate an authoritative switch to the next
+subgoal; conflicting model advice is removed and replaced with a conservative
+suggestion. Neither text nor recommended_next updates the motion route or
+subgoal status. NavigationAgent alone owns movement; the confirmed VERIFY
+receipt remains the ONLY semantic completion mechanism.
+
+\`expected_progress\` from an APPROACH hypothesis is persisted to typed
+visual target memory and included in compact NavigationAgent context. Recent
+registered upward/downward movement is made explicit; the agent is advised
+to try short measured movements on newly chosen/uncertain routes rather
+than unknowingly executing multiple opposite-direction steps. No hardcoded
+staircase rule, new \`max_atomic_steps\` or enforced movement authorization
+has been introduced.
+
+The episode summary counts API-level visual schema failures separately from
+whole observation-tool failures, and distinguishes measured central Depth
+blockers that stopped an atomic step from uncertain side-Depth findings.
+
+Focused verification:
+
+\`\`\`bash
+python -m unittest discover -s tests -p 'test_batch418_verification_feedback.py' -v
+python -m unittest discover -s tests -p 'test_observation_session_verification.py' -v
+python -m unittest discover -s tests -p 'test_agent_io_contracts.py' -v
+python -m compileall -q havln_agent
+\`\`\`
+
+Actual Habitat closed-loop performance and the real deployed VLM response
+distribution still require the next diagnostic batch; static review alone
+does not prove navigation success.
