@@ -838,7 +838,7 @@ class AgentRuntime(ToolExecutor):
         return dict(status='OK', reason=reason, control_event='task_review_requested')
 
     def _request_finish(self, outcome, evidence):
-        # The shared independent verifier alone can turn a success claim into STOP.
+        # No independent semantic verifier: all milestones came from VLM VERIFY.
         return self._finish_navigation(outcome, evidence)
 
     def assess(self, value):

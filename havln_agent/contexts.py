@@ -300,10 +300,11 @@ def navigation_progress_review(memory):
     changed_direction=any(a['direction']!=b['direction']
                           for a,b in zip(segments,segments[1:]))
     last_verifier=next((
-        entry.get('result') or {} for entry in
-        reversed(getattr(memory,'tool_ledger',[]))
-        if (entry.get('call') or {}).get('tool')=='verify_subgoal'
-        and entry.get('subgoal_id') in (None,'sg_%d'%index)),None)
+        item.get('verification') for item in reversed(
+            getattr(memory,'observation_searches',[]))
+        if item.get('intent')=='VERIFY' and
+        item.get('subgoal')==index and item.get('verification')
+    ),None)
     return dict(
         current_subgoal_index=index,
         next_subgoal=(fields(goals[index+1],
@@ -316,8 +317,8 @@ def navigation_progress_review(memory):
         directional_history=segments[-5:],
         observed_direction_reversal=changed_direction,
         latest_visual_hypotheses=latest_targets,
-        last_verification=(fields(last_verifier,('status','stage','reason',
-            'missing','supported')) if last_verifier else None),
+        last_verification=(fields(last_verifier,('status','evidence',
+            'uncertainty','source_observation_id')) if last_verifier else None),
         interpretation='local_measured_segments_are_historical_not_global_pose; '
             'visual_targets_are_unverified_hypotheses; no_subgoal_auto_completion',
         model_choices='If evidence suggests a phase change, evaluate '

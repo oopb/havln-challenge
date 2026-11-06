@@ -334,7 +334,13 @@ class MemoryRecords:
             if (result.get('interrupted_status')!='BLOCKED' and
                     result.get('status')!='BLOCKED'):
                 continue
-            pose=(entry.get('request_context') or {}).get('pose') or {}
+            # Use the actual end-of-attempt camera yaw after any TURN,
+            # not the older request yaw from before the turn.
+            end_id=result.get('end_observation_id')
+            end_record=next((o for o in reversed(self.observations)
+                if o['observation_id']==end_id),None)
+            pose=((end_record or {}).get('pose') or
+                (entry.get('request_context') or {}).get('pose') or {})
             heading=pose.get('heading')
             if not isinstance(heading,(int,float)):
                 continue
