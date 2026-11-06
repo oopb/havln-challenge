@@ -87,7 +87,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_smoke50013_waypoints.py' -v
       - name: Check active observation subtasks
         run: python -m unittest discover -s tests -p 'test_active_observation.py' -v
-      - name: Check six-core navigation tool menu and contextual capability exposure
+      - name: Check seven-capability navigation menu and gated historical completion review
         run: python -m unittest discover -s tests -p 'test_navigation_tool_menu.py' -v
       - name: Check malformed optional memory never vetoes navigation and visual targets persist
         run: python -m unittest discover -s tests -p 'test_optional_memory_and_vlm_targets.py' -v
