@@ -283,7 +283,9 @@ class MemoryRecords:
         Failed probes never erase earlier registered movement.
         """
         segments=[]
-        for a in self.actions[-120:]:
+        # Preserve actual earlier motion across long scan/turn episodes.
+        # The output is still bounded to recent compact segments below.
+        for a in self.actions:
             if a.get('action')!='MOVE_FORWARD':
                 continue
             feedback=a.get('result') or {}

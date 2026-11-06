@@ -197,6 +197,10 @@ class AgentIOContractsTests(unittest.TestCase):
                 observation_after='obs_05',rgbd_motion=dict(
                     status='ESTIMATED',uncertainty_m=.05,
                     translation_m=dict(y_up=-.15))))]
+        # An old successful descent must survive many later camera turns.
+        mem.actions.extend(dict(step=i,action='TURN_LEFT',subgoal=0,
+            pose=dict(heading=math.radians(270),motion_epoch=2),
+            result={}) for i in range(5,135))
         mem.observations=[dict(observation_id='obs_08',
             pose=dict(x=.4,z=1.2,heading=math.radians(270),
                 motion_epoch=2,viewpoint_generation=1),place_id='P1')]
