@@ -479,7 +479,8 @@ class VisualPerception:
                 provenance='actual_atomic_actions_since_current_subgoal_start',
                 caveat='turn_history_is_not_absolute_localized_3D_orientation')
             request['previously_confirmed_subgoal_ids']=[
-                'sg_%d'%i for i in self.runtime.memory.task.completed_subgoals]
+                'sg_%d'%i for i in getattr(
+                    self.runtime.memory.task,'completed_subgoals',())]
         request['observation_mode']=mode
         if not session:
             request['route_history']=route_history or {}
