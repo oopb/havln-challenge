@@ -131,11 +131,21 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         row = dict(episode_id=episode_id, actions=actions)
         check_rows([row], [episode_id])
         pose = runtime.motion_controller.pose()
+        api_stats=client.stats()
+        visual_api=(api_stats.get('by_role') or {}).get('visual_perception') or {}
+        visual_tool_failures=sum(
+            r['call'].get('tool')=='observe_for_goal' and
+            r['result'].get('status')=='TOOL_ERROR'
+            for r in runtime.memory.tool_ledger)
+        visual_unavailable_calls=sum(
+            r['call'].get('tool')=='observe_for_goal' and
+            r['result'].get('outcome')=='VISION_UNAVAILABLE'
+            for r in runtime.memory.tool_ledger)
         summary = dict(episode_id=episode_id, architecture='observe_move_v1', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
             api_failure=runtime.api_failure, navigation_liveness=runtime.navigation_liveness,
             seconds=time.monotonic()-started,
-            api=client.stats(), pose=pose, decisions=runtime.decisions,
+            api=api_stats, pose=pose, decisions=runtime.decisions,
             decisions_by_role=runtime.decision_counts, task_reviews=max(0,runtime.plan_revision-1),
             completed_subgoals=len(runtime.memory.task.completed_subgoals),
             move_forward_steps=actions.count('MOVE_FORWARD'),
@@ -182,8 +192,12 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             no_motion_feedback_scope='identical_post_forward_rgbd_hashes_not_collision_proof',
             geometry_rejection_reasons=dict(Counter(d.get('reason') for r in runtime.memory.tool_ledger
                 for d in r['result'].get('directions',[]) if d.get('status')!='EXECUTABLE')),
-            visual_tool_errors=sum(r['result']['status']=='TOOL_ERROR' and r['result'].get('recoverable',False)
-                for r in runtime.memory.tool_ledger),
+            visual_api_errors=visual_api.get('errors',0),
+            visual_api_validation_errors=visual_api.get('validation_errors',0),
+            visual_observation_unavailable_calls=visual_unavailable_calls,
+            visual_tool_errors=visual_api.get('errors',0)+visual_tool_failures,
+            visual_error_count_scope=('API physical failed requests plus TOOL_ERROR '
+                'observation calls; these are events, not unique root causes'),
             actual_navigation_success=None, collision_metrics=None,
             validation_scope='execution_trace_requires_independent_environment_and_scoring_verification')
         runtime.event('export', source='action_exporter', actions=len(actions), validated_by='check_rows')

@@ -281,7 +281,8 @@ class APIClient:
 
     @staticmethod
     def _empty_stats():
-        return dict(requests=0, seconds=0.0, retries=0, errors=0, timeouts=0, cache_hits=0, usage={})
+        return dict(requests=0, seconds=0.0, retries=0, errors=0,
+            validation_errors=0, timeouts=0, cache_hits=0, usage={})
 
     def _account(self, role, record):
         endpoint_key = role+'/'+record['endpoint_id']
@@ -290,7 +291,9 @@ class APIClient:
         for group in (self.by_role[role], endpoint):
             for key,value in dict(requests=1,seconds=record['seconds'],
                     retries=int(record['attempt']>0 or record['endpoint_index']>0 or record['format_retry']>0),
-                    errors=int(not record['success']),timeouts=int(record.get('error')=='request_timeout')).items():
+                    errors=int(not record['success']),
+                    validation_errors=int(record.get('error_type')=='ValidationError'),
+                    timeouts=int(record.get('error')=='request_timeout')).items():
                 group[key] += value
             for key,value in usage_counts(record.get('usage')).items():
                 group['usage'][key] = group['usage'].get(key,0)+value
