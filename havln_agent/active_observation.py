@@ -489,19 +489,23 @@ class ObservationController:
             # final VERIFY result. Conflicting suggested transitions are
             # discarded while keeping the original observation evidence.
             advice_status=last_visual.get('recommended_next','UNKNOWN')
-            if (mode=='VERIFY' and (
-                    (final_status!='CONFIRMED' and
-                     advice_status=='PROCEED_NEXT_TASK')
-                    or (reason!='vlm_semantic_subgoal_observation' and
-                        advice_status!='GATHER_MORE_EVIDENCE'))):
+            invalid_advice=(mode=='VERIFY' and (
+                (final_status!='CONFIRMED' and
+                 advice_status=='PROCEED_NEXT_TASK')
+                or (final_status=='CONFIRMED' and
+                    advice_status=='CONTINUE_CURRENT_TASK')
+                or (reason!='vlm_semantic_subgoal_observation' and
+                    advice_status!='GATHER_MORE_EVIDENCE')))
+            if invalid_advice:
                 advice_status='UNKNOWN'
             summary=(last_visual.get('observation_summary') or
                 last_visual.get('verification_evidence') or
                 last_visual.get('evidence') or '')
             narrative=dict(
                 observation_summary=summary[:750],
-                navigation_suggestion=(last_visual.get('navigation_suggestion')
-                    or '')[:600],
+                navigation_suggestion=((
+                    last_visual.get('navigation_suggestion') or '')[:600]
+                    if not invalid_advice else ''),
                 recommended_next=advice_status,
                 observation_mode=mode,
                 outcome=outcome,

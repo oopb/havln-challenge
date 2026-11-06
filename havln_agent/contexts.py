@@ -319,6 +319,7 @@ def navigation_progress_review(memory):
         observed_upward_m_est=history.get('observed_upward_m_est',0),
         directional_history=segments[-5:],
         observed_direction_reversal=changed_direction,
+        latest_directional_step=(directed[-1] if directed else None),
         latest_visual_hypotheses=latest_targets,
         last_verification=(fields(last_verifier,('status','evidence',
             'uncertainty','source_observation_id')) if last_verifier else None),
@@ -658,7 +659,8 @@ def compact_navigation_context(state):
             'current_subgoal_index','next_subgoal','registered_forward_steps',
             'unknown_forward_steps','observed_downward_m_est',
             'observed_upward_m_est','directional_history',
-            'observed_direction_reversal','latest_visual_hypotheses',
+            'observed_direction_reversal','latest_directional_step',
+            'latest_visual_hypotheses',
             'last_verification','interpretation','model_choices'))
     if state.get('route_progress'):
         out['route_progress']=state['route_progress']
