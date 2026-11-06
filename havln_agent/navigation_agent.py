@@ -10,9 +10,13 @@ COMMON_PROMPT = (
     'Observation Agent alone owns RGB-D camera exploration, geometry evidence '
     'interpretation and semantic milestone confirmation. '
     'Output exactly one registered JSON tool+args object. '
-    'When evidence suggests the current subgoal may be complete, call '
-    'observe_for_goal with mode=VERIFY and a concrete question, such as whether '
-    'the ROBOT is physically at the bottom of stairs rather than mid-descent. '
+    'When evidence suggests the CURRENT subgoal may be complete, call '
+    'observe_for_goal with mode=VERIFY. VERIFY always checks the runtime '
+    'active milestone, not a former or future subgoal. For example, if '
+    'sg_0 descent is confirmed and sg_1 requires a right turn, VERIFY asks '
+    'whether the right turn was accomplished, NEVER whether stairs were '
+    'descended again. If previous completion appears doubtful, do not '
+    'quietly substitute a past milestone as the current VERIFY objective. '
     'Only a source-backed CONFIRMED VLM observation advances the subgoal. '
     'A partial descent is progress, not proof of arrival. '
     'A VERIFY NOT_YET is a completed assessment of an unchanged scene: '
@@ -35,7 +39,9 @@ OBSERVE_PROMPT = (
     'Do not paraphrase the same unanswered question at unchanged pose/RGB-D. '
     'Read latest_observation_task, route_progress and progress_review. '
     'The Observation Agent navigation_feedback carries a measured/visual '
-    'summary AND a separate advisory: recommendations are proposals, '
+    'summary AND a separate advisory. Old subgoal observations are '
+    'historical and must not replace the CURRENT milestone. '
+    'Recommendations are proposals, 
     'not verified collision clearance or orders. '
     'When a registered forward step shows credible vertical progress '
     'opposite the current task intent, reconsider heading before issuing '
@@ -114,10 +120,25 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         runtime.registry = runtime.make_registry()
         def validate(value):
-            # Some low-cost providers obey only the envelope/tool names and
-            # ignore per-tool argument schemas. Reject malformed angle/args
-            # during the decision so the model can repair instead of burning
-            # cycles on INVALID_ARGUMENTS from ToolExecutor.
+            # A LOOK at the mechanical pitch limit is an impossible optional
+            # pre-scan setting, not an intention to change the route. Normalize
+            # it to "VLM chooses its next legal view" before tool-schema
+            # validation, rather than paying for repeated INVALID_ARGUMENTS.
+            if isinstance(value,dict) and value.get('tool')=='observe_for_goal':
+                args=value.get('args')
+                if isinstance(args,dict) and args.get('look') in ('up','down'):
+                    allowed=set((context.get('legal_look') or []))
+                    if args['look'] not in allowed:
+                        requested=args.pop('look')
+                        if hasattr(runtime,'event'):
+                            runtime.event('navigation_invalid_initial_look_removed',
+                                source='navigation_agent',
+                                requested_look=requested,
+                                current_pitch_deg=runtime.pitch_deg,
+                                subgoal_id=getattr(runtime,'active_subgoal_id',None),
+                                recovery='observation_agent_chooses_legal_view')
+            # Other malformed arguments are rejected before dispatch; they
+            # cannot consume a full NavigationAgent decision in ToolExecutor.
             if not Draft7Validator(navigation_schema(offered_tools)).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
