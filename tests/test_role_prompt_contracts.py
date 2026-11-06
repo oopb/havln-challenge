@@ -101,7 +101,6 @@ class PromptContractTests(unittest.TestCase):
         self.assertEqual(runtime.event.call_count,2)
 
     @staticmethod
-
     def _panorama_fixture():
         headings=[0,90,180,270]
         viewpoints=[
@@ -120,106 +119,74 @@ class PromptContractTests(unittest.TestCase):
             side_effect=lambda ident:(SimpleNamespace(rgb=None),
                                       dict(observation_id=ident)))
 
-    def test_full_panorama_requires_model_selected_finite_forward_attempt_once(self):
-        moving=dict(description='Model selects bearing and distance',
-            permission='NAVIGATION',
-            parameters=dict(type='object',
-                properties=dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
-                                distance_m=dict(type='number',minimum=.25,maximum=3.)),
-                required=['turn_deg','distance_m'],additionalProperties=False))
-        observation=dict(description='Camera-only turn',permission='NAVIGATION',
-            parameters=dict(type='object',properties={},
-                required=[],additionalProperties=False))
-        client=CapturingClient(dict(tool='navigate_relative',
-            args=dict(turn_deg=-60,distance_m=.5)))
-        viewpoints,visual,frame_reader=self._panorama_fixture()
+    def test_panorama_preserves_all_strategic_choices_and_only_advises_once(self):
+        observing=dict(description='VLM full visual task',permission='NAVIGATION',
+            parameters=dict(type='object',properties={},required=[],
+                            additionalProperties=True))
+        moving=dict(description='Model-directed finite motion',permission='NAVIGATION',
+            parameters=dict(type='object',properties={},required=[],
+                            additionalProperties=True))
+        terminal=dict(description='End task',permission='TERMINAL',
+            parameters=dict(type='object',properties={},required=[],
+                            additionalProperties=True))
+        client=CapturingClient(dict(tool='observe_for_goal',
+            args=dict(mode='VERIFY',objective='Is destination reached?',
+                      target_types=['landing'])))
         runtime=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value=dict(
-                navigate_relative=moving,turn_and_observe=observation)),
+                observe_for_goal=observing,navigate_relative=moving,
+                request_finish=terminal)),
             memory=SimpleNamespace(keyframes={},episode_id='ep-a',
-                                   task=SimpleNamespace(instruction='Find the entry')),
-            visual_perception=visual,_vision_frame=frame_reader,
+                task=SimpleNamespace(instruction='Go down stairs')),
             plan_revision=1,event=Mock())
         state=dict(task_selection=dict(current_subgoal_index=0),
             pose=dict(motion_epoch=0,place_id='P0',heading_deg=0,
                       position_xz_m_est=[0.,0.]),
             panoramic_observation=dict(all_azimuths_observed=True,
-                                      observed_viewpoints=viewpoints,
                                       covered_yaw_bins=24),
-            observation_stagnation=dict(repeated_low_information=True,
-                intervention='BLOCKED_ACTIONABILITY_REASSESSMENT',
-                same_stance_observation_calls=24,low_information_calls=8))
+            observation_stagnation=dict(repeated_low_information=False))
         with patch('havln_agent.navigation_agent.navigation_context',
                    return_value=state):
             agent=NavigationAgent(runtime)
-            selected=agent.decide()
-            self.assertEqual(selected['args']['turn_deg'],-60)
-            self.assertIn('ONE-TIME PANORAMIC DIRECTION DECISION',client.system_history[0])
-            self.assertNotIn('MODE: OBSERVE',client.system_history[0])
-            self.assertEqual(client.purpose,'panorama_navigation_commit')
-            self.assertEqual(len(client.schema['oneOf']),1)
-            self.assertEqual(client.schema['oneOf'][0]['properties']['tool']['const'],
-                             'navigate_relative')
-            self.assertEqual(client.context['panorama_commitment']['allowed_tool'],
-                             'navigate_relative')
-            self.assertEqual(runtime.event.call_count,2)
-            self.assertEqual([call.args[0] for call in runtime.event.call_args_list],
-                             ['panorama_visual_memory_reviewed','panorama_direction_committed'])
+            first=agent.decide()
+            self.assertEqual(first['tool'],'observe_for_goal')
+            self.assertIn('ONE-TIME COMPLETE-VIEW REVIEW',client.system)
+            self.assertEqual(client.purpose,'navigation_decision')
+            tools=[b['properties']['tool']['const'] for b in
+                   client.schema['oneOf']]
+            self.assertIn('observe_for_goal',tools)
+            self.assertIn('request_finish',tools)
+            self.assertIn('navigate_relative',tools)
+            self.assertEqual(runtime.event.call_count,1)
             self.assertFalse(runtime.event.call_args.kwargs['physically_forced'])
-            visual.panorama_direction_evidence.assert_called_once()
             agent.decide()
-            self.assertNotIn('ONE-TIME PANORAMIC DIRECTION DECISION',client.system_history[1])
-            self.assertEqual(len(client.schema['oneOf']),1)
-            self.assertEqual(client.schema['oneOf'][0]['properties']['tool']['const'],
-                             'navigate_relative')
-            # Legacy turn_and_observe remains registered for execution but
-            # is not exposed after a completed panorama checkpoint.
-            self.assertEqual(runtime.event.call_count,2)
-            # Re-arm on a genuine new task/plan at the same location, not
-            # on another model turn with identical physical and task evidence.
+            self.assertNotIn('ONE-TIME COMPLETE-VIEW REVIEW',client.system)
+            self.assertEqual(runtime.event.call_count,1)
             runtime.plan_revision=2
             agent.decide()
-            self.assertIn('ONE-TIME PANORAMIC DIRECTION DECISION',client.system_history[-1])
-            self.assertEqual(runtime.event.call_count,4)
-            self.assertEqual(visual.panorama_direction_evidence.call_count,2)
+            self.assertIn('ONE-TIME COMPLETE-VIEW REVIEW',client.system)
+            self.assertEqual(runtime.event.call_count,2)
 
-    def test_panorama_rejects_cheap_model_turn_loop_without_consuming_checkpoint(self):
-        schema=dict(type='object',properties=dict(
-            turn_deg=dict(type='number',minimum=-180,maximum=180),
-            distance_m=dict(type='number',minimum=.25,maximum=3)),
-            required=['turn_deg','distance_m'],additionalProperties=False)
-        client=CapturingClient(dict(tool='turn_and_observe',
-            args=dict(relative_turn_deg=60,look='none')))
-        viewpoints,visual,frame_reader=self._panorama_fixture()
+    def test_panorama_does_not_reexpose_legacy_turn_or_geometry(self):
+        client=CapturingClient(dict(tool='navigate_relative',
+                                    args=dict(turn_deg=30,distance_m=.25)))
+        camera=SimpleNamespace(turn_angle=15,tilt_angle=30)
+        from havln_agent.contracts import registry
         runtime=SimpleNamespace(client=client,registry=None,
-            make_registry=Mock(return_value=dict(
-                navigate_relative=dict(description='MOVE',permission='NAVIGATION',
-                    parameters=schema),
-                turn_and_observe=dict(description='LOOK',permission='NAVIGATION',
-                    parameters=dict(type='object',properties={},
-                        additionalProperties=False)))),
+            make_registry=Mock(return_value=registry(camera,3)),
             memory=SimpleNamespace(keyframes={},episode_id='ep-a',
-                                   task=SimpleNamespace(instruction='Find a passage')),
-            visual_perception=visual,_vision_frame=frame_reader,
-            event=Mock())
-        state=dict(panoramic_observation=dict(
-                all_azimuths_observed=True,observed_viewpoints=viewpoints),
+                task=SimpleNamespace(instruction='Find the exit')),
+            plan_revision=1,event=Mock())
+        state=dict(panoramic_observation=dict(all_azimuths_observed=True),
             task_selection=dict(current_subgoal_index=0),
             pose=dict(motion_epoch=0,place_id='P0',heading_deg=0,
                       position_xz_m_est=[0,0]))
         with patch('havln_agent.navigation_agent.navigation_context',
                    return_value=state):
-            agent=NavigationAgent(runtime)
+            NavigationAgent(runtime).decide()
+        for tool in ('turn_and_observe','inspect_geometry','verify_subgoal'):
             with self.assertRaises(APIError):
-                agent.decide()
-            # The VLM review exists, but a bad NavigationAgent tool may not
-            # mark the model-owned direction commitment as executed.
-            self.assertEqual(runtime.event.call_count,1)
-            client.response=dict(tool='navigate_relative',
-                                 args=dict(turn_deg=30,distance_m=.25))
-            agent.decide()
-            self.assertEqual(runtime.event.call_count,2)
-            visual.panorama_direction_evidence.assert_called_once()
+                client.kwargs['validate'](dict(tool=tool,args={}))
 
     def test_orientation_only_goal_offers_observation_verification(self):
         client=CapturingClient(dict(tool='observe_for_goal',args=dict(
