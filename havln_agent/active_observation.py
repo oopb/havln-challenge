@@ -502,6 +502,13 @@ class ObservationController:
             summary=(last_visual.get('observation_summary') or
                 last_visual.get('verification_evidence') or
                 last_visual.get('evidence') or '')
+            if (mode=='VERIFY' and
+                    reason!='vlm_semantic_subgoal_observation'):
+                # A provisional VLM arrival statement is not completion,
+                # even if a later sensor action failed or the scan budget ended.
+                summary=('The verification did not reach a final judgement; '
+                    'previous VLM claims are provisional and the current '
+                    'subgoal remains unconfirmed.')
             default_suggestion=(
                 'Current subgoal is confirmed; inspect the next ordered task '
                 'for a grounded route before moving.'

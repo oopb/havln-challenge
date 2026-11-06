@@ -106,6 +106,22 @@ class Batch418VerificationFeedbackTests(unittest.TestCase):
         self.assertEqual(vp.complete.call_args.kwargs['result_schema']
                          ['properties']['verification_evidence']['maxLength'],1800)
 
+    def test_provisional_completion_never_leaks_as_confirmed_narrative(self):
+        r=FakeRuntime([],fail_on=1)
+        r.visual_perception=VLMGuide([verify(
+            status='CONFIRMED',action='turn_left',turn=15,
+            observation_summary='Robot definitely arrived at the landing',
+            navigation_suggestion='Proceed to the next subgoal',
+            recommended_next='PROCEED_NEXT_TASK')])
+        result=ObservationController(r).scan_vlm(
+            'Confirm arrival',['landing'],90,mode='VERIFY')
+        self.assertEqual(result['outcome'],'INTERRUPTED')
+        self.assertEqual(result['verification']['status'],'UNCERTAIN')
+        self.assertFalse(result['verification']['final_verdict'])
+        self.assertNotIn('definitely arrived',
+                         result['navigation_feedback']['observation_summary'])
+        self.assertEqual(result['navigation_feedback']['recommended_next'],'UNKNOWN')
+
     def test_failed_verify_at_unchanged_stance_uses_short_error_cooldown(self):
         from havln_agent.api_client import APIError
         r=FakeRuntime([])
