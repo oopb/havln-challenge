@@ -40,6 +40,54 @@ def comparable_scan_pose(a, b):
     return abs(delta)<math.radians(1) and abs(a.get('pitch_deg',0)-b.get('pitch_deg',0))<1
 
 
+def recent_authentic_motion_frames(runtime, current_id, limit=3):
+    """Select a few real motion-relevant RGB-D views from earlier tasks.
+
+    Old frames are historical geometry and cannot authorize current MOVE.
+    All missing/evicted frames are skipped; never invent images.
+    """
+    frame_reader=getattr(runtime,'_vision_frame',None)
+    route_reader=getattr(runtime.memory,'route_progress_summary',None)
+    if not callable(frame_reader) or not callable(route_reader):
+        return []
+    progress=route_reader()
+    subgoal=runtime.memory.task.current_subgoal_index
+    segments=[v for v in progress.get('successful_segments',[])
+        if v.get('subgoal')==subgoal]
+    blocks=[v for v in progress.get('blocked_at_prior_stances',[])
+        if v.get('subgoal') in (None,'sg_%d'%subgoal)]
+    ids=[]
+    if segments:
+        ids.extend([segments[-1].get('start_observation_id'),
+                    segments[-1].get('end_observation_id')])
+    if blocks:
+        ids.append(blocks[-1].get('source_observation_id'))
+    frames=[]
+    seen=set()
+    for observation_id in ids:
+        if not observation_id or observation_id==current_id or observation_id in seen:
+            continue
+        seen.add(observation_id)
+        try:
+            observation,source=frame_reader(observation_id)
+        except (ValueError,KeyError,OSError,RuntimeError):
+            continue
+        if (source.get('observation_id')!=observation_id or
+                getattr(observation,'rgb',None) is None or
+                getattr(observation,'depth',None) is None):
+            continue
+        pose=source.get('pose') or {}
+        frames.append((observation,dict(
+            observation_id=observation_id,
+            heading_deg=round(math.degrees(pose.get('heading',0)),2),
+            pitch_deg=round(pose.get('pitch_deg',0),2),
+            motion_epoch=pose.get('motion_epoch'),
+            historical_only=True)))
+        if len(frames)>=limit:
+            break
+    return frames
+
+
 class ObservationController:
     """Synchronously scan in one direction; each VLM checkpoint is optional."""
 
@@ -352,42 +400,8 @@ class ObservationController:
         approach_candidates=[]
         blocked_approaches=[]
         session=[]  # Full RGB-D and assistant replies for one observation task.
-        # A new task may need genuine before/after motion frames from a PREVIOUS
-        # observation. Only select source IDs backed by recorded RGB-D frames,
-        # never synthetic "images" or geometry-based motion clearance.
-        historical_frames=[]
-        recalled_ids=set()
-        frame_reader=getattr(r,'_vision_frame',None)
-        route_reader=getattr(r.memory,'route_progress_summary',None)
-        if callable(frame_reader) and callable(route_reader):
-            progress=route_reader()
-            segments=[v for v in progress.get('successful_segments',[])
-                if v.get('subgoal')==r.memory.task.current_subgoal_index]
-            blocks=progress.get('blocked_at_prior_stances',[])
-            ordered=[]
-            if segments:
-                ordered.extend([segments[-1].get('start_observation_id'),
-                                segments[-1].get('end_observation_id')])
-            if blocks:
-                ordered.append(blocks[-1].get('source_observation_id'))
-            for observation_id in ordered:
-                if (not observation_id or observation_id in recalled_ids
-                        or observation_id==initial['observation_id']):
-                    continue
-                try:
-                    frame,src=frame_reader(observation_id)
-                except (ValueError,KeyError,OSError,RuntimeError):
-                    continue
-                if src.get('observation_id')!=observation_id:
-                    continue
-                pose=src.get('pose') or {}
-                historical_frames.append((frame,dict(
-                    observation_id=observation_id,
-                    heading_deg=round(math.degrees(pose.get('heading',0)),2),
-                    pitch_deg=round(pose.get('pitch_deg',0),2))))
-                recalled_ids.add(observation_id)
-                if len(historical_frames)>=3:
-                    break
+        historical_frames=recent_authentic_motion_frames(
+            r,initial['observation_id'])
         record['historical_context_observation_ids']=[
             info['observation_id'] for _,info in historical_frames]
         seen=set()
