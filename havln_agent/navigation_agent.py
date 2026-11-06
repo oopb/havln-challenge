@@ -3,7 +3,6 @@ from .contracts import navigation_schema, compact_navigation_protocol, navigatio
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
-from .panorama_memory import decide_with_panorama
 from jsonschema import Draft7Validator
 
 COMMON_PROMPT = (
@@ -72,6 +71,16 @@ BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
     'seen pitch levels or arbitrarily change relative headings. The model '
     'retains full planning authority; geometry is a VLM evidence input only. '
 )
+PANORAMA_REVIEW_PROMPT = (
+    'ONE-TIME COMPLETE-VIEW REVIEW: The robot has inspected directions around '
+    'its current stance. Compare earlier visual bearings, registered real '
+    'motion and blocked directions. Choose the most useful next action '
+    'from the entire available tool menu. A measured obstacle at one '
+    'bearing does not block other unmeasured bearings. Moving is an option, '
+    'NOT an obligation: you may VERIFY a subgoal, conduct a genuinely '
+    'different observation, choose a finite move, or revise the task. '
+    'Do not repeat the same unchanged scan or invent a collision-free route. '
+)
 MOVE_EXECUTION_RULES = (
     'MODE: MOVE is executed without a new LLM request by navigate_local. '
     'LocalMotionController uses post-action RGB-D odometry for each forward action, '
@@ -123,23 +132,19 @@ class NavigationAgent:
         vlm_observation_just_finished=(
             (context.get('last_tool') or {}).get('observation_owner')
             == 'visual_perception_vlm')
-        full_circle_commit=(
+        panorama_review=(
             bool(panorama.get('all_azimuths_observed')) and not orientation
             and not vlm_observation_just_finished
-            and getattr(self,'_panorama_committed_signature',None)!=signature
-            and 'navigate_relative' in runtime.registry)
-        # Keep the execution registry intact, but advertise only strategic
-        # tools relevant to this decision. VLM owns all camera search steps;
-        # specialized historical/pixel/geometry tools reappear on evidence.
-        offered_tools=navigation_tool_menu(
-            runtime.registry,context,orientation=bool(orientation),
-            full_circle_commit=full_circle_commit)
+            and getattr(self,'_panorama_committed_signature',None)!=signature)
+        # A completed panorama changes the ADVICE, never the tool whitelist.
+        offered_tools=navigation_tool_menu(runtime.registry,context,
+            orientation=bool(orientation))
 
         # A one-shot strategic checkpoint must not be repeated every turn
         # while the physical stance is unchanged. A later new subgoal/stance
         # can legitimately receive a new checkpoint.
         first_checkpoint=(
-            not full_circle_commit
+            not panorama_review
             and advisory in ('DIRECTIONAL_ACTION_DECISION_REQUIRED',
                              'BLOCKED_ACTIONABILITY_REASSESSMENT')
             and getattr(self,'_intervention_signature',None)!=signature)
@@ -151,47 +156,29 @@ class NavigationAgent:
             else '')
         if advisory and not first_checkpoint:
             stagnation['intervention_delivery']='previously_issued_or_pending_route'
-        if full_circle_commit:
-            result,visual,reviewed_views=decide_with_panorama(
-                self,context,signature,validate,offered_tools)
-        else:
-            result=runtime.client.complete(
-                'navigation_agent', 'navigation_decision',
-                COMMON_PROMPT + OBSERVE_PROMPT + advisory_prompt,
-                compact_navigation_context(dict(
-                    context,instruction=getattr(
-                        getattr(runtime.memory,'task',None),'instruction',
-                        context.get('instruction')))),
-                navigation_schema(offered_tools), validate=validate,
-                format_retry=int(bool(format_feedback)), retry_safe=True,
-                protocol=compact_navigation_protocol(offered_tools),
-                validation_schema=navigation_envelope(offered_tools))
+        result=runtime.client.complete(
+            'navigation_agent', 'navigation_decision',
+            COMMON_PROMPT + OBSERVE_PROMPT +
+            (PANORAMA_REVIEW_PROMPT if panorama_review else advisory_prompt),
+            compact_navigation_context(dict(
+                context,instruction=getattr(
+                    getattr(runtime.memory,'task',None),'instruction',
+                    context.get('instruction')))),
+            navigation_schema(offered_tools), validate=validate,
+            format_retry=int(bool(format_feedback)), retry_safe=True,
+            protocol=compact_navigation_protocol(offered_tools),
+            validation_schema=navigation_envelope(offered_tools))
         # Always discard any model-authored side-channel memory before tool
         # dispatch. VLM and executor persist grounded facts independently.
         # Invalid tool/args remain fatal through the strict model validator.
         result={'tool':result['tool'],'args':result['args']}
-        if full_circle_commit:
-            # Compact/no-native-schema providers may ignore enumerated tools.
-            # Reject rather than execute an arbitrary TURN or spend another
-            # 200 decisions on an identical invalid tool call. scheduler.request
-            # can issue one structured-field correction with fresh context.
-            if not Draft7Validator(navigation_schema(offered_tools)).is_valid(result):
-                raise APIError(
-                    'full_circle_requires_schema_valid_navigate_relative_turn_deg_and_distance_m',
-                    category='structured_field')
+        if panorama_review:
             self._panorama_committed_signature=signature
             if hasattr(runtime,'event'):
-                runtime.event('panorama_direction_committed',
-                    source='navigation_agent',
-                    selected_tool='navigate_relative',
-                    selected_turn_deg=result['args']['turn_deg'],
-                    selected_distance_m=result['args']['distance_m'],
-                    visual_selected_observation_id=visual['selected_observation_id'],
-                    reviewed_frame_ids=[v['observation_id'] for v in reviewed_views],
-                    observed_yaw_bins=panorama.get('covered_yaw_bins'),
-                    physically_forced=False,
-                    live_safety_revalidation_required=False,
-                    geometry_autorun=False)
+                runtime.event('panorama_review_prompt_issued',
+                    source='navigation_agent',physically_forced=False,
+                    offered_tools=list(offered_tools),
+                    selected_tool=result['tool'])
         if first_checkpoint:
             self._intervention_signature=signature
             if hasattr(runtime,'event'):
