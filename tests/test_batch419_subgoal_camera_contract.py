@@ -202,6 +202,31 @@ class TestBatch419SubgoalCameraContract(unittest.TestCase):
                          ['properties']['next_action']['enum'])
         self.assertEqual(result['verification_status'],'CONFIRMED')
 
+    def test_episode_event_counters_follow_runtime_trace_not_memory_event_list(self):
+        runtime=object.__new__(AgentRuntime)
+        runtime.owner=threading.get_ident()
+        runtime.memory=SimpleNamespace(episode_id='x',actions=[],current=None,
+                                       events=[])
+        runtime.plan_revision=2
+        runtime.event_seq=0
+        runtime.phase='NAVIGATING'
+        runtime.event_callback=Mock()
+        runtime.runtime_event_counts={}
+        runtime.event('pre_forward_obstacle_reported',
+                      atomic_move_not_executed=True)
+        runtime.event('pre_forward_obstacle_reported',
+                      atomic_move_not_executed=True)
+        runtime.event('pre_forward_obstacle_reported',
+                      atomic_move_not_executed=False)
+        for _ in range(3):
+            runtime.event('forward_side_depth_ambiguity')
+        self.assertEqual(runtime.runtime_event_counts[
+            'atomic_forward_confirmed_depth_block'],2)
+        self.assertEqual(runtime.runtime_event_counts[
+            'forward_side_depth_ambiguity'],3)
+        self.assertEqual(len(runtime.memory.events),0)
+        self.assertEqual(runtime.event_callback.call_count,6)
+
     def test_new_subgoal_progress_is_not_left_as_completed(self):
         mem=MemoryRecords(SimpleNamespace(turn_angle=15))
         mem.task.subgoals=goals()
