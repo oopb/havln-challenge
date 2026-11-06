@@ -311,7 +311,7 @@ class EvidenceContractTests(unittest.TestCase):
         r.memory.task.subgoal_generations={'0':1}
         old=dict(mode='vlm_led',intent='VERIFY',subgoal=0,
             subgoal_generation=0,objective='Verify landing',
-            target_types=['landing'],outcome='SUBGOAL_CONFIRMED',
+            target_types=['landing'],outcome='SUBGOAL_NOT_YET',
             start_pose=r.pose(),start_rgb_hash=None,start_depth_hash=None)
         r.memory.observation_searches.append(old)
         reply=dict(verification_status='NOT_YET',
