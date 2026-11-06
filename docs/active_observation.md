@@ -2,10 +2,13 @@
 
 ## Responsibility split
 
-**NavigationAgent** is the strategic decision-maker: choose the current
-language goal, decide whether new visual evidence is needed, specify the
-observation objective and open-vocabulary targets, then decide if/where/how
-far to navigate or whether to request an explicit geometry inspection.
+**NavigationAgent** is the strategic decision-maker AND receives the
+current, source-validated RGB image at each real inference request. It owns
+the active milestone, interprets visual candidates alongside measured
+motion contradictions, and selects physical movement or targeted observation.
+It cannot certify free space or task completion from RGB alone. Historical
+completion reviews are a separate explicit VLM tool, not the ordinary VERIFY
+path, and no independent geometry tool is re-exposed to NavigationAgent.
 
 **VisualPerception (VLM)** owns the **whole camera observation subtask**.
 At each checkpoint it receives the current genuine RGB image AND a calibrated

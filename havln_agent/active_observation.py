@@ -370,9 +370,32 @@ class ObservationController:
                         (mode!='VERIFY' or
                          now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
-                    or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
-                    or prev.get('start_depth_hash')!=initial.get('depth_hash')
-                    or not comparable_scan_pose(prev.get('start_pose'),start)):
+                    or prev.get('subgoal_generation',0)!=getattr(r.memory.task,'subgoal_generations',{}).get(
+                        str(r.memory.task.current_subgoal_index),0)
+                    or not (
+                        # Exact same RGB-D and calibrated pose, OR an unchanged
+                        # previously inspected viewpoint after an explicit
+                        # NOT_YET that has had no newer motion/surface proof.
+                        (prev.get('start_rgb_hash')==initial.get('rgb_hash')
+                         and prev.get('start_depth_hash')==initial.get('depth_hash')
+                         and comparable_scan_pose(prev.get('start_pose'),start))
+                        or (mode=='VERIFY' and
+                            prev.get('outcome')=='SUBGOAL_NOT_YET' and
+                            (prev.get('verification') or {}).get('final_verdict')
+                            and not initial.get('new_visual_information',True)
+                            and prev.get('verification_forward_step')==next((
+                                a['step'] for a in reversed(
+                                    getattr(r.memory,'actions',()))
+                                if a.get('action')=='MOVE_FORWARD'),None)
+                            and prev.get('surface_evidence_count',0)==len(
+                                getattr(getattr(r.memory,'evidence',None),
+                                        'surface_measurements',()))
+                            and prev.get('start_pose',{}).get('motion_epoch')==
+                                start.get('motion_epoch')
+                            and math.hypot(
+                                prev.get('start_pose',{}).get('x',1e9)-start.get('x',0),
+                                prev.get('start_pose',{}).get('z',1e9)-start.get('z',0))
+                                <=0.08))):
                 continue
             current_heading=math.degrees(start['heading'])
             def rebound(hypothesis):
@@ -396,6 +419,8 @@ class ObservationController:
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',intent=mode,objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
+            subgoal_generation=getattr(r.memory.task,'subgoal_generations',{}).get(
+                str(r.memory.task.current_subgoal_index),0),
             start_observation_id=initial['observation_id'],start_pose=dict(start),
             start_rgb_hash=initial.get('rgb_hash'),start_depth_hash=initial.get('depth_hash'),
             started_monotonic=now,direction='vlm_selected',look=look,
@@ -423,6 +448,7 @@ class ObservationController:
         max_candidate_refinement_views=3
         rejected_views=[]
         pending_view_correction=None
+        measured_surface_regions=set()
         consecutive_replans=0
         max_replans=2
         # A VLM decision always refers to ONE real current-frame observation.
@@ -536,6 +562,18 @@ class ObservationController:
                 measured_motion_is_distinct_from_visual_hypothesis=True,
                 advice_only_not_motion_authorization=True,
                 evidence_scope='real_RGBD_and_measurement_plus_VLM_hypothesis')
+            if verification:
+                latest_forward=next((a['step'] for a in reversed(
+                    getattr(r.memory,'actions',()))
+                    if a.get('action')=='MOVE_FORWARD'),None)
+                ledger=getattr(r.memory,'evidence',None)
+                record['verification_forward_step']=latest_forward
+                record['surface_evidence_count']=len(
+                    getattr(ledger,'surface_measurements',()))
+                if ledger is not None:
+                    ledger.note_verification(
+                        verification,latest_forward,
+                        generation=record['subgoal_generation'])
             record.update(verification=copy.deepcopy(verification),
                 navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
@@ -551,14 +589,27 @@ class ObservationController:
                 blocked_approaches=copy.deepcopy(blocked_approaches),
                 rejected_view_requests=copy.deepcopy(rejected_views))
             store=getattr(r.memory,'note_active_observation_target',None)
-            # Persist the selected APPROACH with its progress classification,
-            # not an older visually salient but currently blocked landmark.
-            hypothesis=(best_approach if best_approach and
-                best_approach.get('target_kind') in ('ENTRY','APPROACH','TARGET','CUE')
-                else best_candidate or best_cue)
-            if hypothesis and callable(store):
-                store(hypothesis,objective,target_types,
-                    goal=getattr(r,'active_subgoal',None))
+            # Persist ALL actionable hypotheses and attach stable IDs before
+            # delivering them. NavigationAgent can explicitly select one ID
+            # and later compare the prediction with measured motion.
+            proposed=approach_candidates[:] if approach_candidates else []
+            if not proposed and (best_candidate or best_cue):
+                proposed=[best_candidate or best_cue]
+            if callable(store):
+                for proposal in proposed:
+                    saved=store(proposal,objective,target_types,
+                        goal=getattr(r,'active_subgoal',None))
+                    if saved:
+                        proposal['candidate_id']=saved['id']
+                        for selected in (best_approach,best_candidate,best_cue):
+                            if (selected and
+                                    selected.get('observation_id')==proposal.get('observation_id')
+                                    and selected.get('heading_deg')==proposal.get('heading_deg')):
+                                selected['candidate_id']=saved['id']
+                # record/update fields must include IDs, not stale copies.
+                record['best_approach']=copy.deepcopy(best_approach)
+                record['approach_candidates']=copy.deepcopy(approach_candidates)
+                record['candidate']=copy.deepcopy(best_candidate)
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),
@@ -633,6 +684,22 @@ class ObservationController:
                 options['observed_yaw_pitch']=[
                     dict(heading_deg=p['heading_deg'],pitch_deg=p['pitch_deg'])
                     for p in record['checkpoints'][-12:]]
+                # Count real VLM checkpoints by pitch, not intermediate TURN.
+                by_pitch={}
+                for past in record['checkpoints']:
+                    pitch_key=str(round(past['pitch_deg'],1))
+                    by_pitch.setdefault(pitch_key,set()).add(
+                        round(past['heading_deg']/r.camera.turn_angle))
+                steps=range(-int(60//r.camera.tilt_angle),
+                            int(60//r.camera.tilt_angle)+1)
+                available_pitch=[
+                    round(i*r.camera.tilt_angle,2) for i in steps]
+                options['view_coverage']=dict(
+                    current_pitch_deg=r.pitch_deg,
+                    by_pitch={k:len(v) for k,v in by_pitch.items()},
+                    uninspected_pitch_levels=[x for x in available_pitch
+                        if str(round(x,1)) not in by_pitch],
+                    purpose='information_gain_not_mandatory_camera_motion')
                 geometry_facts={}
                 try:
                     geom=r.geometry()
@@ -718,6 +785,32 @@ class ObservationController:
                     # never silently erased because it lacks an exact label.
                     best_cue=candidate
             action=visual['next_action']
+            # VLM selects the visible region; calibrated Depth measures it.
+            # The same-frame second call lets VLM use that fact itself.
+            surface_box=visual.get('candidate_surface_box')
+            surface_key=(source['observation_id'],
+                tuple(surface_box) if surface_box is not None else None)
+            if (mode=='VERIFY' and surface_box is not None and
+                    surface_key not in measured_surface_regions):
+                from .surface_measurement import measure_surface_region
+                measured_surface_regions.add(surface_key)
+                try:
+                    measured=measure_surface_region(
+                        r.geometry(),surface_box,source['observation_id'])
+                except (ValueError,TypeError,AttributeError):
+                    measured=dict(status='INSUFFICIENT_DEPTH',
+                        observation_id=source['observation_id'],
+                        reason='surface_measurement_unavailable',
+                        measured_completion=False)
+                ledger=getattr(r.memory,'evidence',None)
+                if ledger is not None:
+                    ledger.note_surface(measured)
+                record.setdefault('surface_evidence',[]).append(measured)
+                pending_view_correction=dict(
+                    reason='requested_surface_depth_measurement',
+                    surface_evidence=measured,
+                    required_next='reassess_current_milestone_using_RGBD_and_height_then_finish_or_inspect_specific_missing_view')
+                continue
             # A semantic verdict is FINAL only when the VLM itself chooses
             # finish; a tentative CONFIRMED with a requested look/turn must
             # obtain that fresh RGB-D checkpoint first.

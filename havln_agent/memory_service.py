@@ -117,9 +117,13 @@ class MemoryService(MemoryRecords):
             else dict(objective=objective,target_types=list(target_types)))
         for existing in reversed(self.visual_targets):
             if (existing.get('subgoal_index')==self.task.current_subgoal_index
+                    and existing.get('subgoal_generation',0)==self.task.subgoal_generations.get(
+                        str(self.task.current_subgoal_index),0)
                     and existing.get('selected_observation_id')==identifier
                     and existing.get('target_type')==candidate.get('target_type')
                     and existing.get('target_kind')==kind):
+                existing['expected_progress']=candidate.get(
+                    'expected_progress',existing.get('expected_progress','UNKNOWN'))
                 return existing
         pose=self.runtime.motion_controller.pose()
         absolute=round(float(candidate.get('heading_deg',
@@ -129,6 +133,8 @@ class MemoryService(MemoryRecords):
             id='visual_target_%04d'%len(self.visual_targets),
             visual_source='vlm_active_observation',
             subgoal_index=self.task.current_subgoal_index,
+            subgoal_generation=self.task.subgoal_generations.get(
+                str(self.task.current_subgoal_index),0),
             place_id=selected['place_id'],
             motion_epoch=pose.get('motion_epoch',0),
             viewpoint_generation=pose.get('viewpoint_generation',0),
@@ -153,6 +159,27 @@ class MemoryService(MemoryRecords):
         self.event('active_visual_target_recorded',
                    target_id=record['id'],observation_id=identifier,
                    target_kind=kind,status=status)
+        return record
+
+    def record_candidate_motion(self, candidate_id, action):
+        """Compare an explicitly selected hypothesis with a real RGB-D step."""
+        if not candidate_id:
+            return None
+        candidate=next((v for v in self.visual_targets if v['id']==candidate_id
+            and v['subgoal_index']==action.get('subgoal')
+            and v.get('subgoal_generation',0)==self.task.subgoal_generations.get(
+                str(action.get('subgoal')),0)),None)
+        if candidate is None:
+            self.event('motion_candidate_id_not_resolved',
+                candidate_id=candidate_id,step=action.get('step'))
+            return None
+        policy=getattr(self.runtime,'semantic_motion_policy',
+                       getattr(self.runtime,'motion_policy','LEVEL_ONLY'))
+        expected={'DESCEND_STAIRS':'DOWN','ASCEND_STAIRS':'UP',
+                  'LEVEL_ONLY':'LEVEL'}.get(policy,'UNKNOWN')
+        record=self.evidence.motion_outcome(candidate,action,expected)
+        if record:
+            self.event('candidate_prediction_compared_with_real_motion',**record)
         return record
 
     def note_panorama_target(self, visual, views, goal=None):

@@ -66,11 +66,15 @@ def registry(camera, max_actions, pitch_deg=0.):
             dict(object_schema(dict(target=text, purpose=dict(enum=['approach_landmark', 'explore']))), required=[])),
         'navigate_relative': ('Model-directed finite movement: 0.25m is ONE atomic forward, not the maximum segment (distance_m=0.25..3.0). Execute all required TURN and MOVE_FORWARD actions continuously, except when fresh Depth confirms coherent near-field central occupancy before an atomic forward step; then pause and return measured blocker evidence; Observation Agent handles RGB-D obstacle interpretation in OBSTACLE_REVIEW. UNKNOWN and side-only readings are not automatic vetoes. No per-call atomic step cap.',
             object_schema(dict(turn_deg=dict(type='number',minimum=-180,maximum=180),
-                distance_m=dict(type='number',minimum=0.25,maximum=3.0)))),
+                distance_m=dict(type='number',minimum=0.25,maximum=3.0),
+                candidate_id=dict(type='string',minLength=1,maxLength=64)),
+                required=['turn_deg','distance_m'])),
         'navigate_to_pixel': ('Model-directed finite travel along a live RGB-D pixel bearing; a pixel is not a walkability certificate. Continuous TURN then MOVE_FORWARD until selected distance, pose/odometry interruption, or total Episode budget. No per-call atomic step cap.',
             object_schema(dict(u=dict(type='number',minimum=0,maximum=1),
                 v=dict(type='number',minimum=0,maximum=1),
-                distance_m=dict(type='number',minimum=0.25,maximum=3.0)))),
+                distance_m=dict(type='number',minimum=0.25,maximum=3.0),
+                candidate_id=dict(type='string',minLength=1,maxLength=64)),
+                required=['u','v','distance_m'])),
         'navigate_local': ('Execute/resume a model-selected finite waypoint until arrival, pose/odometry interruption or total Episode budget; no implicit geometry check during MOVE. No per-call atomic step cap.',
             object_schema(dict(waypoint_id=text))),
         'cancel_local_navigation': ('Cancel a pending local waypoint without changing the semantic task.', object_schema(dict(reason=text))),
@@ -87,12 +91,22 @@ def registry(camera, max_actions, pitch_deg=0.):
         'select_subgoal': ('Legacy provisional navigation selection; not exposed to NavigationAgent. Completed milestones advance only after Observation Agent VERIFY.',
             object_schema(dict(subgoal_index=dict(type='integer',minimum=0),
                 reason=text,observation_ids=ids))),
+        'review_completed_subgoal': ('Review a previously CONFIRMED milestone '
+            'only when newer real RGB-D or motion evidence credibly conflicts '
+            'with its original source-backed confirmation. Observation Agent '
+            'compares the original and current RGB-D, decides UPHOLD, REOPEN or '
+            'UNCERTAIN; only explicit REOPEN updates task state, preserving all '
+            'executed-action history. Do not re-VERIFY prior sg via current VERIFY.',
+            object_schema(dict(subgoal_id=text,
+                reason=dict(TEXT,minLength=8,maxLength=600),
+                evidence_observation_ids=ids),
+                required=['subgoal_id','reason'])),
         'request_task_review': ('Request a semantic review for a specific task change or major new evidence.', object_schema(dict(reason=text))),
         'request_finish': ('Propose verified completion, or explicitly abort. Runtime owns STOP and completion checks.',
             object_schema(dict(outcome=dict(enum=['success','aborted']), evidence=text))),
     }
     return {name:dict(description=description, parameters=parameters,
-        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal') else
+        permission='NAVIGATION' if name in ('turn_and_observe','navigate_local','navigate_relative','navigate_to_pixel','observe_for_goal','review_completed_subgoal') else
                    'TERMINAL' if name=='request_finish' else 'READ_ONLY')
         for name,(description,parameters) in specs.items()}
 

@@ -36,6 +36,34 @@ SEARCH_SCHEMA = object_schema(dict(
     suggested_next_view=dict(enum=['continue','look_up','look_down'])))
 
 
+COMPLETION_REVIEW_SCHEMA=object_schema(dict(
+    verdict=dict(enum=['UPHOLD','REOPEN','UNCERTAIN']),
+    rationale=dict(type='string',minLength=8,maxLength=1600),
+    uncertainty=dict(type='string',maxLength=600),
+    evidence_observation_ids=dict(type='array',minItems=2,maxItems=5,
+        uniqueItems=True,items=dict(type='string',minLength=1,maxLength=64)),
+    missing_evidence=dict(type='string',maxLength=600)))
+# Low-cost vision models may omit supplemental prose. Source-backed decision
+# and citations remain mandatory; uncertainty details are optional.
+COMPLETION_REVIEW_SCHEMA['required']=[
+    'verdict','rationale','evidence_observation_ids']
+COMPLETION_REVIEW_PROMPT=(
+    'You are Observation Agent reviewing one PREVIOUSLY CONFIRMED milestone. '
+    'A confirmed prior milestone may have been wrong. Compare the genuine '
+    'confirmation RGB-D and newer RGB-D, calibrated local surface evidence, '
+    'real executed motion and original completion_description. '
+    'Return UPHOLD only if original completion remains supported; REOPEN only '
+    'if newer evidence credibly contradicts physical completion; UNCERTAIN '
+    'if old/new perspectives cannot distinguish whether the robot reached it. '
+    'Seeing a staircase again is NOT by itself proof that a descent was '
+    'unfinished. Equally, merely seeing a distant floor is NOT proof arrival. '
+    'Depth-derived heights are local estimates with unknown surface identity '
+    'and cannot alone prove success. State concrete support and contradiction. '
+    'Cite BOTH original and newer real observation IDs. No motion, navigation '
+    'permission or task-state change is performed by this visual decision.'
+)
+
+
 # The VLM owns the camera-level search policy. Its outputs are visual
 # hypotheses plus the next real TURN/LOOK request, never a navigation MOVE.
 SCAN_GUIDANCE_SCHEMA = object_schema(dict(
@@ -44,7 +72,7 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     confidence=dict(enum=['low','medium','high']),
     box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
-    evidence=dict(type='string',maxLength=400),
+    evidence=dict(type='string',maxLength=1200),
     uncertainty=dict(type='string',maxLength=300),
     target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
     candidate_approach=dict(type='boolean'),
@@ -67,7 +95,11 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     reason=dict(type='string',maxLength=250),
     missing_evidence=dict(type='string',maxLength=350),
     evidence_observation_ids=dict(type='array',maxItems=8,uniqueItems=True,
-                                  items=dict(type='string',minLength=1,maxLength=64))))
+                                  items=dict(type='string',minLength=1,maxLength=64)),
+    candidate_surface_box=dict(anyOf=[
+        dict(type='array',minItems=4,maxItems=4,
+            items=dict(type='number',minimum=0,maximum=1)),
+        dict(type='null')])))
 # Optional model-authored advice is never permission to MOVE or change subgoals.
 _ADVICE_FIELDS=dict(
     observation_summary=dict(type='string',maxLength=750),
@@ -79,6 +111,7 @@ for _schema in (SCAN_GUIDANCE_SCHEMA,VERIFY_GUIDANCE_SCHEMA):
 
 VERIFY_GUIDANCE_SCHEMA['required'].remove('missing_evidence')
 VERIFY_GUIDANCE_SCHEMA['required'].remove('evidence_observation_ids')
+VERIFY_GUIDANCE_SCHEMA['required'].remove('candidate_surface_box')
 
 VERIFY_GUIDANCE_PROMPT = (
     'You are Observation Agent confirming one semantic navigation subgoal. '
@@ -113,6 +146,14 @@ VERIFY_GUIDANCE_PROMPT = (
     'recommended_next. PROCEED_NEXT_TASK is appropriate only after '
     'CONFIRMED; a historically successful bearing is not current '
     'collision clearance, especially after a measured obstacle. '
+    'If a visible floor/landing surface matters to completion, optionally '
+    'return its candidate_surface_box normalized xyxy, representing the '
+    'VISIBLE patch, not an asserted current support surface. A follow-up '
+    'same-frame response may include a depth-based height estimate '
+    'in view_correction.surface_evidence; compare measured height to the '
+    'robot LOCAL origin, but do not assume identity, reachability or '
+    'arrival from a low distant surface. If that estimate contradicts '
+    'your earlier judgment, reconsider the verdict explicitly. '
     'The geometry report is a measurement, not the sole completion verdict. '
     'Use finish when evidence suffices; turn angle must be 15-90 degrees and '
     'look/finish angle must be zero. Return one schema-valid JSON object.')
@@ -130,6 +171,11 @@ SCAN_GUIDANCE_PROMPT = (
     'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
+    'When yaw scanning at a steep downward pitch has produced similar '
+    'close-up views, consult view_coverage.by_pitch and consider a '
+    'legal look_up to inspect distant layout or finish with uncertainty '
+    'instead of re-scanning the same pitch. Do not force a pitch change '
+    'when an immediate near-field obstacle must be inspected. '
     'Depth is a perspective measurement, not proof a visible floor is '
     'reachable through a railing, glass or a person. '
     'The robot stays stationary: you may request turn_left, turn_right, '
@@ -406,11 +452,50 @@ class VisualPerception:
             normalize=lambda value: normalize_coordinates(value, SEARCH_SCHEMA),
             result_schema=SEARCH_SCHEMA)
 
+    def review_completion(self, goal, original, frames, motion_history,
+                          surface_evidence=None):
+        """Compare actual saved RGB-D and current RGB-D for past milestone."""
+        if len(frames)<2:
+            raise APIError('completion_review_requires_two_real_views',
+                           category='structured_field')
+        identifiers=[source['observation_id'] for _,source in frames]
+        if len(identifiers)!=len(set(identifiers)):
+            raise APIError('completion_review_duplicate_observations',
+                           category='structured_field')
+        images=[]
+        for observation,_source in frames:
+            images.append(image_url(observation,max_edge=640))
+            images.append(depth_image_url(observation,self.runtime.camera,
+                max_edge=640,display_max_m=5.0))
+        request=dict(mode='review_completed_subgoal',
+            original_goal=goal,
+            original_confirmation=original,
+            actual_motion_history=motion_history,
+            surface_evidence=surface_evidence or [],
+            image_order=[dict(observation_id=src['observation_id'],
+                heading_deg=round(math.degrees(src['pose']['heading'])%360,2),
+                pitch_deg=src['pose'].get('pitch_deg'),
+                rgb_image_index=2*i,depth_image_index=2*i+1,
+                scope='current' if i==len(frames)-1 else 'historical')
+                for i,(_obs,src) in enumerate(frames)],
+            height_reference='robot_local_not_global_ground_truth')
+        def validate(value):
+            cited=set(value['evidence_observation_ids'])
+            if not cited.issubset(identifiers) or identifiers[0] not in cited or (
+                    identifiers[-1] not in cited):
+                raise APIError('completion_review_requires_original_and_newer_image_citations',
+                               category='structured_field')
+        return self.complete('visual_perception','review_completed_subgoal',
+            COMPLETION_REVIEW_PROMPT,request,COMPLETION_REVIEW_SCHEMA,
+            image_url=images,cache=False,validate=validate,
+            result_schema=COMPLETION_REVIEW_SCHEMA)
+
     def guide_scan_view(self, observation, source, objective, target_types,
                         view_history, remaining_turn_deg, prior_targets=None,
                         observed_yaw_pitch=None, view_correction=None,
                         session=None, mode='APPROACH', route_history=None,
-                        geometry_evidence=None, historical_frames=None):
+                        geometry_evidence=None, historical_frames=None,
+                        view_coverage=None):
         """Real current RGB-D, measured facts, full session and relevant past views."""
         from .vision_protocol import coordinate_schema, coordinate_prompt
         from .vision_protocol import normalize_coordinates
@@ -487,6 +572,7 @@ class VisualPerception:
         else:
             request['route_history_reference']='initial_session_message'
         request['measured_geometry']=geometry_evidence or {}
+        request['view_coverage']=view_coverage or {}
         # Check same-frame presence BEFORE expensive RGB/Depth encoding.
         # A correction about unchanged obs_XXXX reuses full prior images.
         prior_current_ids,prior_historical_ids=session_frame_ids(session)
@@ -589,7 +675,8 @@ class VisualPerception:
                 evidence_observation_ids=result.get('evidence_observation_ids',[]),
                 observation_summary=result.get('observation_summary',''),
                 navigation_suggestion=result.get('navigation_suggestion',''),
-                recommended_next=result.get('recommended_next','UNKNOWN'))
+                recommended_next=result.get('recommended_next','UNKNOWN'),
+                candidate_surface_box=result.get('candidate_surface_box'))
         result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),

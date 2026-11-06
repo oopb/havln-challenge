@@ -251,6 +251,9 @@ class AgentRuntime(ToolExecutor):
                 valid = registered_action(action_record, {o['observation_id']:o for o in self.memory.observations})
                 action_record['evidence_state'] = 'motion_verified' if valid else 'sensor_recorded'
                 self.memory.note_motion()
+                chosen=(self.memory.active_attempt or {}).get('target',{}).get(
+                    'candidate_id')
+                self.memory.record_candidate_motion(chosen,action_record)
             self.event('atomic_action', source='environment_receipt', action=action, feedback=value['feedback'])
         return value
 
@@ -284,8 +287,14 @@ class AgentRuntime(ToolExecutor):
             return None
 
         source=self.source()
+        blocked_pose=self.motion_controller.pose()
+        blocked_at=self.memory.evidence.blocked_forward(
+            source,blocked_pose,reason='measured_centerline_obstacle',
+            center=center,
+            place_id=self.memory.current.get('place_id'))
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
+            blocked_at=blocked_at,
             reason='measured_centerline_obstacle')
         # A measured central obstacle stops the pending atomic step.
         # The NEXT Observation Agent OBSTACLE_REVIEW gets real RGB-D and
@@ -327,6 +336,7 @@ class AgentRuntime(ToolExecutor):
             atomic_move_not_executed=True,
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
+            blocked_at=blocked_at,
             safety=safety,obstacle_observation=combined,
             information_options=['observe_for_goal','navigate_relative'])
 
@@ -406,6 +416,64 @@ class AgentRuntime(ToolExecutor):
                             self.memory.task.subgoals):
                         self.set_semantic_goal()
         return result
+
+    def _review_completed_subgoal(self, subgoal_id, reason,
+                                  evidence_observation_ids=None):
+        """Explicit, auditable review of a previously completed milestone."""
+        if (not subgoal_id.startswith('sg_') or
+                not subgoal_id[3:].isdigit()):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_subgoal_id')
+        index=int(subgoal_id[3:])
+        task=self.memory.task
+        if index not in task.completed_subgoals or index>=task.current_subgoal_index:
+            return dict(status='INVALID_TARGET',
+                reason='review_requires_prior_completed_subgoal')
+        completion=next((v for v in reversed(task.completion_evidence)
+            if v['subgoal']==index and v.get('status','ACTIVE')=='ACTIVE'),None)
+        if not completion:
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='original_completion_receipt_missing')
+        original_id=completion['verification']['source_observation_id']
+        current_id=self.memory.current['observation_id']
+        if original_id==current_id:
+            return dict(status='NO_NEW_INFORMATION',
+                reason='no_newer_view_since_original_completion')
+        cited=list(dict.fromkeys([original_id]+list(
+            evidence_observation_ids or [])+[current_id]))
+        if len(cited)>3:
+            cited=[original_id]+[i for i in cited[1:-1]][-1:]+[current_id]
+        for prev in reversed(self.memory.evidence.completion_reviews):
+            if (prev.get('subgoal_index')==index
+                    and prev.get('current_observation_id')==current_id
+                    and set(prev.get('evidence_observation_ids',()))==set(cited)):
+                return dict(status='NO_NEW_INFORMATION',
+                    reason='identical_completion_review_already_recorded',
+                    prior_verdict=prev['verdict'])
+        try:
+            frames=[self._vision_frame(identifier) for identifier in cited]
+        except (KeyError,ValueError,OSError,RuntimeError):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='historical_RGBD_frame_not_available',
+                requested_observation_ids=cited)
+        if any(source.get('observation_id')!=identifier
+               or getattr(obs,'depth',None) is None for identifier,(obs,source)
+               in zip(cited,frames)):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='saved_RGBD_source_provenance_mismatch')
+        history=self.memory.route_progress_summary()
+        surface=[m for m in self.memory.evidence.surface_measurements
+            if m.get('observation_id') in cited][-3:]
+        verdict=self.visual_perception.review_completion(
+            task.subgoals[index],completion,frames,history,surface)
+        outcome=self.memory.apply_completion_review(
+            index,verdict['verdict'],verdict['rationale'],
+            verdict['evidence_observation_ids'],current_id)
+        outcome.update(vlm_review=verdict,review_target=subgoal_id,
+            requested_reason=reason)
+        if outcome.get('review_outcome')=='REOPENED':
+            self._cancel_local_navigation('prior_milestone_reopened')
+            self.set_semantic_goal()
+        return outcome
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
@@ -709,7 +777,8 @@ class AgentRuntime(ToolExecutor):
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
-    def _navigate_relative(self, turn_deg, distance_m, _source=None):
+    def _navigate_relative(self, turn_deg, distance_m, candidate_id=None,
+                           _source=None):
         """Direct model intent, without a preselected semantic candidate.
 
         The bearing is relative to the current heading, not a global pose or
@@ -745,6 +814,7 @@ class AgentRuntime(ToolExecutor):
             first_step='EXECUTABLE', execution_status='PROPOSED',
             objective=dict(purpose='model_directed_motion', completes_language_goal=False),
             direction_source='navigation_agent',
+            candidate_id=candidate_id,
             requires_post_turn_recheck=bool(actual_turn),
             geometric_status='NOT_YET_VALIDATED',
             endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
@@ -762,7 +832,7 @@ class AgentRuntime(ToolExecutor):
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='model_selected_atomic_actions_not_metric_arrival'))
 
-    def _navigate_to_pixel(self, u, v, distance_m):
+    def _navigate_to_pixel(self, u, v, distance_m, candidate_id=None):
         """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
         if not (math.isfinite(u) and math.isfinite(v) and
                 0 <= u <= 1 and 0 <= v <= 1):
@@ -790,6 +860,7 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
         pixel_source = self.source()
         result = self._navigate_relative(turn_deg,distance_m,
+                                         candidate_id=candidate_id,
                                          _source=pixel_source)
         return dict(result, pixel_target=dict(u=u,v=v,
             source_observation_id=pixel_source['observation_id'],

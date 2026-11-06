@@ -11,6 +11,10 @@ task_planner:
   max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
   max_tokens: 12000
   fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+# IMPORTANT: NAVIGATION_AGENT_MODEL and every configured fallback MUST
+# support image_url content in OpenAI-compatible Chat Completions. The agent
+# now attaches the current real RGB to every decision. Do not configure a
+# text-only navigation model: no implicit conversion to text is performed.
 navigation_agent:
   provider: openai_compatible
   base_url: ${NAVIGATION_AGENT_BASE_URL}

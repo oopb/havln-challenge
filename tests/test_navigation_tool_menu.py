@@ -18,18 +18,24 @@ def full_registry():
 
 
 class NavigationToolMenuTests(unittest.TestCase):
-    def test_full_executor_registry_kept_but_default_model_sees_six(self):
+    def test_full_registry_kept_and_review_requires_verified_milestone(self):
         tools=full_registry()
-        self.assertEqual(len(tools),20)
-        self.assertEqual(len(CORE_NAVIGATION_TOOLS),6)
+        self.assertEqual(len(tools),21)
+        self.assertEqual(len(CORE_NAVIGATION_TOOLS),7)
         offered=navigation_tool_menu(tools,{})
-        self.assertEqual(tuple(offered),CORE_NAVIGATION_TOOLS)
+        self.assertEqual(tuple(offered),
+            tuple(x for x in CORE_NAVIGATION_TOOLS
+                  if x!='review_completed_subgoal'))
+        self.assertNotIn('review_completed_subgoal',offered)
+        with_review=navigation_tool_menu(tools,dict(task_selection=dict(
+            verified_subgoals=[0],current_subgoal_index=1)))
+        self.assertIn('review_completed_subgoal',with_review)
         self.assertNotIn('analyze_scene',offered)
         self.assertNotIn('assess_entry',offered)
         self.assertNotIn('turn_and_observe',offered)
         self.assertNotIn('navigate_to_pixel',offered)
         self.assertEqual(len(navigation_schema(offered)['oneOf']),6)
-        self.assertEqual(len(navigation_schema(tools)['oneOf']),20)
+        self.assertEqual(len(navigation_schema(tools)['oneOf']),21)
         self.assertIn('analyze_scene',tools)
         self.assertIn('turn_and_observe',tools)
 
@@ -141,8 +147,9 @@ class NavigationToolMenuTests(unittest.TestCase):
         self.assertEqual(result['tool'],'observe_for_goal')
         args,kwargs=client.complete.call_args
         exposed=[branch['properties']['tool']['const'] for branch in args[4]['oneOf']]
-        self.assertEqual(exposed,list(CORE_NAVIGATION_TOOLS))
-        self.assertEqual(len(rt.registry),20)
+        self.assertEqual(exposed,[x for x in CORE_NAVIGATION_TOOLS
+                                      if x!='review_completed_subgoal'])
+        self.assertEqual(len(rt.registry),21)
         self.assertNotIn('turn_and_observe',kwargs['protocol'])
         self.assertNotIn('query_spatial_memory',kwargs['protocol'])
         with self.assertRaises(APIError):
