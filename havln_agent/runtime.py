@@ -273,31 +273,15 @@ class AgentRuntime(ToolExecutor):
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
             reason='measured_centerline_obstacle')
-        # Do not repeatedly pay for an identical RGB-D/pose VLM request.
-        # A changed viewpoint or live human frame produces a different key.
-        pose=source['pose']
-        key=(self.memory.episode_id,source['rgb_hash'],source['depth_hash'],
-             pose['heading'],pose.get('pitch_deg',self.pitch_deg),
-             pose.get('viewpoint_generation',0))
-        previous=getattr(self,'_last_obstacle_vision',None)
-        if previous and previous['key']==key:
-            visual=copy.deepcopy(previous['visual'])
-            reused=True
-        else:
-            reused=False
-            try:
-                visual=self.visual_perception.describe_obstacle(
-                    self.observation,source,center)
-                visual=dict(visual,status='OK',
-                    evidence_origin='current_RGB_VLM_hypothesis')
-            except (APIError,BudgetExceeded,ValueError,RuntimeError) as error:
-                # A vision outage must never erase measured obstacle evidence
-                # or convert a confirmed near-field obstacle into free space.
-                visual=dict(status='UNAVAILABLE',visible=False,
-                    description='',visual_relation='unknown',
-                    uncertainty='visual_description_unavailable',
-                    error_type=type(error).__name__)
-            self._last_obstacle_vision=dict(key=key,visual=copy.deepcopy(visual))
+        # A measured central obstacle stops the pending atomic step.
+        # The NEXT Observation Agent OBSTACLE_REVIEW gets real RGB-D and
+        # measured facts; never run a second, isolated obstacle VLM here.
+        # The prior successful route remains in receipt-derived Memory.
+        source=self.source()
+        visual=dict(status='DEFERRED_TO_OBSERVATION_AGENT',
+            description='',
+            uncertainty='use_OBSTACLE_REVIEW_with_live_RGBD_and_geometry')
+        reused=False
         depth=probe['depth']
         safety=dict(
             path_state=depth['path_state'],
@@ -322,7 +306,7 @@ class AgentRuntime(ToolExecutor):
             identity_is_visual_hypothesis_only=True,
             next_action_selected_by='navigation_agent')
         self.event('pre_forward_obstacle_reported',
-            source='live_depth_plus_visual_perception',
+            source='live_depth_for_observation_agent',
             depth_observation_id=source['observation_id'],
             central_support_pixels=center['central_support_pixels'],
             visual_status=visual['status'],visual_reused=reused,
@@ -330,8 +314,7 @@ class AgentRuntime(ToolExecutor):
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
             safety=safety,obstacle_observation=combined,
-            information_options=['navigate_relative','observe_for_goal',
-                'observe_for_goal'])
+            information_options=['observe_for_goal','navigate_relative'])
 
     def _observe_for_goal(self, objective, target_types, direction=None,
                           sweep_degrees=360, checkpoint_degrees=30,
