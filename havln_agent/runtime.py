@@ -331,20 +331,31 @@ class AgentRuntime(ToolExecutor):
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
             safety=safety,obstacle_observation=combined,
             information_options=['navigate_relative','observe_for_goal',
-                'inspect_geometry','get_waypoint_candidates'])
+                'observe_for_goal'])
 
     def _observe_for_goal(self, objective, target_types, direction=None,
                           sweep_degrees=360, checkpoint_degrees=30,
-                          look='none', force_recheck=False):
-        # The VLM owns the camera subtask unless the caller explicitly asks
-        # for the legacy fixed-direction calibrated scan.
-        if direction is None:
-            return self.observation_controller.scan_vlm(
-                objective,target_types,sweep_degrees=sweep_degrees,
-                look=look,force_recheck=force_recheck)
-        return self.observation_controller.scan(
-            objective,target_types,direction,sweep_degrees,
-            checkpoint_degrees,look,force_recheck=force_recheck)
+                          look='none', force_recheck=False, mode='APPROACH'):
+        """Delegate one search/approach/obstacle/VERIFY task to the SAME VLM."""
+        if direction is not None:
+            if mode!='APPROACH':
+                return dict(status='INVALID_ARGUMENTS',
+                    reason='verification_requires_vlm_owned_camera')
+            return self.observation_controller.scan(
+                objective,target_types,direction,sweep_degrees,
+                checkpoint_degrees,look,force_recheck=force_recheck)
+        result=self.observation_controller.scan_vlm(
+            objective,target_types,sweep_degrees=sweep_degrees,
+            look=look,force_recheck=force_recheck,mode=mode)
+        if mode=='VERIFY' and result.get('outcome')=='SUBGOAL_CONFIRMED':
+            confirmation=self.memory.confirm_subgoal_observation(
+                result.get('verification') or {},objective)
+            result['subgoal_transition']=confirmation
+            if confirmation['status']=='CONFIRMED':
+                self._cancel_local_navigation('vlm_observed_subgoal_completed')
+                if confirmation['next_subgoal']<len(self.memory.task.subgoals):
+                    self.set_semantic_goal()
+        return result
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)

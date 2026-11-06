@@ -380,9 +380,10 @@ class MemoryRecords:
         while (next_index<len(task.subgoals) and
                 next_index in task.completed_subgoals):
             next_index+=1
-        task.current_subgoal_index=next_index
-        task.subgoal_start_steps.setdefault(str(next_index),len(self.actions))
-        task.subgoal_started=task.subgoal_start_steps[str(next_index)]
+        if next_index<len(task.subgoals):
+            task.current_subgoal_index=next_index
+            task.subgoal_start_steps.setdefault(str(next_index),len(self.actions))
+            task.subgoal_started=task.subgoal_start_steps[str(next_index)]
         self.progress_stage='COMPLETED'
         self.progress_feedback=recorded['verification']
         self.event('subgoal_observation_confirmed',
