@@ -148,9 +148,12 @@ class AgentRuntime(ToolExecutor):
         self.plan_revision += 1
         self.active_subgoal_id = 'sg_%d' % i
         description = value['subgoal'] if value else goal['action']+' '+goal['target']
+        if value is not None and value.get('intent')=='revise':
+            goal['completion_description']=description
         goal.update(success_criteria=criteria, semantic_description=description)
         self.active_subgoal = dict(id=self.active_subgoal_id, description=description,
-            landmark=goal['landmark'], success_criteria=criteria)
+            landmark=goal['landmark'],target=goal['target'],
+            completion_description=goal.get('completion_description',description))
         action = goal['action']
         stair_direction = stair_motion_direction(goal)
         self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else

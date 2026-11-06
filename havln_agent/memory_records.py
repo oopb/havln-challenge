@@ -314,6 +314,10 @@ class MemoryRecords:
                     if isinstance(dy,(int,float)) else
                     previous['observed_height_change_m_est'])
                 previous['end_observation_id']=feedback.get('observation_after')
+                uncertainty=motion.get('uncertainty_m')
+                if isinstance(uncertainty,(int,float)):
+                    previous['uncertainty_m_est']=round(
+                        previous['uncertainty_m_est']+uncertainty,3)
             else:
                 segments.append(dict(subgoal=a.get('subgoal'),
                     motion_epoch=epoch,heading_deg=yaw,
@@ -323,6 +327,9 @@ class MemoryRecords:
                         if isinstance(dy,(int,float)) else 0.,
                     start_observation_id=feedback.get('observation_before'),
                     end_observation_id=feedback.get('observation_after'),
+                    uncertainty_m_est=round(motion.get('uncertainty_m',0),3)
+                        if isinstance(motion.get('uncertainty_m'),(int,float))
+                        else 0.,
                     evidence='registered_rgbd_motion_not_habitat_ground_truth'))
         blocked=[]
         for entry in self.tool_ledger[-50:]:
@@ -347,6 +354,10 @@ class MemoryRecords:
             blocked.append(dict(
                 heading_deg=round(math.degrees(heading)%360,1),
                 source_observation_id=result.get('end_observation_id'),
+                local_pose_xz_m_est=[pose.get('x'),pose.get('z')],
+                place_id=(end_record or {}).get('place_id'),
+                motion_epoch=pose.get('motion_epoch'),
+                viewpoint_generation=pose.get('viewpoint_generation'),
                 reason=result.get('reason'),
                 subgoal=entry.get('subgoal_id'),
                 evidence='observed_block_at_stance_not_historical_route_veto'))
