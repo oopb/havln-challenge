@@ -92,8 +92,10 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     missing_evidence=dict(type='string',maxLength=350),
     evidence_observation_ids=dict(type='array',maxItems=8,uniqueItems=True,
                                   items=dict(type='string',minLength=1,maxLength=64)),
-    candidate_surface_box=dict(type='array',minItems=4,maxItems=4,
-        items=dict(type='number',minimum=0,maximum=1))))
+    candidate_surface_box=dict(anyOf=[
+        dict(type='array',minItems=4,maxItems=4,
+            items=dict(type='number',minimum=0,maximum=1)),
+        dict(type='null')]))
 # Optional model-authored advice is never permission to MOVE or change subgoals.
 _ADVICE_FIELDS=dict(
     observation_summary=dict(type='string',maxLength=750),
