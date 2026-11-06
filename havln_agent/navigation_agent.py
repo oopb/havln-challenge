@@ -135,9 +135,9 @@ class NavigationAgent:
                     # single source of truth. Normal navigation removes
                     # "look" entirely; orientation-mode retains only
                     # dynamically calibrated directions.
-                    look_schema=(((offered_tools.get('observe_for_goal') or {})
-                        .get('parameters') or {}).get('properties') or {}
-                        ).get('look') or {}
+                    params=(offered_tools.get('observe_for_goal') or {}).get(
+                        'parameters') or {}
+                    look_schema=(params.get('properties') or {}).get('look') or {}
                     allowed=set(look_schema.get('enum') or ())
                     if args['look'] not in allowed:
                         requested=args.pop('look')
