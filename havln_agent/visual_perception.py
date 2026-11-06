@@ -236,6 +236,35 @@ PANORAMA_VISUAL_PROMPT = (
 )
 
 
+def session_frame_ids(messages):
+    """Get source-backed frame IDs from well-formed task-local user turns.
+
+    Do not rely on substring matches: target descriptions and VLM responses
+    can incidentally contain other observation IDs.
+    """
+    current=set()
+    historical=set()
+    for msg in messages or ():
+        if msg.get('role')!='user':
+            continue
+        for part in msg.get('content',()):
+            if part.get('type')!='text':
+                continue
+            try:
+                request=json.loads(part['text'])
+            except (ValueError,TypeError,KeyError):
+                continue
+            if not isinstance(request,dict):
+                continue
+            if isinstance(request.get('observation_id'),str):
+                current.add(request['observation_id'])
+            for frame in request.get('historical_images') or ():
+                if isinstance(frame,dict) and isinstance(
+                        frame.get('observation_id'),str):
+                    historical.add(frame['observation_id'])
+    return current,historical
+
+
 class VisualPerception:
     def __init__(self,runtime):
         self.runtime=runtime
@@ -373,12 +402,8 @@ class VisualPerception:
         request['measured_geometry']=geometry_evidence or {}
         # Check same-frame presence BEFORE expensive RGB/Depth encoding.
         # A correction about unchanged obs_XXXX reuses full prior images.
-        seen_frame=any(msg.get('role')=='user' and
-            isinstance(msg.get('content'),list) and any(
-                part.get('type')=='text' and
-                '"observation_id": "'+source['observation_id']+'"' in part.get('text','')
-                for part in msg['content'])
-            for msg in (session or []))
+        prior_current_ids,prior_historical_ids=session_frame_ids(session)
+        seen_frame=source['observation_id'] in prior_current_ids
         images=[] if seen_frame else [image_url(observation,max_edge=640)]
         camera=getattr(self.runtime,'camera',None)
         if camera is not None and getattr(observation,'depth',None) is not None:
@@ -430,16 +455,8 @@ class VisualPerception:
                                category='structured_field')
             if mode=='VERIFY':
                 known_ids={source['observation_id']}
-                for msg in (session or []):
-                    if msg.get('role')!='user':continue
-                    for part in msg.get('content',[]):
-                        if part.get('type')=='text':
-                            try:
-                                context=json.loads(part['text'])
-                                known_ids.add(context['observation_id'])
-                                known_ids.update(i['observation_id'] for i in
-                                    context.get('historical_images',[]))
-                            except (ValueError,KeyError,TypeError):pass
+                known_ids.update(prior_current_ids)
+                known_ids.update(prior_historical_ids)
                 known_ids.update(t['observation_id'] for t in historical_items)
                 if not set(value.get('evidence_observation_ids',[]))<=known_ids:
                     raise APIError('vlm_verification_cites_unknown_frame',
