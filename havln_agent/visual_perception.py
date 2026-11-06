@@ -396,6 +396,8 @@ class VisualPerception:
                 for part in msg['content'])
             for msg in (session or []))
         include_images=not seen_frame
+        if seen_frame:
+            request['reuse_prior_RGBD_observation_id']=source['observation_id']
         # Historical images are introduced exactly once per observation task,
         # with real IDs and yaws. They cannot authorize current collision safety.
         historical_items=[]
@@ -429,7 +431,11 @@ class VisualPerception:
                     if msg.get('role')!='user':continue
                     for part in msg.get('content',[]):
                         if part.get('type')=='text':
-                            try: known_ids.add(json.loads(part['text'])['observation_id'])
+                            try:
+                                context=json.loads(part['text'])
+                                known_ids.add(context['observation_id'])
+                                known_ids.update(i['observation_id'] for i in
+                                    context.get('historical_images',[]))
                             except (ValueError,KeyError,TypeError):pass
                 known_ids.update(t['observation_id'] for t in historical_items)
                 if not set(value.get('evidence_observation_ids',[]))<=known_ids:
