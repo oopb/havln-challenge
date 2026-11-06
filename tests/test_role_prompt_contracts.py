@@ -100,25 +100,6 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[-1])
         self.assertEqual(runtime.event.call_count,2)
 
-    @staticmethod
-    def _panorama_fixture():
-        headings=[0,90,180,270]
-        viewpoints=[
-            dict(observation_id='obs%d' % i,
-                 absolute_heading_deg=a,
-                 relative_turn_deg_from_current=((a+180)%360)-180,
-                 pitch_deg=0,
-                 historical_front_state='UNMEASURED')
-            for i,a in enumerate(headings)]
-        visual=SimpleNamespace(panorama_direction_evidence=Mock(return_value=dict(
-            selected_observation_id='obs0',
-            visible_evidence='a hallway in obs0',
-            visual_cues=['visible entry'],uncertainty='medium',
-            alternative_observation_ids=[])))
-        return viewpoints,visual,Mock(
-            side_effect=lambda ident:(SimpleNamespace(rgb=None),
-                                      dict(observation_id=ident)))
-
     def test_panorama_preserves_all_strategic_choices_and_only_advises_once(self):
         observing=dict(description='VLM full visual task',permission='NAVIGATION',
             parameters=dict(type='object',properties={},required=[],

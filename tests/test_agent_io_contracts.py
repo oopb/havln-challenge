@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from jsonschema import Draft7Validator
 
-from havln_agent.active_observation import ObservationController
+from havln_agent.active_observation import ObservationController, recent_authentic_motion_frames
 from havln_agent.api_client import APIError
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.visual_perception import VisualPerception
@@ -167,6 +167,25 @@ class AgentIOContractsTests(unittest.TestCase):
         with self.assertRaises(APIError):
             kwargs['validate'](dict(verification(),
                 evidence_observation_ids=['obs_not_real']))
+
+    def test_prior_motion_keyframes_use_real_saved_rgbd_and_current_subgoal(self):
+        r=FakeRuntime([])
+        r.memory.route_progress_summary=Mock(return_value=dict(
+            successful_segments=[dict(subgoal=0,
+                start_observation_id='obs_0024',end_observation_id='obs_0028')],
+            blocked_at_prior_stances=[dict(subgoal='sg_0',
+                source_observation_id='obs_0044'),
+                dict(subgoal='sg_5',source_observation_id='obs_0500')]))
+        def read_frame(ident):
+            return (SimpleNamespace(rgb='saved_rgb',depth='saved_depth'),
+                dict(observation_id=ident,pose=dict(
+                    heading=math.radians(225),pitch_deg=-30,motion_epoch=0)))
+        r._vision_frame=Mock(side_effect=read_frame)
+        frames=recent_authentic_motion_frames(r,'obs_0071')
+        self.assertEqual([info['observation_id'] for _,info in frames],
+            ['obs_0024','obs_0028','obs_0044'])
+        self.assertTrue(all(info['historical_only'] for _,info in frames))
+        self.assertEqual(r._vision_frame.call_count,3)
 
     def test_old_blockage_stores_stance_and_uncertainty_not_global_veto(self):
         mem=MemoryRecords(SimpleNamespace(turn_angle=15))
