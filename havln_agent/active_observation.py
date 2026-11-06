@@ -370,7 +370,7 @@ class ObservationController:
                         (mode!='VERIFY' or
                          now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
-                    or prev.get('subgoal_generation',0)!=r.memory.task.subgoal_generations.get(
+                    or prev.get('subgoal_generation',0)!=getattr(r.memory.task,'subgoal_generations',{}).get(
                         str(r.memory.task.current_subgoal_index),0)
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
@@ -398,7 +398,7 @@ class ObservationController:
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',intent=mode,objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
-            subgoal_generation=r.memory.task.subgoal_generations.get(
+            subgoal_generation=getattr(r.memory.task,'subgoal_generations',{}).get(
                 str(r.memory.task.current_subgoal_index),0),
             start_observation_id=initial['observation_id'],start_pose=dict(start),
             start_rgb_hash=initial.get('rgb_hash'),start_depth_hash=initial.get('depth_hash'),
@@ -544,9 +544,11 @@ class ObservationController:
             if verification:
                 latest_forward=next((a['step'] for a in reversed(r.memory.actions)
                     if a.get('action')=='MOVE_FORWARD'),None)
-                r.memory.evidence.note_verification(
-                    verification,latest_forward,
-                    generation=record['subgoal_generation'])
+                ledger=getattr(r.memory,'evidence',None)
+                if ledger is not None:
+                    ledger.note_verification(
+                        verification,latest_forward,
+                        generation=record['subgoal_generation'])
             record.update(verification=copy.deepcopy(verification),
                 navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
@@ -773,7 +775,9 @@ class ObservationController:
                         observation_id=source['observation_id'],
                         reason='surface_measurement_unavailable',
                         measured_completion=False)
-                r.memory.evidence.note_surface(measured)
+                ledger=getattr(r.memory,'evidence',None)
+                if ledger is not None:
+                    ledger.note_surface(measured)
                 record.setdefault('surface_evidence',[]).append(measured)
                 pending_view_correction=dict(
                     reason='requested_surface_depth_measurement',

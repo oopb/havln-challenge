@@ -15,7 +15,7 @@ def latest_observation_for_subgoal(memory,index):
     Previous milestone reports remain available as historical evidence, not
     as unscoped instructions for the NavigationAgent.
     """
-    generation=memory.task.subgoal_generations.get(str(index),0)
+    generation=getattr(memory.task,'subgoal_generations',{}).get(str(index),0)
     return next((item for item in reversed(memory.observation_searches)
                  if item.get('subgoal')==index
                  and item.get('subgoal_generation',0)==generation),None)
