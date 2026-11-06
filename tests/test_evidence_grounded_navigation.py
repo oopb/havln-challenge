@@ -15,6 +15,10 @@ from havln_agent.api_client import APIError
 from havln_agent.contracts import registry
 from havln_agent.evidence_ledger import EvidenceLedger
 from havln_agent.memory_records import MemoryRecords
+from havln_agent.memory_service import MemoryService
+from havln_agent.active_observation import ObservationController
+from test_active_observation import FakeRuntime
+from test_vlm_led_observation import VLMGuide
 from havln_agent.navigation_agent import NavigationAgent
 from havln_agent.surface_measurement import measure_surface_region
 from havln_agent.tool_menu import navigation_tool_menu
@@ -249,6 +253,76 @@ class EvidenceContractTests(unittest.TestCase):
             turn_deg=0,distance_m=.25)))
         self.assertFalse(Draft7Validator(schema).is_valid(dict(
             turn_deg=0,distance_m=.25,candidate_id='')))
+
+    def test_memory_service_links_only_explicitly_selected_candidate_to_motion(self):
+        runtime=SimpleNamespace(camera=SimpleNamespace(turn_angle=15),
+            semantic_motion_policy='DESCEND_STAIRS')
+        mem=MemoryService(runtime)
+        mem.visual_targets=[dict(test_candidate(),subgoal_index=0,
+            subgoal_generation=0)]
+        actual=mem.record_candidate_motion('visual_target_0001',test_action())
+        self.assertEqual(actual['prediction_consistency'],'CONTRADICTED_BY_MOTION')
+        self.assertEqual(len(mem.evidence.route_outcomes),1)
+        self.assertIsNone(mem.record_candidate_motion('nonexistent',test_action()))
+        self.assertEqual(len(mem.evidence.route_outcomes),1)
+
+    def test_blocked_route_summary_uses_exact_post_turn_pose_without_old_keyframe(self):
+        mem=MemoryRecords(SimpleNamespace(turn_angle=15))
+        blocked=mem.evidence.blocked_forward(
+            dict(observation_id='obs_0070',subgoal=0),
+            dict(x=1,z=2,heading=0,pitch_deg=-60,motion_epoch=1),
+            reason='measured_centerline_obstacle',center={})
+        mem.tool_ledger=[dict(call=dict(tool='navigate_relative'),
+            result=dict(status='BLOCKED',blocked_at=blocked),
+            subgoal_id='sg_0')]
+        route=mem.route_progress_summary()
+        self.assertEqual(route['blocked_at_prior_stances'][0]['heading_deg'],0)
+        self.assertEqual(route['blocked_at_prior_stances'][0]
+                         ['source_observation_id'],'obs_0070')
+
+    def test_verify_uses_same_frame_depth_measurement_then_reassesses(self):
+        from havln_agent.evidence_ledger import EvidenceLedger
+        r=FakeRuntime([])
+        r.memory.actions=[]
+        r.memory.evidence=EvidenceLedger()
+        first=dict(verification_status='NOT_YET',
+            verification_evidence='Floor appears lower than robot',
+            uncertainty='surface identity unclear',
+            next_action='finish',turn_deg=0,reason='request surface measure',
+            candidate_surface_box=[.3,.4,.7,.9])
+        second=dict(verification_status='NOT_YET',
+            verification_evidence='Depth is insufficient; not at landing',
+            uncertainty='low depth',next_action='finish',turn_deg=0,
+            reason='final grounded assessment')
+        r.visual_perception=VLMGuide([first,second])
+        output=ObservationController(r).scan_vlm('Verify landing',
+            ['landing'],90,mode='VERIFY')
+        self.assertEqual(output['outcome'],'SUBGOAL_NOT_YET')
+        self.assertEqual(len(r.visual_perception.calls),2)
+        self.assertEqual(r.step_calls,[])
+        self.assertEqual(r.visual_perception.calls[1]['view_correction']
+                         ['reason'],'requested_surface_depth_measurement')
+        self.assertEqual(len(r.memory.evidence.surface_measurements),1)
+
+    def test_reopened_subgoal_does_not_reuse_old_confirmed_observation(self):
+        r=FakeRuntime([])
+        r.memory.actions=[]
+        r.memory.evidence=EvidenceLedger()
+        r.memory.task.subgoal_generations={'0':1}
+        old=dict(mode='vlm_led',intent='VERIFY',subgoal=0,
+            subgoal_generation=0,objective='Verify landing',
+            target_types=['landing'],outcome='SUBGOAL_CONFIRMED',
+            start_pose=r.pose(),start_rgb_hash=None,start_depth_hash=None)
+        r.memory.observation_searches.append(old)
+        reply=dict(verification_status='NOT_YET',
+            verification_evidence='Robot not yet at target',
+            uncertainty='',next_action='finish',turn_deg=0,reason='new review')
+        r.visual_perception=VLMGuide([reply])
+        outcome=ObservationController(r).scan_vlm('Verify landing',
+            ['landing'],90,mode='VERIFY')
+        self.assertEqual(outcome['outcome'],'SUBGOAL_NOT_YET')
+        self.assertEqual(len(r.visual_perception.calls),1)
+        self.assertEqual(r.memory.observation_searches[-1]['subgoal_generation'],1)
 
     def test_normal_observation_evidence_accepts_496_characters(self):
         value=dict(target_visible=True,target_type='stairs',

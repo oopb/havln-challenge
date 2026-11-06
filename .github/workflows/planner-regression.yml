@@ -20,6 +20,7 @@ on:
       - "tests/test_agent_io_contracts.py"
       - "tests/test_batch418_verification_feedback.py"
       - "tests/test_batch419_subgoal_camera_contract.py"
+      - "tests/test_evidence_grounded_navigation.py"
       - "tests/test_direct_vlm_evidence_relay.py"
       - "tests/test_visual_endpoint_reference.py"
       - "tests/test_batch412_progress_and_observation.py"
@@ -106,6 +107,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_batch418_verification_feedback.py' -v
       - name: Check Batch 4-19 active task isolation and calibrated camera arguments
         run: python -m unittest discover -s tests -p 'test_batch419_subgoal_camera_contract.py' -v
+      - name: Check evidence-grounded multimodal route and completion review contracts
+        run: python -m unittest discover -s tests -p 'test_evidence_grounded_navigation.py' -v
       - name: Check VLM-owned full observation and compact navigation contracts
         run: python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
       - name: Check bounded navigation after uncertain RGB-D motion

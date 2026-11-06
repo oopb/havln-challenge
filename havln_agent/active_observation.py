@@ -384,7 +384,8 @@ class ObservationController:
                             (prev.get('verification') or {}).get('final_verdict')
                             and not initial.get('new_visual_information',True)
                             and prev.get('verification_forward_step')==next((
-                                a['step'] for a in reversed(r.memory.actions)
+                                a['step'] for a in reversed(
+                                    getattr(r.memory,'actions',()))
                                 if a.get('action')=='MOVE_FORWARD'),None)
                             and prev.get('surface_evidence_count',0)==len(
                                 getattr(getattr(r.memory,'evidence',None),
@@ -562,7 +563,8 @@ class ObservationController:
                 advice_only_not_motion_authorization=True,
                 evidence_scope='real_RGBD_and_measurement_plus_VLM_hypothesis')
             if verification:
-                latest_forward=next((a['step'] for a in reversed(r.memory.actions)
+                latest_forward=next((a['step'] for a in reversed(
+                    getattr(r.memory,'actions',()))
                     if a.get('action')=='MOVE_FORWARD'),None)
                 ledger=getattr(r.memory,'evidence',None)
                 record['verification_forward_step']=latest_forward
