@@ -327,3 +327,8 @@ not for VLM semantic completion.
 
 Regression tests live in \`tests/test_agent_io_contracts.py\`, alongside the
 existing observation, navigation and task-planning contract suites.
+
+The model-visible transcript replays prior messages rather than repeating route memory
+and visual summaries in every newly appended turn. The first turn holds the
+relevant motion context; later turns retain compact covered-yaw data and fresh
+geometry measurements. All historical images remain available in the transcript.

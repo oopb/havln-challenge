@@ -132,6 +132,10 @@ class AgentIOContractsTests(unittest.TestCase):
         self.assertEqual(encode_depth.call_count,1)
         self.assertEqual(first_call.kwargs['image_url'],['rgb','depth'])
         self.assertIsNone(second_call.kwargs['image_url'])
+        self.assertIn('route_history',first_call.args[3])
+        self.assertNotIn('route_history',second_call.args[3])
+        self.assertEqual(second_call.args[3]['route_history_reference'],
+                         'initial_session_message')
         self.assertEqual(len(session),4)
         self.assertEqual(len(session[0]['content']),3)
         self.assertEqual(len(session[2]['content']),1)
