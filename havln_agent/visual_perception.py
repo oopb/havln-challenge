@@ -83,7 +83,15 @@ VERIFY_GUIDANCE_SCHEMA['required'].remove('evidence_observation_ids')
 VERIFY_GUIDANCE_PROMPT = (
     'You are Observation Agent confirming one semantic navigation subgoal. '
     'Use current real RGB/metric Depth, genuine earlier views in this session '
-    'and evidence of measured robot movement from the same task. '
+    'and evidence of ACTUAL executed turn/forward actions from the CURRENT '
+    'milestone. The request current_subgoal_id and completion_description '
+    'are authoritative. Never verify a different or already confirmed '
+    'earlier milestone, even if older RGB-D still shows its landmarks. '
+    'For TURN / orientation milestones, compare real signed turn receipts '
+    'and current camera orientation to the requested turn; do not require '
+    'proof of stair descent, arrival at a future foyer, or other unrelated '
+    'physical travel to confirm a turn. If real pose/action evidence is '
+    'insufficient to confirm orientation, answer UNCERTAIN. '
     'Respond CONFIRMED only when the ROBOT reached the described milestone; '
     'a distant destination or partially descended staircase does not mean '
     'arrival. Respond NOT_YET when unfinished work is visible, otherwise '
@@ -112,8 +120,13 @@ VERIFY_GUIDANCE_PROMPT = (
 SCAN_GUIDANCE_PROMPT = (
     'You are the VLM OBSERVATION SUBAGENT, responsible for visual search and '
     'all camera turns/look changes within this delegated observation task. '
-    'NavigationAgent specified WHAT to find; YOU choose each next viewing '
-    'direction using the CURRENT real RGB and metric-labeled Depth images '
+    'The CURRENT subgoal object and current_subgoal_id are the authoritative '
+    'task scope. NavigationAgent supplied a local question, which may be stale '
+    'or influenced by a previously completed milestone; do NOT resume '
+    'an earlier milestone just because its stair/door landmarks remain visible. '
+    'Interpret the scene to help complete the CURRENT active subgoal, and '
+    'flag uncertain or contradictory spatial descriptions explicitly. '
+    'YOU choose each next viewing direction using CURRENT real RGB/Depth images '
     'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
@@ -410,6 +423,7 @@ class VisualPerception:
             subgoal=fields(subgoal,('action','target','landmark',
                 'semantic_description','completion_description')),
             objective=objective,target_types=list(target_types),
+            current_subgoal_id='sg_%d'%index,
             observation_id=source['observation_id'],
             heading_deg=round(__import__('math').degrees(pose['heading']),2),
             pitch_deg=round(pose.get('pitch_deg',0),2),
@@ -429,6 +443,44 @@ class VisualPerception:
             range(1,1+min(6,int(remaining_turn_deg//turn_step)))
             if int(i*turn_step)<=90]
         request['allowed_turn_deg']=allowed_turns
+        tilt=getattr(getattr(self.runtime,'camera',None),'tilt_angle',30)
+        current_pitch=pose.get('pitch_deg',0)
+        allowed_actions=['turn_left','turn_right','finish']
+        if current_pitch+tilt<=60:
+            allowed_actions.append('look_up')
+        if current_pitch-tilt>=-60:
+            allowed_actions.append('look_down')
+        request['allowed_camera_actions']=allowed_actions
+        if mode=='VERIFY' and not session:
+            action_history=[a for a in getattr(self.runtime.memory,'actions',())
+                if a.get('subgoal')==index]
+            turn_step=getattr(getattr(self.runtime,'camera',None),'turn_angle',15)
+            right=sum(a.get('action')=='TURN_RIGHT' for a in action_history)
+            left=sum(a.get('action')=='TURN_LEFT' for a in action_history)
+            request['current_subgoal_action_evidence']=dict(
+                subgoal_id='sg_%d'%index,
+                executed_right_turn_deg=right*turn_step,
+                executed_left_turn_deg=left*turn_step,
+                net_signed_turn_deg=(left-right)*turn_step,
+                executed_forward_actions=sum(
+                    a.get('action')=='MOVE_FORWARD' for a in action_history),
+                turn_actions_with_observed_view_change=sum(
+                    a.get('action') in ('TURN_LEFT','TURN_RIGHT')
+                    and (a.get('result') or {}).get('visual_change') is True
+                    for a in action_history),
+                current_heading_deg=round(
+                    __import__('math').degrees(pose['heading'])%360,2),
+                turn_receipts=[dict(step=a.get('step'),
+                    action=a.get('action'),
+                    resulting_observation_id=(a.get('result') or {}).get(
+                        'observation_after'))
+                    for a in action_history
+                    if a.get('action') in ('TURN_LEFT','TURN_RIGHT')][-14:],
+                provenance='actual_atomic_actions_since_current_subgoal_start',
+                caveat='turn_history_is_not_absolute_localized_3D_orientation')
+            request['previously_confirmed_subgoal_ids']=[
+                'sg_%d'%i for i in getattr(
+                    self.runtime.memory.task,'completed_subgoals',())]
         request['observation_mode']=mode
         if not session:
             request['route_history']=route_history or {}
@@ -488,6 +540,9 @@ class VisualPerception:
             if value['turn_deg'] not in allowed_turns:
                 raise APIError('vlm_turn_exceeds_remaining_sweep',
                                category='structured_field')
+            if value['next_action'] not in allowed_actions:
+                raise APIError('vlm_camera_action_exceeds_calibrated_pitch',
+                               category='structured_field')
             if mode=='VERIFY':
                 known_ids={source['observation_id']}
                 known_ids.update(prior_current_ids)
@@ -500,6 +555,7 @@ class VisualPerception:
         live_schema=copy.deepcopy(VERIFY_GUIDANCE_SCHEMA if verifying
             else SCAN_GUIDANCE_SCHEMA)
         live_schema['properties']['turn_deg']['enum']=allowed_turns
+        live_schema['properties']['next_action']['enum']=allowed_actions
         def save_dialogue(result):
             if session is None:
                 return

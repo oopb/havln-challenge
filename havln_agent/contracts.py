@@ -17,6 +17,13 @@ def registry(camera, max_actions, pitch_deg=0.):
     text = dict(TEXT, minLength=1)
     ids = dict(type='array', minItems=1, maxItems=4, uniqueItems=True, items=text)
     top = dict(type='integer', minimum=1, maximum=4)
+    # Bind the observation tool's initial camera action to the CURRENT
+    # calibrated pitch. Pitch at -60 cannot move down another 30 degrees.
+    legal_observation_looks=['none']
+    if pitch_deg+camera.tilt_angle<=60:
+        legal_observation_looks.append('up')
+    if pitch_deg-camera.tilt_angle>=-60:
+        legal_observation_looks.append('down')
     history = dict(scope=dict(const='historical'), observation_ids=ids)
     turn = []
     for look, available in [('none', max_actions), ('up', max_actions-1), ('down', max_actions-1)]:
@@ -33,7 +40,7 @@ def registry(camera, max_actions, pitch_deg=0.):
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
-        'observe_for_goal': ('Delegate a complete Observation Agent session. mode=SEARCH locates targets; APPROACH finds a promising short direction; OBSTACLE_REVIEW explores alternatives after measured blockage; VERIFY confirms whether the robot physically completed the current semantic subgoal. A VLM-confirmed result with real RGB-D sources advances the milestone. Geometry facts are input to VLM, not an independent route veto. VLM TURN/LOOK only; NavigationAgent owns MOVE.',
+        'observe_for_goal': ('Delegate a complete Observation Agent session. mode=SEARCH locates targets; APPROACH finds a promising short direction; OBSTACLE_REVIEW explores alternatives after measured blockage; VERIFY confirms ONLY the runtime CURRENT semantic subgoal, regardless of any stale model-authored objective. A VLM-confirmed result with real RGB-D sources advances the milestone. Geometry facts are input to VLM, not an independent route veto. VLM TURN/LOOK only; NavigationAgent owns MOVE.',
             dict(object_schema(dict(
                 mode=dict(enum=['SEARCH','APPROACH','OBSTACLE_REVIEW','VERIFY']),
                 objective=dict(TEXT,minLength=1),
@@ -42,7 +49,9 @@ def registry(camera, max_actions, pitch_deg=0.):
                 direction=dict(enum=['left','right']),
                 sweep_degrees=dict(enum=[30,60,90,120,180,270,360]),
                 checkpoint_degrees=dict(enum=[30,45]),
-                look=dict(enum=['none','up','down']),
+                look=dict(enum=legal_observation_looks,
+                    description='Optional initial LOOK, limited by the current camera pitch. '
+                    'Omit to let the Observation Agent choose its next legal viewpoint.'),
                 force_recheck=dict(type='boolean'))),
                 required=['objective','target_types'])),
         'compare_views': ('Compare current and/or saved RGB keyframes for one question. Historical views never authorize motion.',

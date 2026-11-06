@@ -175,13 +175,10 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
                     or r['result'].get('interrupted_status')=='BLOCKED'
                     or r['result'].get('status')=='BLOCKED')
                 for r in runtime.memory.tool_ledger),
-            atomic_forward_confirmed_depth_blocks=sum(
-                e['event']=='pre_forward_obstacle_reported' and
-                e.get('atomic_move_not_executed') is True
-                for e in runtime.memory.events),
-            forward_side_depth_ambiguities=sum(
-                e['event']=='forward_side_depth_ambiguity'
-                for e in runtime.memory.events),
+            atomic_forward_confirmed_depth_blocks=runtime.runtime_event_counts.get(
+                'atomic_forward_confirmed_depth_block',0),
+            forward_side_depth_ambiguities=runtime.runtime_event_counts.get(
+                'forward_side_depth_ambiguity',0),
             actions_since_last_forward=(len(actions)-1-max(
                 (i for i,a in enumerate(actions) if a=='MOVE_FORWARD'),default=-1)),
             tool_calls=len(runtime.memory.tool_ledger),

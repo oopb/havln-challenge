@@ -9,6 +9,26 @@ from .local_exploration import (last_block, local_coverage,
     recent_forward_stall_evidence)
 
 
+def latest_observation_for_subgoal(memory,index):
+    """Only current milestone observations can define the active objective.
+
+    Previous milestone reports remain available as historical evidence, not
+    as unscoped instructions for the NavigationAgent.
+    """
+    return next((item for item in reversed(memory.observation_searches)
+                 if item.get('subgoal')==index),None)
+
+
+def last_tool_result_for_subgoal(memory,index):
+    """Ignore the previous milestone's last tool receipt after transition."""
+    if not memory.tool_ledger:
+        return None
+    entry=memory.tool_ledger[-1]
+    if entry.get('subgoal_id') not in (None,'sg_%d'%index):
+        return None
+    return entry.get('result')
+
+
 def fields(value,names):
     return {key:value[key] for key in names if key in value}
 
@@ -356,7 +376,9 @@ def navigation_context(runtime):
                 evidence_state='model_hypothesis',temporal_status='HISTORICAL',usable_for_current_view=False)
     hints=memory.recall_observation(memory.current_place_id,
         landmark=language.get('landmark','')+' '+language.get('target',''),top_k=3)['observations']
-    last=memory.tool_ledger[-1]['result'] if memory.tool_ledger else None
+    # A verified sg_0 report is historical evidence, not the sg_1 tool
+    # feedback. Never re-feed the prior goal's prose as the current one.
+    last=last_tool_result_for_subgoal(memory,index)
     navigation_memory = (memory.navigation_summary() if hasattr(memory, 'navigation_summary') else {})
     grounding_hints = []
     for item in reversed(memory.groundings):
@@ -593,10 +615,11 @@ def navigation_context(runtime):
                     landmarks=[fields(l,('name','direction')) for l in scene_hint.get('landmarks',[])[:4]],
                     evidence_state='historical_hypothesis_not_live_safety')
                 break
-    if memory.observation_searches:
-        recent_search=memory.observation_searches[-1]
+    recent_search=latest_observation_for_subgoal(memory,index)
+    if recent_search:
         result['latest_observation_task']=dict(
             objective=recent_search['objective'],outcome=recent_search['outcome'],
+            subgoal_index=index,
             mode=recent_search.get('mode','legacy_fixed_direction'),
             direction=recent_search['direction'],
             covered_turn_deg=recent_search.get('covered_turn_deg',0),
@@ -685,7 +708,10 @@ def compact_navigation_context(state):
         n['recent_failed_waypoints']=[fields(v,('reason','status',
             'requested_motion')) for v in m.get('recent_failed_waypoints',[])[-2:]]
         n['visual_targets']=[]
-        for v in m.get('visual_target_memory',[])[-2:]:
+        current_index=(state.get('task_selection') or {}).get(
+            'current_subgoal_index')
+        for v in [x for x in m.get('visual_target_memory',[])
+                  if x.get('subgoal_index')==current_index][-2:]:
             t=fields(v,('id','status','target_type','target_kind',
                 'selected_observation_id','absolute_heading_deg',
                 'pitch_deg','target_region','expected_progress'))
@@ -770,6 +796,7 @@ def compact_navigation_context(state):
     if state.get('latest_observation_task'):
         t=state['latest_observation_task']
         out['latest_observation_task']=dict(mode=t.get('mode'),
+            subgoal_index=t.get('subgoal_index'),
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
             candidate=t.get('candidate'),best_cue=t.get('best_cue'),
             best_approach=t.get('best_approach'),

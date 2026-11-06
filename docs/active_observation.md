@@ -390,3 +390,59 @@ python -m compileall -q havln_agent
 Actual Habitat closed-loop performance and the real deployed VLM response
 distribution still require the next diagnostic batch; static review alone
 does not prove navigation success.
+
+
+## Batch 4-19: active milestone is authoritative (Nov 2026)
+
+The diagnosis contained \`sg_0\` CONFIRMED at tool_0008, a real transition to
+\`sg_1\` (right turn), an \`sg_1\` turn-completion VERIFY at tool_0010, and
+then 161 consecutive model-authored requests to recheck the stair bottom
+while pitch was already -60 degrees. Those all returned
+\`camera_pitch_outside_calibrated_projection\`. This is NOT a failure to
+advance \`current_subgoal_index\`; it is stale visual objective propagation
+and invalid optional camera input.
+
+**Fixes and contracts**
+
+- \`observe_for_goal(mode=VERIFY)\` now ignores the model's prose objective and
+  target labels as an authoritative completion condition. The runtime
+  constructs a canonical objective directly from the CURRENT
+  \`sg_<index>\`, action, target and \`completion_description\`, preserving
+  the VLM decision and true RGB-D sources. A completed milestone is NEVER
+  silently re-verified via the next milestone's VERIFY call.
+- Latest Observation Agent output, last-tool feedback and persistent visual
+  target hypotheses passed to NavigationAgent are scoped to the CURRENT
+  subgoal. Earlier verified milestones remain represented by source-backed
+  \`completed_subgoals\` and completion evidence, not old instruction text.
+- For an orientation milestone (e.g. sg_1 "make a right turn"), the VLM VERIFY
+  input includes the accepted TURN_LEFT / TURN_RIGHT atomic receipt sequence,
+  signed net yaw and current camera orientation. It checks the orientation
+  milestone, NOT whether a previous descent is complete or whether a future
+  foyer has already been entered. The Observation Agent still makes the
+  semantic completion decision; Python does not automatically award the turn.
+- Both the NavigationAgent \`observe_for_goal\` registry and the VLM's internal
+  camera schema expose only calibrated legal LOOK actions at the current
+  pitch. An impossible, OPTIONAL initial LOOK (e.g. down from -60°) is
+  stripped by the NavigationAgent before tool validation; the runtime also
+  normalizes older/manual requests to \`look=none\` with an audit event.
+  This does NOT force a navigation bearing or bypass live obstacle checking.
+- When the previous VLM view described stairs or a previous target, the
+  current subgoal's action/completion condition remains authoritative;
+  local OBJECTIVE text is an exploration question, not a task-state override.
+- Runtime simulator events are counted from emitted events, not from the
+  separate semantic-memory event list. The summary therefore reports actual
+  stopped-forward and side-depth-ambiguity events from \`events.jsonl\`.
+
+**Testing**
+
+\`\`\`bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_batch419_subgoal_camera_contract.py' -v
+python -m unittest discover -s tests -p 'test_*.py' -v
+\`\`\`
+
+This corrects the execution/control contract, not the Habitat ground-truth
+position. A fresh closed-loop batch is required to determine whether an
+earlier \`sg_0\` visual CONFIRMED was physically premature. No automatic
+rollback of a milestone is attempted based on one later contradictory image;
+that would create another model-decision loop without reliable evidence.
