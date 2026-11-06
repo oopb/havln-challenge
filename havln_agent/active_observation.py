@@ -397,6 +397,7 @@ class ObservationController:
             last_visual=(record['checkpoints'][-1]['visual']
                          if record['checkpoints'] else {})
             verification=(dict(
+                subgoal_index=record['subgoal'],
                 status=last_visual.get('verification_status','UNCERTAIN'),
                 evidence=last_visual.get('verification_evidence',''),
                 uncertainty=last_visual.get('uncertainty',''),

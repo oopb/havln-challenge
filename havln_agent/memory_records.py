@@ -363,6 +363,10 @@ class MemoryRecords:
             return dict(status='NOT_APPLICABLE',reason='no_active_unconfirmed_subgoal')
         if verification.get('status')!='CONFIRMED':
             return dict(status='NOT_CONFIRMED',reason='vlm_did_not_confirm')
+        if (verification.get('subgoal_index')!=index
+                or verification.get('source')!='vlm_real_rgbd_history'):
+            return dict(status='INVALID_EVIDENCE',
+                reason='confirmation_session_does_not_match_active_subgoal')
         observed={o['observation_id']:o for o in self.observations}
         ids=list(dict.fromkeys(verification.get('observation_ids') or []))
         live=verification.get('source_observation_id')

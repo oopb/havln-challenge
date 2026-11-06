@@ -29,6 +29,7 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         self.assertEqual(receipt['status'],'OK')
         self.assertEqual(receipt['outcome'],'SUBGOAL_CONFIRMED')
         self.assertEqual(receipt['verification']['status'],'CONFIRMED')
+        self.assertEqual(receipt['verification']['subgoal_index'],0)
         self.assertEqual(receipt['verification']['observation_ids'],['obs_0000'])
         self.assertEqual(r.step_calls,[])
         self.assertEqual(r.visual_perception.calls[0]['history'],[])
@@ -51,7 +52,9 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         mem.task.subgoals=[dict(action='descend'),dict(action='enter room')]
         mem.observations=[dict(observation_id='obs_0028',subgoal=0)]
         mem.current=mem.observations[0]
-        verdict=dict(status='CONFIRMED',source_observation_id='obs_0028',
+        verdict=dict(status='CONFIRMED',subgoal_index=0,
+            source='vlm_real_rgbd_history',
+            source_observation_id='obs_0028',
             observation_ids=['obs_0028'],
             evidence='Robot is on the bottom flat landing',uncertainty='')
         out=mem.confirm_subgoal_observation(verdict,'Check arrival at landing')
@@ -69,7 +72,9 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         mem.task.subgoals=[dict(action='reach destination')]
         mem.observations=[dict(observation_id='obs_0099',subgoal=0)]
         mem.current=mem.observations[0]
-        reply=dict(status='CONFIRMED',source_observation_id='obs_0099',
+        reply=dict(status='CONFIRMED',subgoal_index=0,
+            source='vlm_real_rgbd_history',
+            source_observation_id='obs_0099',
             observation_ids=['obs_0099'],
             evidence='Robot is physically inside requested destination')
         result=mem.confirm_subgoal_observation(reply,'Confirm final arrival')
@@ -83,9 +88,11 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         mem.observations=[dict(observation_id='obs_0028',subgoal=0)]
         mem.current=mem.observations[0]
         for verdict in (
-            dict(status='CONFIRMED',source_observation_id='imaginary',
+            dict(status='CONFIRMED',subgoal_index=0,
+                 source='vlm_real_rgbd_history',source_observation_id='imaginary',
                  observation_ids=['imaginary'],evidence='done'),
-            dict(status='CONFIRMED',source_observation_id='obs_0028',
+            dict(status='CONFIRMED',subgoal_index=0,
+                 source='vlm_real_rgbd_history',source_observation_id='obs_0028',
                  observation_ids=['obs_0028'],evidence='')):
             self.assertEqual(mem.confirm_subgoal_observation(
                 verdict,'Check arrival')['status'],'INVALID_EVIDENCE')
