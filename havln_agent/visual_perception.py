@@ -50,7 +50,11 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     candidate_approach=dict(type='boolean'),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
-    reason=dict(type='string',maxLength=250)))
+    reason=dict(type='string',maxLength=250),
+    expected_progress=dict(enum=['ADVANCE','REVERSE','DETOUR','UNKNOWN'])))
+# An exploratory movement hypothesis is optional; old model outputs remain
+# valid and are interpreted as UNKNOWN rather than fabricating intent.
+SCAN_GUIDANCE_SCHEMA['required'].remove('expected_progress')
 
 # The VLM confirms semantic outcomes from real observations, not from a
 # Python stair/landing predicate or a claimed movement distance.
@@ -60,7 +64,12 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     uncertainty=dict(type='string',maxLength=300),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
-    reason=dict(type='string',maxLength=250)))
+    reason=dict(type='string',maxLength=250),
+    missing_evidence=dict(type='string',maxLength=350),
+    evidence_observation_ids=dict(type='array',maxItems=8,uniqueItems=True,
+                                  items=dict(type='string',minLength=1,maxLength=64))))
+VERIFY_GUIDANCE_SCHEMA['required'].remove('missing_evidence')
+VERIFY_GUIDANCE_SCHEMA['required'].remove('evidence_observation_ids')
 
 VERIFY_GUIDANCE_PROMPT = (
     'You are Observation Agent confirming one semantic navigation subgoal. '
@@ -71,7 +80,10 @@ VERIFY_GUIDANCE_PROMPT = (
     'arrival. Respond NOT_YET when unfinished work is visible, otherwise '
     'UNCERTAIN. You can ask to TURN/LOOK for additional real views, preserving '
     'full session history, but cannot MOVE, certify free space or change goals. '
-    'Cite observed visual relationships, actual observation IDs and uncertainty. '
+    'Cite observed visual relationships and actual observation IDs; optionally '
+    'return evidence_observation_ids and missing_evidence. For NOT_YET or '
+    'UNCERTAIN, say exactly what has not been observed. '
+    'The geometry report is a measurement, not the sole completion verdict. '
     'Use finish when evidence suffices; turn angle must be 15-90 degrees and '
     'look/finish angle must be zero. Return one schema-valid JSON object.')
 
@@ -80,7 +92,7 @@ SCAN_GUIDANCE_PROMPT = (
     'all camera turns/look changes within this delegated observation task. '
     'NavigationAgent specified WHAT to find; YOU choose each next viewing '
     'direction using the CURRENT real RGB and metric-labeled Depth images '
-    'and the short search history. The first image is RGB; the second is '
+    'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
     'Depth is a perspective measurement, not proof a visible floor is '
@@ -122,7 +134,11 @@ SCAN_GUIDANCE_PROMPT = (
     'If a wall or ambiguous surface occupies '
     'the frame, do not label it a floor, doorway or traversable region solely '
     'because the instruction expects one. Prefer CUE/UNKNOWN when uncertain. '
-    'Use route_history to preserve measured earlier forward progress, and blocked '
+    'Return expected_progress=ADVANCE, REVERSE, DETOUR, or UNKNOWN if you '
+    'can infer whether this CURRENT bearing advances the active goal. '
+    'UNKNOWN is preferred when the spatial relation is unclear. '
+    'Use route_history in the initial session message to preserve measured '
+    'earlier forward progress, and blocked '
     'headings at particular stances. A view opposite successful downward motion '
     'may represent going back UP; use RGB-D to distinguish, not just a stair label. '
     'Measured geometry is information to interpret, not a separate veto. '
@@ -134,9 +150,11 @@ SCAN_GUIDANCE_PROMPT = (
     '(not a global path certificate); NO forward is performed by you. '
     'If the candidate is at another bearing, first turn the camera there '
     'and inspect fresh RGB-D, rather than assuming its clearance from '
-    'the current image. When candidate_approach=true, preferably choose '
-    'next_action=finish; the controller probes first and then hands a '
-    'non-blocked hypothesis to NavigationAgent. BLOCKED candidate feedback '
+    'the current image. candidate_approach=true SAVES a hypothesis, it '
+    'does not necessarily finish the task. Choose next_action=finish if '
+    'you have enough evidence, or a new TURN/LOOK to compare another view. '
+    'The controller probes a candidate and returns measured blockers. '
+    'BLOCKED candidate feedback '
     'is returned to YOU in view_correction and recent observation history '
     'within THIS SAME observation task: choose a different direction/look, '
     'or finish with uncertainty when no useful new direction remains. '
@@ -153,7 +171,9 @@ SCAN_GUIDANCE_PROMPT = (
     'choose a DIFFERENT real view (often look down/up) within this SAME '
     'subtask. Never repeat a rejected action. Finish when meaningful '
     'visual evidence is sufficient OR the remaining views will not help; '
-    'state uncertainty. Return candidate_approach as a boolean on EVERY '
+    'state uncertainty. Respect allowed_turn_deg from the current request '
+    'and never ask to rotate beyond the remaining sweep budget. '
+    'Return candidate_approach as a boolean on EVERY '
     'output, with the CURRENT camera heading as its proposed forward bearing '
     'when true. You only return evidence and the next camera action. '
     'Do not invent robot motion, measured depth, safety or task completion. '
@@ -215,6 +235,35 @@ PANORAMA_VISUAL_PROMPT = (
     'Historical views are semantic hints, not current collision certificates. '
     'You are the eyes, not the motion executor. Return ONE JSON object.'
 )
+
+
+def session_frame_ids(messages):
+    """Get source-backed frame IDs from well-formed task-local user turns.
+
+    Do not rely on substring matches: target descriptions and VLM responses
+    can incidentally contain other observation IDs.
+    """
+    current=set()
+    historical=set()
+    for msg in messages or ():
+        if not isinstance(msg,dict) or msg.get('role')!='user':
+            continue
+        for part in msg.get('content',()):
+            if not isinstance(part,dict) or part.get('type')!='text':
+                continue
+            try:
+                request=json.loads(part['text'])
+            except (ValueError,TypeError,KeyError):
+                continue
+            if not isinstance(request,dict):
+                continue
+            if isinstance(request.get('observation_id'),str):
+                current.add(request['observation_id'])
+            for frame in request.get('historical_images') or ():
+                if isinstance(frame,dict) and isinstance(
+                        frame.get('observation_id'),str):
+                    historical.add(frame['observation_id'])
+    return current,historical
 
 
 class VisualPerception:
@@ -322,8 +371,8 @@ class VisualPerception:
                         view_history, remaining_turn_deg, prior_targets=None,
                         observed_yaw_pitch=None, view_correction=None,
                         session=None, mode='APPROACH', route_history=None,
-                        geometry_evidence=None):
-        """One current RGB-D step with the full task-local multimodal dialogue."""
+                        geometry_evidence=None, historical_frames=None):
+        """Real current RGB-D, measured facts, full session and relevant past views."""
         from .vision_protocol import coordinate_schema, coordinate_prompt
         from .vision_protocol import normalize_coordinates
         task=self.runtime.memory.task
@@ -332,24 +381,44 @@ class VisualPerception:
         pose=source['pose']
         request=dict(mode='vlm_guided_observation',
             instruction=task.instruction,
-            subgoal=fields(subgoal,('action','target','landmark','semantic_description')),
+            subgoal=fields(subgoal,('action','target','landmark',
+                'semantic_description','completion_description')),
             objective=objective,target_types=list(target_types),
             observation_id=source['observation_id'],
             heading_deg=round(__import__('math').degrees(pose['heading']),2),
             pitch_deg=round(pose.get('pitch_deg',0),2),
             remaining_turn_deg=int(remaining_turn_deg),
-            previously_inspected_views=list(view_history)[-12:],
+            # The full conversation already carries old images, observations
+            # and replies. Only keep a compact angle coverage map on later
+            # turns; retain legacy short view summaries without a session.
+            previously_inspected_views=(list(view_history)[-12:]
+                if session is None else []),
             observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
-            prior_target_hypotheses=list(prior_targets or ())[-2:],
+            prior_target_hypotheses=(list(prior_targets or ())[-2:]
+                if not session else []),
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        turn_step=float(getattr(getattr(self.runtime,'camera',None),
+                                'turn_angle',15))
+        allowed_turns=[0]+[int(i*turn_step) for i in
+            range(1,1+min(6,int(remaining_turn_deg//turn_step)))
+            if int(i*turn_step)<=90]
+        request['allowed_turn_deg']=allowed_turns
         request['observation_mode']=mode
-        request['route_history']=route_history or {}
+        if not session:
+            request['route_history']=route_history or {}
+        else:
+            request['route_history_reference']='initial_session_message'
         request['measured_geometry']=geometry_evidence or {}
-        images=[image_url(observation,max_edge=640)]
+        # Check same-frame presence BEFORE expensive RGB/Depth encoding.
+        # A correction about unchanged obs_XXXX reuses full prior images.
+        prior_current_ids,prior_historical_ids=session_frame_ids(session)
+        seen_frame=source['observation_id'] in prior_current_ids
+        images=[] if seen_frame else [image_url(observation,max_edge=640)]
         camera=getattr(self.runtime,'camera',None)
         if camera is not None and getattr(observation,'depth',None) is not None:
-            images.append(depth_image_url(observation,camera,max_edge=640,
-                                          display_max_m=5.0))
+            if not seen_frame:
+                images.append(depth_image_url(observation,camera,max_edge=640,
+                                              display_max_m=5.0))
             request['sensor_images']=['current_rgb','current_depth_gray_m']
             request['depth_visualization']=dict(
                 display_min_m=0.0,display_max_m=5.0,
@@ -362,6 +431,26 @@ class VisualPerception:
             request['sensor_images']=['current_rgb']
         if view_correction is not None:
             request['view_correction']=view_correction
+        # The complete session still contains this frame's RGB-D exactly once.
+        include_images=not seen_frame
+        if seen_frame:
+            request['reuse_prior_RGBD_observation_id']=source['observation_id']
+        # Historical images are introduced exactly once per observation task,
+        # with real IDs and yaws. They cannot authorize current collision safety.
+        historical_items=[]
+        if not session and historical_frames:
+            for obs,info in historical_frames[:3]:
+                historical_items.append(dict(
+                    observation_id=info['observation_id'],
+                    heading_deg=info.get('heading_deg'),
+                    pitch_deg=info.get('pitch_deg'),
+                    image_indices=[len(images),len(images)+1],
+                    historical_only=True))
+                images.append(image_url(obs,max_edge=640))
+                images.append(depth_image_url(obs,camera,max_edge=640,
+                    display_max_m=5.0))
+        if historical_items:
+            request['historical_images']=historical_items
         def validate(value):
             turns=value['next_action'] in ('turn_left','turn_right')
             if turns and not value['turn_deg']:
@@ -370,7 +459,21 @@ class VisualPerception:
             if not turns and value['turn_deg']!=0:
                 raise APIError('vlm_look_or_finish_requires_zero_turn',
                                category='structured_field')
+            if value['turn_deg'] not in allowed_turns:
+                raise APIError('vlm_turn_exceeds_remaining_sweep',
+                               category='structured_field')
+            if mode=='VERIFY':
+                known_ids={source['observation_id']}
+                known_ids.update(prior_current_ids)
+                known_ids.update(prior_historical_ids)
+                known_ids.update(t['observation_id'] for t in historical_items)
+                if not set(value.get('evidence_observation_ids',[]))<=known_ids:
+                    raise APIError('vlm_verification_cites_unknown_frame',
+                                   category='structured_field')
         verifying=mode=='VERIFY'
+        live_schema=copy.deepcopy(VERIFY_GUIDANCE_SCHEMA if verifying
+            else SCAN_GUIDANCE_SCHEMA)
+        live_schema['properties']['turn_deg']['enum']=allowed_turns
         def save_dialogue(result):
             if session is None:
                 return
@@ -381,14 +484,16 @@ class VisualPerception:
                 answer['coordinate_space']='image_1000_xyxy'
             session.append(dict(role='user',content=[
                 dict(type='text',text=json.dumps(request,ensure_ascii=False))]+[
-                dict(type='image_url',image_url=dict(url=img)) for img in images]))
+                dict(type='image_url',image_url=dict(url=img))
+                for img in (images if include_images else [])]))
             session.append(dict(role='assistant',content=json.dumps(
                 answer,ensure_ascii=False)))
         if verifying:
             result=self.complete('visual_perception','vlm_verify_subgoal',
-                VERIFY_GUIDANCE_PROMPT,request,VERIFY_GUIDANCE_SCHEMA,
-                image_url=images,cache=False,validate=validate,
-                result_schema=VERIFY_GUIDANCE_SCHEMA,
+                VERIFY_GUIDANCE_PROMPT,request,live_schema,
+                image_url=(images if include_images else None),
+                cache=False,validate=validate,
+                result_schema=live_schema,
                 conversation_messages=session)
             save_dialogue(result)
             return dict(target_visible=False,target_type='verification',
@@ -397,17 +502,19 @@ class VisualPerception:
                 candidate_approach=False,next_action=result['next_action'],
                 turn_deg=result['turn_deg'],reason=result['reason'],
                 verification_status=result['verification_status'],
-                verification_evidence=result['verification_evidence'])
+                verification_evidence=result['verification_evidence'],
+                missing_evidence=result.get('missing_evidence',''),
+                evidence_observation_ids=result.get('evidence_observation_ids',[]))
         result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
-            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy'),
-            image_url=images,cache=False,
+            request,coordinate_schema(live_schema,'image_1000_xyxy'),
+            image_url=(images if include_images else None),cache=False,
             validate=validate,
             normalize=lambda value:normalize_coordinates(value,
                 SCAN_GUIDANCE_SCHEMA,default_unit='image_1000_xyxy'),
-            result_schema=SCAN_GUIDANCE_SCHEMA,
-            validation_schema=coordinate_schema(SCAN_GUIDANCE_SCHEMA,
+            result_schema=live_schema,
+            validation_schema=coordinate_schema(live_schema,
                 'image_1000_xyxy',allow_missing_unit=True),
             conversation_messages=session)
         save_dialogue(result)

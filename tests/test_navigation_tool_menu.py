@@ -111,12 +111,15 @@ class NavigationToolMenuTests(unittest.TestCase):
         self.assertNotIn('analyze_scene',offered)
         self.assertIn('observe_for_goal',offered)
 
-    def test_one_shot_panorama_retains_only_model_authored_motion(self):
+    def test_panorama_does_not_limit_model_to_movement(self):
         tools=full_registry()
         offered=navigation_tool_menu(tools,{'last_tool':dict(
             information_options=list(CONTEXTUAL_TOOLS))},
             full_circle_commit=True)
-        self.assertEqual(list(offered),['navigate_relative'])
+        self.assertIn('navigate_relative',offered)
+        self.assertIn('observe_for_goal',offered)
+        self.assertIn('request_finish',offered)
+        self.assertNotIn('turn_and_observe',offered)
 
     def test_actual_navigation_request_has_nine_and_rejects_hidden_tool(self):
         specs=full_registry()

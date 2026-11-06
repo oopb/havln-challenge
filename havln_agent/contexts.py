@@ -228,7 +228,8 @@ def tool_summary(result):
 def planner_context(runtime):
     task=runtime.memory.task
     index=task.current_subgoal_index
-    return dict(current_subgoal=fields(task.subgoals[index],('action','target','landmark','success_criteria')),
+    return dict(current_subgoal=fields(task.subgoals[index],(
+        'action','target','landmark','completion_description','semantic_description')),
         verified_milestones=[dict(subgoal=m['subgoal'],source_observation_ids=m.get('observation_ids',[])[-2:],
             executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported']) for m in task.completion_evidence[-3:]],
         new_evidence=runtime.memory.recall_observation(runtime.memory.current_place_id,
@@ -323,7 +324,7 @@ def navigation_progress_review(memory):
             'visual_targets_are_unverified_hypotheses; no_subgoal_auto_completion',
         model_choices='If evidence suggests a phase change, evaluate '
             'observe_for_goal(mode=VERIFY), targeted ground_landmark, or model-owned '
-            'select_subgoal (provisional only); otherwise continue purposefully.')
+            'continue the current milestone; only VLM VERIFY can advance it.')
 
 
 def navigation_context(runtime):
@@ -396,7 +397,7 @@ def navigation_context(runtime):
                 min(runtime.config.get('tool_max_actions',3),
                     max(1,runtime.config['max_steps']-1-len(memory.actions))),
             unknown_depth_is_obstacle=False,
-            geometry_policy='automatic_conservative_centerline_depth_probe; full_terrain_only_explicit_model_tool',
+            geometry_policy='measured_Depth_is_Observation_Agent_input; only_fresh_centerline_probe_before_MOVE',
             geometry_autorun_during_move='central_obstacle_only',
             motion_veto='measured_centerline_occupancy_or_simulator_action_legality',
             direct_segment_max_m=3.0,
@@ -457,12 +458,10 @@ def navigation_context(runtime):
     if recent:
         result['candidate_waypoints']=recent
         result['candidate_note']='old_preview_only; navigate_local rechecks current RGB-D before each movement'
-    result['motion_tools_note']=('navigate_relative and navigate_to_pixel run a lightweight live Depth '
-        'central-obstruction check immediately before each atomic forward action. '
-        'Only coherent measured central occupancy interrupts motion for one-frame '
-        'VLM obstacle description; side-only and uncertain Depth are not automatic '
-        'vetoes. Full terrain geometry remains model-invoked with inspect_geometry. '
-        'RGB-D estimates movement after each executed action.')
+    result['motion_tools_note']=('Only fresh coherent central Depth occupancy interrupts '
+        'atomic MOVE; then Observation Agent reviews current RGB-D and measured '
+        'geometry under OBSTACLE_REVIEW. NavigationAgent has no independent '
+        'Geometry tool. RGB-D estimates movement after each executed action.')
     if runtime.active_waypoint_id and runtime.motion_controller.target is not None:
         target=runtime.motion_controller.target
         attempt=memory.active_attempt or {}
@@ -710,10 +709,12 @@ def compact_navigation_context(state):
                 best_approach=v.get('best_approach'),
                 observation_mode=v.get('observation_mode'),
                 verification=v.get('verification'),
-                subgoal_transition=v.get('subgoal_transition'),
-                approach_candidates=v.get('approach_candidates',[])[-3:],
-                blocked_approaches=v.get('blocked_approaches',[])[-4:],
-                checked_views=v.get('checked_views',[])[-3:])
+                subgoal_transition=v.get('subgoal_transition'))
+            if not state.get('latest_observation_task'):
+                out['last_tool']['observation_task'].update(
+                    approach_candidates=v.get('approach_candidates',[])[-3:],
+                    blocked_approaches=v.get('blocked_approaches',[])[-4:],
+                    checked_views=v.get('checked_views',[])[-3:])
             # Older or synthetic tool receipts may not have an observation
             # search record. Otherwise latest_observation_task is the single
             # canonical location for direct VLM evidence (avoid duplication).

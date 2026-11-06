@@ -1,4 +1,4 @@
-"""Low-frequency semantic planning; completion predicates are checked locally."""
+"""Low-frequency semantic milestones; VLM confirms actual completion."""
 import re
 
 from .api_client import APIError, TEXT, object_schema
@@ -9,7 +9,8 @@ from .progress import turn_requirement, requires_landmark_crossing, stair_motion
 # Runtime owns proof requirements; the legacy field is accepted but optional.
 GOAL_SCHEMA=object_schema(dict(action=TEXT,landmark=TEXT,target=TEXT,
     source_sentence_ids=dict(type='array',minItems=1,uniqueItems=True,items=dict(type='integer',minimum=1))))
-GOAL_SCHEMA['properties']['success_criteria']=CONDITIONS
+GOAL_SCHEMA['properties']['success_criteria']=CONDITIONS  # legacy audit only
+GOAL_SCHEMA['properties']['completion_description']=dict(TEXT,minLength=1)
 
 PLAN_SCHEMA=object_schema(dict(subgoals=dict(type='array',minItems=1,maxItems=30,items=GOAL_SCHEMA),
     final_target=dict(type='string',minLength=1,maxLength=1000),
@@ -81,15 +82,22 @@ class TaskPlanner:
             'Separate an in-place language turn from translation. Preserve human activities as landmark '
             'attributes. Merge descriptive sentences with their navigation milestone; never create an '
             'abstract recognize/note task merely to cover prose. Cite every numbered source sentence '
-            'across the plan. Return semantic outcomes only; Runtime assigns success_criteria. Never return atomic '
-            'action commands, coordinates or waypoints. A plan is intent and never proves completion. '
-            'Do not invent completion evidence predicates. Preserve boundary crossing versus arrival: '
+            'across the plan. For every milestone, provide a short '
+            'completion_description explaining what must be visibly true '
+            'of the ROBOT upon reaching the goal (not merely a distant visible target). '
+            'Never return atomic action commands, coordinates or waypoints. '
+            'A plan is intent, NOT proof; Observation Agent later confirms outcomes '
+            'against real RGB-D and movement evidence. Preserve crossing versus arrival: '
             'proceeding TO a destination does not mean passing it. Return exactly one JSON object.',
             dict(instruction=instruction,source_sentences=[dict(id=i+1,text=s) for i,s in enumerate(sentences)],
                 **({'format_feedback':format_feedback} if format_feedback else {})),
             PLAN_SCHEMA,validate=validate,cache=True,format_retry=int(bool(format_feedback)),retry_safe=True)
         return dict(plan,subgoals=[dict(g,
+            # Old predicate values are diagnostics for archived tools, never
+            # the milestone completion gate for NavigationAgent.
             success_criteria=normalize_conditions(g,index==len(plan['subgoals'])-1),
+            completion_description=g.get('completion_description') or
+                (g['action']+' '+g['target']),
             source_text=' '.join(sentences[i-1] for i in g['source_sentence_ids']))
             for index,g in enumerate(plan['subgoals'])])
 
@@ -104,10 +112,11 @@ class TaskPlanner:
             'intent=revise means correct its short semantic description, without inventing a new '
             'instruction or changing the ordered goals. Preserve human activities as landmark '
             'attributes. Do not plan coordinates, waypoints or atomic actions. '
-            'Do not generate success_criteria: Runtime deterministically owns completion predicates '
-            'and Observation Agent confirmation. No visual claim by itself proves task progress. '
+            'Use completion_description to state the expected physical outcome. '
+            'Legacy success_criteria are only diagnostics, never your completion verdict. '
+            'Observation Agent VERIFY determines final semantic completion from RGB-D. '
             'Return exactly one JSON object with intent and subgoal.',
-            dict(planner_context(r),required_success_criteria=sorted(required_conditions(goal,index==len(task.subgoals)-1)),
+            dict(planner_context(r),
                 **({'format_feedback':format_feedback} if format_feedback else {})),TASK_REVIEW,
             format_retry=int(bool(format_feedback)),retry_safe=True)
         return dict(value, success_criteria=normalize_conditions(goal,index==len(task.subgoals)-1))

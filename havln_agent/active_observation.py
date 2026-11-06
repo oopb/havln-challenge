@@ -40,6 +40,54 @@ def comparable_scan_pose(a, b):
     return abs(delta)<math.radians(1) and abs(a.get('pitch_deg',0)-b.get('pitch_deg',0))<1
 
 
+def recent_authentic_motion_frames(runtime, current_id, limit=3):
+    """Select a few real motion-relevant RGB-D views from earlier tasks.
+
+    Old frames are historical geometry and cannot authorize current MOVE.
+    All missing/evicted frames are skipped; never invent images.
+    """
+    frame_reader=getattr(runtime,'_vision_frame',None)
+    route_reader=getattr(runtime.memory,'route_progress_summary',None)
+    if not callable(frame_reader) or not callable(route_reader):
+        return []
+    progress=route_reader()
+    subgoal=runtime.memory.task.current_subgoal_index
+    segments=[v for v in progress.get('successful_segments',[])
+        if v.get('subgoal')==subgoal]
+    blocks=[v for v in progress.get('blocked_at_prior_stances',[])
+        if v.get('subgoal') in (None,'sg_%d'%subgoal)]
+    ids=[]
+    if segments:
+        ids.extend([segments[-1].get('start_observation_id'),
+                    segments[-1].get('end_observation_id')])
+    if blocks:
+        ids.append(blocks[-1].get('source_observation_id'))
+    frames=[]
+    seen=set()
+    for observation_id in ids:
+        if not observation_id or observation_id==current_id or observation_id in seen:
+            continue
+        seen.add(observation_id)
+        try:
+            observation,source=frame_reader(observation_id)
+        except (ValueError,KeyError,OSError,RuntimeError):
+            continue
+        if (source.get('observation_id')!=observation_id or
+                getattr(observation,'rgb',None) is None or
+                getattr(observation,'depth',None) is None):
+            continue
+        pose=source.get('pose') or {}
+        frames.append((observation,dict(
+            observation_id=observation_id,
+            heading_deg=round(math.degrees(pose.get('heading',0)),2),
+            pitch_deg=round(pose.get('pitch_deg',0),2),
+            motion_epoch=pose.get('motion_epoch'),
+            historical_only=True)))
+        if len(frames)>=limit:
+            break
+    return frames
+
+
 class ObservationController:
     """Synchronously scan in one direction; each VLM checkpoint is optional."""
 
@@ -310,24 +358,32 @@ class ObservationController:
                         'APPROACH_CANDIDATE_FOUND','NO_RELIABLE_CANDIDATE',
                         'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN')
                     or prev.get('intent','APPROACH')!=mode
-                    or (prev.get('target_types')!=list(target_types)
-                        and prev.get('objective','').strip().casefold()!=objective.strip().casefold())
+                    or prev.get('target_types')!=list(target_types)
+                    or ' '.join(prev.get('objective','').casefold().split())
+                       !=' '.join(objective.casefold().split())
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
                     or not comparable_scan_pose(prev.get('start_pose'),start)):
                 continue
+            current_heading=math.degrees(start['heading'])
+            def rebound(hypothesis):
+                value=copy.deepcopy(hypothesis)
+                if value is not None:
+                    value['relative_turn_deg_from_current']=round(
+                        (value['heading_deg']-current_heading+180)%360-180,2)
+                return value
             return dict(status='NO_NEW_INFORMATION',
                 outcome='REPEATED_SEARCH_NO_NEW_VIEW',
                 reason='unchanged_RGBD_stance_and_observation_intent_reuse',
                 verification=copy.deepcopy(prev.get('verification')),
                 observation_mode=mode,
                 covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
-                checkpoints=[],best_candidate=copy.deepcopy(prev.get('candidate')),
-                best_cue=copy.deepcopy(prev.get('best_cue')),
-                best_approach=copy.deepcopy(prev.get('best_approach')),
-                approach_candidates=copy.deepcopy(prev.get('approach_candidates',[])),
-                blocked_approaches=copy.deepcopy(prev.get('blocked_approaches',[])),
+                checkpoints=[],best_candidate=rebound(prev.get('candidate')),
+                best_cue=rebound(prev.get('best_cue')),
+                best_approach=rebound(prev.get('best_approach')),
+                approach_candidates=[rebound(v) for v in prev.get('approach_candidates',[])],
+                blocked_approaches=[rebound(v) for v in prev.get('blocked_approaches',[])],
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',intent=mode,objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
@@ -344,6 +400,10 @@ class ObservationController:
         approach_candidates=[]
         blocked_approaches=[]
         session=[]  # Full RGB-D and assistant replies for one observation task.
+        historical_frames=recent_authentic_motion_frames(
+            r,initial['observation_id'])
+        record['historical_context_observation_ids']=[
+            info['observation_id'] for _,info in historical_frames]
         seen=set()
         # Physical yaw visits help detect costly 180-degree undo sweeps even
         # when a LOOK changed pitch. Only VLM checkpoints count as SEMANTIC
@@ -396,15 +456,24 @@ class ObservationController:
                 for p in record['checkpoints']]
             last_visual=(record['checkpoints'][-1]['visual']
                          if record['checkpoints'] else {})
+            final_status={'SUBGOAL_CONFIRMED':'CONFIRMED',
+                'SUBGOAL_NOT_YET':'NOT_YET','SUBGOAL_UNCERTAIN':'UNCERTAIN'
+                }.get(outcome,'UNCERTAIN')
             verification=(dict(
                 subgoal_index=record['subgoal'],
-                status=last_visual.get('verification_status','UNCERTAIN'),
-                evidence=last_visual.get('verification_evidence',''),
+                status=final_status,
+                evidence=(last_visual.get('verification_evidence','')
+                    if outcome in ('SUBGOAL_CONFIRMED','SUBGOAL_NOT_YET') else ''),
+                final_verdict=outcome in ('SUBGOAL_CONFIRMED',
+                    'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN'),
                 uncertainty=last_visual.get('uncertainty',''),
                 source_observation_id=(record['checkpoints'][-1]['observation_id']
                     if record['checkpoints'] else None),
                 observation_ids=list(dict.fromkeys(
                     p['observation_id'] for p in record['checkpoints'])),
+                cited_observation_ids=list(last_visual.get(
+                    'evidence_observation_ids',[])),
+                missing_evidence=last_visual.get('missing_evidence',''),
                 source='vlm_real_rgbd_history') if mode=='VERIFY' else None)
             record.update(verification=copy.deepcopy(verification),
                 session_rounds=len(session)//2,
@@ -428,6 +497,8 @@ class ObservationController:
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),
                 session_rounds=len(session)//2,
+                historical_context_observation_ids=list(
+                    record['historical_context_observation_ids']),
                 observation_owner='visual_perception_vlm',
                 view_replan_attempts=len(rejected_views),
                 candidate_refinement_views=record['candidate_refinement_views'],
@@ -504,9 +575,12 @@ class ObservationController:
                         heading_deg=round(math.degrees(
                             r.motion_controller.pose()['heading']),2),
                         center_obstruction=center,
+                        swept_body_state=wide.get('state'),
+                        swept_body_reason=wide.get('reason'),
                         swept_body_depth={k:swept[k] for k in (
                             'path_state','clearance','unknown_sweep_pixels',
-                            'nearest_collision_point','rejection_reasons') if k in swept},
+                            'nearest_collision_point','rejection_reasons',
+                            'human_occupancy') if k in swept},
                         scope='current_public_depth_only_not_route_certification')
                 except (AttributeError,RuntimeError,ValueError,TypeError):
                     geometry_facts=dict(status='UNAVAILABLE')
@@ -516,7 +590,8 @@ class ObservationController:
                     r.observation,source,objective,target_types,history,
                     max(0,sweep_degrees-turned),session=session,mode=mode,
                     route_history=route_history,
-                    geometry_evidence=geometry_facts,**options)
+                    geometry_evidence=geometry_facts,
+                    historical_frames=historical_frames,**options)
             except (APIError,BudgetExceeded) as error:
                 return finish('VISION_UNAVAILABLE','PARTIAL',type(error).__name__)
             position=r.motion_controller.pose()
@@ -609,6 +684,7 @@ class ObservationController:
                     target_kind=visual.get('target_kind'),
                     evidence=(visual.get('evidence') or '')[:250],
                     uncertainty=(visual.get('uncertainty') or '')[:160],
+                    expected_progress=visual.get('expected_progress','UNKNOWN'),
                     probe=probe,
                     direction_is_a_hypothesis_not_motion_authorization=True)
                 if blocked:
@@ -631,16 +707,25 @@ class ObservationController:
                         required_next='look_or_turn_to_another_bearing_or_finish',
                         note='VLM_choose_a_new_view; NO_forward_was_executed')
                     continue
-                approach_candidates.append(proposal)
+                if not any(p['observation_id']==proposal['observation_id'] and
+                           p['heading_deg']==proposal['heading_deg']
+                           for p in approach_candidates):
+                    approach_candidates.append(proposal)
+                # Keep the VLM's final chosen hypothesis as the summary.
+                # Do not impose Python semantic priority between ADVANCE,
+                # DETOUR and REVERSE; NavigationAgent evaluates ALL options.
                 best_approach=proposal
+                if candidate_found_checkpoint is None:
+                    candidate_found_checkpoint=len(record['checkpoints'])-1
                 # Persist the accepted bearing's *visual* evidence rather
                 # than retaining a higher-confidence but blocked landmark
                 # from an earlier viewing direction as the top approach.
                 if (visual.get('target_visible') is True and
                         visual.get('target_kind') in ('ENTRY','APPROACH')):
                     best_candidate=candidate
-                return finish('APPROACH_CANDIDATE_FOUND',
-                    reason='vlm_chose_current_bearing_without_confirmed_center_obstacle')
+                if action=='finish':
+                    return finish('APPROACH_CANDIDATE_FOUND',
+                        reason='vlm_finished_with_measured_candidate')
             # Rejected VLM camera choices are corrected with another VLM
             # decision on the SAME genuine image. No main LLM call and no
             # physical TURN is spent on a duplicate heading/pitch pair.
@@ -653,6 +738,9 @@ class ObservationController:
                     requested_pitch_deg=requested_pitch))
                 consecutive_replans+=1
                 if consecutive_replans>max_replans:
+                    if best_approach:
+                        return finish('APPROACH_CANDIDATE_FOUND',
+                            reason='vlm_refinement_exhausted_same_frame_corrections')
                     if best_candidate:
                         return finish('TARGET_CANDIDATE_FOUND',
                             reason='vlm_refinement_exhausted_same_frame_corrections')
@@ -667,7 +755,10 @@ class ObservationController:
                         for p in record['checkpoints'][-12:]])
                 return None
             if action=='finish':
-                if blocked_approaches and best_approach is None:
+                if best_approach is not None:
+                    return finish('APPROACH_CANDIDATE_FOUND',
+                        reason='vlm_finished_after_candidate_comparison')
+                if blocked_approaches:
                     return finish('NO_RELIABLE_CANDIDATE',
                         reason='vlm_finished_after_measured_candidate_obstacle')
                 return finish('TARGET_CANDIDATE_FOUND' if best_candidate else
@@ -680,8 +771,9 @@ class ObservationController:
             if (candidate_found_checkpoint is not None
                     and len(record['checkpoints'])-1-candidate_found_checkpoint
                         >=max_candidate_refinement_views):
-                return finish('NO_RELIABLE_CANDIDATE' if blocked_approaches
-                              and best_approach is None else 'TARGET_CANDIDATE_FOUND',
+                return finish('APPROACH_CANDIDATE_FOUND' if best_approach else
+                              'NO_RELIABLE_CANDIDATE' if blocked_approaches else
+                              'TARGET_CANDIDATE_FOUND',
                     reason='bounded_vlm_candidate_refinement_completed')
             if action in ('look_up','look_down'):
                 new_pitch=r.pitch_deg+(r.camera.tilt_angle if action=='look_up'
@@ -741,8 +833,8 @@ class ObservationController:
                 # checkpoint remains; otherwise do not issue an extra turn.
                 continue
         return finish('SUBGOAL_UNCERTAIN' if mode=='VERIFY' else
-                      'NO_RELIABLE_CANDIDATE' if blocked_approaches and
-                      best_approach is None else
+                      'APPROACH_CANDIDATE_FOUND' if best_approach else
+                      'NO_RELIABLE_CANDIDATE' if blocked_approaches else
                       'TARGET_CANDIDATE_FOUND' if best_candidate else
                       'CUE_ONLY' if best_cue else 'SEARCH_REGION_COVERED_NO_MATCH',
             reason='bounded_vlm_checkpoints_exhausted')

@@ -277,3 +277,58 @@ python -m unittest discover -s tests -p 'test_pre_forward_obstacle_perception.py
 
 A real Habitat batch (same episode with Batch 4-17 starting pose) is still
 needed to validate success rate, forward proportion, and token/latency cost.
+
+
+## Agent I/O cleanup after PR #65 (2026-11-06)
+
+The Observation Agent now distinguishes **current viewpoint evidence** from
+**historical motion evidence** and reports both with real observation IDs.
+
+- SEARCH, APPROACH and OBSTACLE_REVIEW return multiple local approach
+  hypotheses with VLM-authored \`expected_progress\`
+  (\`ADVANCE\`/\`REVERSE\`/\`DETOUR\`/\`UNKNOWN\`). The label is not a movement
+  permit or Python semantic gate. NavigationAgent still chooses actual motion.
+- A non-blocked candidate is saved, but **does not automatically finish** the
+  observation. The VLM may choose another real turn/look to compare candidates,
+  or choose \`finish\` with the accumulated list. Candidate refinement remains
+  bounded by the existing episode and observation budgets.
+- In VERIFY, tentative CONFIRMED is not task completion if a camera action
+  is still requested, or if a task is interrupted. Only the final VLM
+  \`finish\` produces a commit-eligible verification receipt. The receipt
+  contains \`evidence_observation_ids\` when model-provided; invalid IDs are
+  rejected. \`missing_evidence\` is conveyed to the NavigationAgent.
+- A new observation task can preload at most three genuine prior RGB-D
+  motion views (last successful segment's start/end and last local obstacle).
+  Each is labeled with a frame ID, original heading, pitch and historical scope.
+  Missing/evicted images are skipped, never synthesized. Task-local history
+  still replays ALL earlier messages and images on every VLM call.
+- When the VLM needs to correct a decision on the identical observation ID,
+  the previously transmitted RGB-D stays in the replayed session and is not
+  encoded or attached twice. The request explicitly references the earlier
+  frame. The available turn angles are provided with every request and
+  reflected in its schema, preventing pointless impossible 90-degree turns
+  when only 30 degrees of sweep remain.
+- Route evidence includes estimated motion uncertainty. An obstacle report
+  includes the stance's place, local x/z, motion epoch and yaw, never an
+  episode-global blocked direction.
+- Repeat-observation caching requires the actual objective text, target
+  labels, VLM mode, physical stance, RGB and Depth to match. A second question
+  about "stairs" cannot accidentally reuse the answer to a different
+  question just because both share the same target type.
+- Complete angular observation is a **one-shot NavigationAgent advisory**.
+  It never removes VERIFY or OBSERVE from the tool menu and never forces
+  an unmeasured forward command. A fresh task/stance may issue the advisory
+  again.
+
+TaskPlanner now requests a natural-language \`completion_description\`
+for each milestone and passes it to the VLM. Old deterministic
+\`success_criteria\` remain only for archived legacy paths and diagnostics,
+not for VLM semantic completion.
+
+Regression tests live in \`tests/test_agent_io_contracts.py\`, alongside the
+existing observation, navigation and task-planning contract suites.
+
+The model-visible transcript replays prior messages rather than repeating route memory
+and visual summaries in every newly appended turn. The first turn holds the
+relevant motion context; later turns retain compact covered-yaw data and fresh
+geometry measurements. All historical images remain available in the transcript.

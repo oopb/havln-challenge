@@ -114,10 +114,8 @@ def navigation_tool_menu(registry, state, *, orientation=False,
     This is NOT the full execution registry. The post-model executor still
     validates against the unchanged registry and owns every atomic action.
     """
-    if full_circle_commit:
-        return ({'navigate_relative': registry['navigate_relative']}
-                if 'navigate_relative' in registry else {})
-
+    # Deprecated full_circle_commit argument is accepted for compatibility;
+    # a panorama no longer forces a MOVE-only schema.
     extras = contextual_tool_names(state, orientation=orientation)
     names = CORE_NAVIGATION_TOOLS + tuple(
         name for name in CONTEXTUAL_TOOLS if name in extras)
