@@ -370,6 +370,8 @@ class ObservationController:
                         (mode!='VERIFY' or
                          now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
+                    or prev.get('subgoal_generation',0)!=r.memory.task.subgoal_generations.get(
+                        str(r.memory.task.current_subgoal_index),0)
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
                     or not comparable_scan_pose(prev.get('start_pose'),start)):
@@ -396,6 +398,8 @@ class ObservationController:
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',intent=mode,objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
+            subgoal_generation=r.memory.task.subgoal_generations.get(
+                str(r.memory.task.current_subgoal_index),0),
             start_observation_id=initial['observation_id'],start_pose=dict(start),
             start_rgb_hash=initial.get('rgb_hash'),start_depth_hash=initial.get('depth_hash'),
             started_monotonic=now,direction='vlm_selected',look=look,
@@ -540,7 +544,9 @@ class ObservationController:
             if verification:
                 latest_forward=next((a['step'] for a in reversed(r.memory.actions)
                     if a.get('action')=='MOVE_FORWARD'),None)
-                r.memory.evidence.note_verification(verification,latest_forward)
+                r.memory.evidence.note_verification(
+                    verification,latest_forward,
+                    generation=record['subgoal_generation'])
             record.update(verification=copy.deepcopy(verification),
                 navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,

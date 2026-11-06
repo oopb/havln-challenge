@@ -87,8 +87,9 @@ class EvidenceLedger:
         self.surface_measurements.append(copy.deepcopy(measurement))
         return copy.deepcopy(measurement)
 
-    def note_verification(self, receipt, latest_motion_step):
+    def note_verification(self, receipt, latest_motion_step, generation=0):
         entry=dict(subgoal_index=receipt.get('subgoal_index'),
+            subgoal_generation=generation,
             status=receipt.get('status'),
             final_verdict=bool(receipt.get('final_verdict')),
             observation_ids=list(receipt.get('observation_ids') or []),

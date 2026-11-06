@@ -15,8 +15,10 @@ def latest_observation_for_subgoal(memory,index):
     Previous milestone reports remain available as historical evidence, not
     as unscoped instructions for the NavigationAgent.
     """
+    generation=memory.task.subgoal_generations.get(str(index),0)
     return next((item for item in reversed(memory.observation_searches)
-                 if item.get('subgoal')==index),None)
+                 if item.get('subgoal')==index
+                 and item.get('subgoal_generation',0)==generation),None)
 
 
 def last_tool_result_for_subgoal(memory,index):
@@ -303,7 +305,9 @@ def navigation_progress_review(memory):
     latest_targets=[]
     seen=set()
     for target in reversed(getattr(memory,'visual_targets',[])):
-        if target.get('subgoal_index')!=index:
+        if (target.get('subgoal_index')!=index or
+                target.get('subgoal_generation',0)!=
+                task.subgoal_generations.get(str(index),0)):
             continue
         key=(target.get('target_type'),target.get('target_kind'),
              target.get('selected_observation_id'))
@@ -330,7 +334,9 @@ def navigation_progress_review(memory):
         item.get('verification') for item in reversed(
             getattr(memory,'observation_searches',[]))
         if item.get('intent')=='VERIFY' and
-        item.get('subgoal')==index and item.get('verification')
+        item.get('subgoal')==index and
+        item.get('subgoal_generation',0)==task.subgoal_generations.get(
+            str(index),0) and item.get('verification')
     ),None)
     return dict(
         current_subgoal_index=index,
@@ -417,6 +423,7 @@ def navigation_context(runtime):
         prior_subgoal_motion_evidence=prior_motion_evidence,
         task_selection=dict(
             current_subgoal_index=index,
+            subgoal_generation=memory.task.subgoal_generations.get(str(index),0),
             total_subgoals=len(memory.task.subgoals),
             verified_subgoals=list(getattr(memory.task,'completed_subgoals',[])),
             provisional_transitions=getattr(memory.task,'provisional_transitions',[])[-3:],
@@ -719,8 +726,11 @@ def compact_navigation_context(state):
         n['visual_targets']=[]
         current_index=(state.get('task_selection') or {}).get(
             'current_subgoal_index')
+        current_generation=(state.get('task_selection') or {}).get(
+            'subgoal_generation',0)
         for v in [x for x in m.get('visual_target_memory',[])
-                  if x.get('subgoal_index')==current_index][-2:]:
+                  if x.get('subgoal_index')==current_index
+                  and x.get('subgoal_generation',0)==current_generation][-2:]:
             t=fields(v,('id','status','target_type','target_kind',
                 'selected_observation_id','absolute_heading_deg',
                 'pitch_deg','target_region','expected_progress'))

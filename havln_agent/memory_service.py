@@ -117,6 +117,8 @@ class MemoryService(MemoryRecords):
             else dict(objective=objective,target_types=list(target_types)))
         for existing in reversed(self.visual_targets):
             if (existing.get('subgoal_index')==self.task.current_subgoal_index
+                    and existing.get('subgoal_generation',0)==self.task.subgoal_generations.get(
+                        str(self.task.current_subgoal_index),0)
                     and existing.get('selected_observation_id')==identifier
                     and existing.get('target_type')==candidate.get('target_type')
                     and existing.get('target_kind')==kind):
@@ -131,6 +133,8 @@ class MemoryService(MemoryRecords):
             id='visual_target_%04d'%len(self.visual_targets),
             visual_source='vlm_active_observation',
             subgoal_index=self.task.current_subgoal_index,
+            subgoal_generation=self.task.subgoal_generations.get(
+                str(self.task.current_subgoal_index),0),
             place_id=selected['place_id'],
             motion_epoch=pose.get('motion_epoch',0),
             viewpoint_generation=pose.get('viewpoint_generation',0),
@@ -162,7 +166,9 @@ class MemoryService(MemoryRecords):
         if not candidate_id:
             return None
         candidate=next((v for v in self.visual_targets if v['id']==candidate_id
-            and v['subgoal_index']==action.get('subgoal')),None)
+            and v['subgoal_index']==action.get('subgoal')
+            and v.get('subgoal_generation',0)==self.task.subgoal_generations.get(
+                str(action.get('subgoal')),0)),None)
         if candidate is None:
             self.event('motion_candidate_id_not_resolved',
                 candidate_id=candidate_id,step=action.get('step'))

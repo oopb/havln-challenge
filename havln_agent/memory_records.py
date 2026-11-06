@@ -59,6 +59,9 @@ class TaskMemory:
     subgoal_started: int = 0
     subgoal_start_steps: dict = field(default_factory=dict)
     provisional_transitions: list = field(default_factory=list)
+    # Incremented on explicit review-driven reactivation; a prior
+    # CONFIRMED is archived, not an active result of the new attempt.
+    subgoal_generations: dict = field(default_factory=dict)
 
 
 class MemoryRecords:
@@ -481,6 +484,12 @@ class MemoryRecords:
         task.completed_subgoals=[
             i for i in task.completed_subgoals if i<subgoal_index]
         task.current_subgoal_index=subgoal_index
+        for affected_index in range(subgoal_index,len(task.subgoals)):
+            key=str(affected_index)
+            task.subgoal_generations[key]=task.subgoal_generations.get(key,0)+1
+        for transition in task.provisional_transitions:
+            if transition.get('from_subgoal',-1)>=subgoal_index:
+                transition['status']='SUPERSEDED_BY_COMPLETION_REVIEW'
         task.subgoal_started=task.subgoal_start_steps.get(
             str(subgoal_index),0)
         self.progress_stage='IN_PROGRESS'
