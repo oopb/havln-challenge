@@ -82,8 +82,9 @@ Both phases use the same six-action JSON contract and Score. Phase 1 and Phase
 | 💡 **Best Innovative Solution** | Certificate recognizing outstanding creativity and technical innovation |
 | 🎤 **Oral Presentations** | Selected top-performing teams will be invited to give oral presentations at the **RoboPAD Workshop @ NeurIPS 2026** |
 
-For the six-component HA-VLN API Agent, see [Agent setup and commands](docs/api_agent.md)
-and the [v5 implementation report](docs/agent_v5_implementation.md).
+For the API-driven HA-VLN Agent, see [evidence-grounded multimodal
+navigation](docs/evidence_grounded_navigation.md) and
+[active observation](docs/active_observation.md).
 The canonical configuration is `configs/agent.yaml`; real Habitat testing is run manually.
 
 **Post-obstacle exploration:** A `PARTIAL` waypoint that advanced once and
