@@ -55,6 +55,8 @@ class Batch418VerificationFeedbackTests(unittest.TestCase):
             'Confirm arrival',['landing'],90,mode='VERIFY')
         self.assertEqual(response['verification']['status'],'NOT_YET')
         self.assertEqual(response['navigation_feedback']['recommended_next'],'UNKNOWN')
+        self.assertNotIn('Switch to the future task',
+                         response['navigation_feedback']['navigation_suggestion'])
 
     def test_rewording_verify_same_unchanged_rgbd_reuses_observation(self):
         r=FakeRuntime([])
