@@ -129,12 +129,10 @@ class NavigationAgent:
             # One model-authored route attempt has already been issued at
             # this stance: don't issue a second, conflicting stall advisory.
             advisory=None
-        vlm_observation_just_finished=(
-            (context.get('last_tool') or {}).get('observation_owner')
-            == 'visual_perception_vlm')
+        # A full VLM-owned sweep is precisely when this advice is useful:
+        # do not suppress the review just because observation was the last tool.
         panorama_review=(
             bool(panorama.get('all_azimuths_observed')) and not orientation
-            and not vlm_observation_just_finished
             and getattr(self,'_panorama_committed_signature',None)!=signature)
         # A completed panorama changes the ADVICE, never the tool whitelist.
         offered_tools=navigation_tool_menu(runtime.registry,context,
