@@ -472,8 +472,9 @@ class ObservationController:
                 status=final_status,
                 evidence=(last_visual.get('verification_evidence','')
                     if outcome in ('SUBGOAL_CONFIRMED','SUBGOAL_NOT_YET') else ''),
-                final_verdict=outcome in ('SUBGOAL_CONFIRMED',
-                    'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN'),
+                # UNCERTAIN from a depleted checkpoint budget is not a
+                # final VLM judgement. Only the VLM's own explicit finish is.
+                final_verdict=(reason=='vlm_semantic_subgoal_observation'),
                 uncertainty=last_visual.get('uncertainty',''),
                 source_observation_id=(record['checkpoints'][-1]['observation_id']
                     if record['checkpoints'] else None),
@@ -488,8 +489,11 @@ class ObservationController:
             # final VERIFY result. Conflicting suggested transitions are
             # discarded while keeping the original observation evidence.
             advice_status=last_visual.get('recommended_next','UNKNOWN')
-            if (mode=='VERIFY' and final_status!='CONFIRMED'
-                    and advice_status=='PROCEED_NEXT_TASK'):
+            if (mode=='VERIFY' and (
+                    (final_status!='CONFIRMED' and
+                     advice_status=='PROCEED_NEXT_TASK')
+                    or (reason!='vlm_semantic_subgoal_observation' and
+                        advice_status!='GATHER_MORE_EVIDENCE'))):
                 advice_status='UNKNOWN'
             summary=(last_visual.get('observation_summary') or
                 last_visual.get('verification_evidence') or
