@@ -585,14 +585,9 @@ class ObservationController:
             # Reliable blockers are fed to the SAME VLM observation loop.
             if mode!='VERIFY' and visual.get('candidate_approach',False):
                 heading=point['heading_deg']
-                center={}
-                try:
-                    geometry=r.geometry()
-                    center_probe=getattr(geometry,'central_forward_obstruction',None)
-                    if callable(center_probe):
-                        center=center_probe()
-                except (AttributeError,RuntimeError,ValueError):
-                    center={}
+                # The SAME measured Depth snapshot was already supplied to
+                # this VLM checkpoint; do not recompute a contradictory probe.
+                center=geometry_facts.get('center_obstruction') or {}
                 blocked=center.get('confirmed') is True
                 probe=dict(status=('BLOCKED' if blocked else 'UNCONFIRMED'),
                     reason=(center.get('reason') or 'candidate_live_depth_not_confirmed'),

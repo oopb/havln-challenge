@@ -90,7 +90,7 @@ class RGBDApproachAgentTests(unittest.TestCase):
         self.assertEqual(second['history'][-1]['approach_probe_status'],'BLOCKED')
         self.assertEqual(r.step_calls,['TURN_LEFT']*3)
         self.assertNotIn('MOVE_FORWARD',r.step_calls)
-        self.assertEqual(g.central_forward_obstruction.call_count,2)
+        self.assertEqual(g.central_forward_obstruction.call_count,3)
         g.assess_step.assert_not_called()
         self.assertEqual([a['probe']['status'] for a in
                           result['approach_candidates']],['UNCONFIRMED'])
