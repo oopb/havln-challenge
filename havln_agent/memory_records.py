@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 from .observation import frame_info
+from .evidence_ledger import EvidenceLedger
 
 
 def angle_error(a, b):
@@ -80,6 +81,7 @@ class MemoryRecords:
         self.queries = 0
         self.tool_ledger = []
         self.progress_stage, self.progress_feedback = 'NOT_STARTED', None
+        self.evidence=EvidenceLedger()
 
     def event(self, kind, **data):
         self.events.append(dict(event=kind, step=len(self.actions), **data))
@@ -446,6 +448,7 @@ class MemoryRecords:
             humans=self.humans,
             revisits=self.revisits,
             statistics=self.stats(),
+            evidence_ledger=self.evidence.summary(),
             tool_ledger=self.tool_ledger,
             progress_state=dict(stage=self.progress_stage, feedback=self.progress_feedback),
         )

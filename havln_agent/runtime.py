@@ -251,6 +251,9 @@ class AgentRuntime(ToolExecutor):
                 valid = registered_action(action_record, {o['observation_id']:o for o in self.memory.observations})
                 action_record['evidence_state'] = 'motion_verified' if valid else 'sensor_recorded'
                 self.memory.note_motion()
+                chosen=(self.memory.active_attempt or {}).get('target',{}).get(
+                    'candidate_id')
+                self.memory.record_candidate_motion(chosen,action_record)
             self.event('atomic_action', source='environment_receipt', action=action, feedback=value['feedback'])
         return value
 
@@ -284,8 +287,13 @@ class AgentRuntime(ToolExecutor):
             return None
 
         source=self.source()
+        blocked_pose=self.motion_controller.pose()
+        blocked_at=self.memory.evidence.blocked_forward(
+            source,blocked_pose,reason='measured_centerline_obstacle',
+            center=center)
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
+            blocked_at=blocked_at,
             reason='measured_centerline_obstacle')
         # A measured central obstacle stops the pending atomic step.
         # The NEXT Observation Agent OBSTACLE_REVIEW gets real RGB-D and
@@ -327,6 +335,7 @@ class AgentRuntime(ToolExecutor):
             atomic_move_not_executed=True,
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
+            blocked_at=blocked_at,
             safety=safety,obstacle_observation=combined,
             information_options=['observe_for_goal','navigate_relative'])
 
@@ -709,7 +718,8 @@ class AgentRuntime(ToolExecutor):
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
-    def _navigate_relative(self, turn_deg, distance_m, _source=None):
+    def _navigate_relative(self, turn_deg, distance_m, candidate_id=None,
+                           _source=None):
         """Direct model intent, without a preselected semantic candidate.
 
         The bearing is relative to the current heading, not a global pose or
@@ -745,6 +755,7 @@ class AgentRuntime(ToolExecutor):
             first_step='EXECUTABLE', execution_status='PROPOSED',
             objective=dict(purpose='model_directed_motion', completes_language_goal=False),
             direction_source='navigation_agent',
+            candidate_id=candidate_id,
             requires_post_turn_recheck=bool(actual_turn),
             geometric_status='NOT_YET_VALIDATED',
             endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
@@ -762,7 +773,7 @@ class AgentRuntime(ToolExecutor):
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='model_selected_atomic_actions_not_metric_arrival'))
 
-    def _navigate_to_pixel(self, u, v, distance_m):
+    def _navigate_to_pixel(self, u, v, distance_m, candidate_id=None):
         """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
         if not (math.isfinite(u) and math.isfinite(v) and
                 0 <= u <= 1 and 0 <= v <= 1):
@@ -790,6 +801,7 @@ class AgentRuntime(ToolExecutor):
             return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
         pixel_source = self.source()
         result = self._navigate_relative(turn_deg,distance_m,
+                                         candidate_id=candidate_id,
                                          _source=pixel_source)
         return dict(result, pixel_target=dict(u=u,v=v,
             source_observation_id=pixel_source['observation_id'],

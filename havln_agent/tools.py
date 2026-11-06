@@ -656,7 +656,8 @@ class ToolExecutor:
                 return self._navigation_feedback(
                     path,checked,result['status'],result.get('reason'),
                     **{k:result[k] for k in (
-                        'safety','obstacle_observation','information_options')
+                        'safety','obstacle_observation','blocked_at',
+                        'information_options')
                         if k in result})
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
