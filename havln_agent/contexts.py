@@ -659,7 +659,7 @@ def compact_navigation_context(state):
     if state.get('progress_review'):
         p=state['progress_review']
         out['progress_review']=fields(p,(
-            'current_subgoal_index','next_subgoal','registered_forward_steps',
+            'current_subgoal_index','registered_forward_steps',
             'unknown_forward_steps','observed_downward_m_est',
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_directional_step',
@@ -715,12 +715,12 @@ def compact_navigation_context(state):
                 best_candidate=v.get('best_candidate'),
                 best_cue=v.get('best_cue'),
                 best_approach=v.get('best_approach'),
-                navigation_feedback=v.get('navigation_feedback'),
                 observation_mode=v.get('observation_mode'),
                 verification=v.get('verification'),
                 subgoal_transition=v.get('subgoal_transition'))
             if not state.get('latest_observation_task'):
                 out['last_tool']['observation_task'].update(
+                    navigation_feedback=v.get('navigation_feedback'),
                     approach_candidates=v.get('approach_candidates',[])[-3:],
                     blocked_approaches=v.get('blocked_approaches',[])[-4:],
                     checked_views=v.get('checked_views',[])[-3:])
