@@ -30,7 +30,7 @@ class VLMGuide:
         self.answers=list(answers)
         self.calls=[]
     def guide_scan_view(self,frame,source,objective,targets,history,remaining_turn_deg,
-                        prior_targets=None,observed_yaw_pitch=None,view_correction=None):
+                        prior_targets=None,observed_yaw_pitch=None,view_correction=None,**kwargs):
         self.calls.append(dict(observation_id=source['observation_id'],
             objective=objective,targets=targets,history=history,
             remaining_turn_deg=remaining_turn_deg,

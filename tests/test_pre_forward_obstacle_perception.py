@@ -68,9 +68,9 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         self.assertEqual(len(r.memory.actions),0)
         self.assertEqual(g.movement_probe.call_count,1)
         self.assertEqual(g.central_forward_obstruction.call_count,1)
-        r.visual_perception.describe_obstacle.assert_called_once()
+        r.visual_perception.describe_obstacle.assert_not_called()
         self.assertEqual(result['obstacle_observation']['visual']['description'],
-                         visual_result()['description'])
+                         '')
         self.assertEqual(result['obstacle_observation']['depth']['nearest_along_m'],.14)
         self.assertEqual(result['obstacle_observation']['source_observation_id'],'obs_0000')
         self.assertFalse(result['target_reached'])
@@ -81,8 +81,8 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         second=r._navigate_relative(0,.5)
         self.assertEqual(first['status'],'BLOCKED')
         self.assertEqual(second['status'],'BLOCKED')
-        self.assertTrue(second['obstacle_observation']['visual_reused_for_identical_frame'])
-        self.assertEqual(r.visual_perception.describe_obstacle.call_count,1)
+        self.assertFalse(second['obstacle_observation']['visual_reused_for_identical_frame'])
+        self.assertEqual(r.visual_perception.describe_obstacle.call_count,0)
         self.assertEqual(r.step_callback.call_count,0)
 
     def test_uncertain_wide_depth_not_an_automatic_gate_or_vlm_call(self):
@@ -119,11 +119,11 @@ class ForwardDepthVisualHandoffTests(unittest.TestCase):
         result=r._navigate_relative(0,.5)
         self.assertEqual(result['status'],'BLOCKED')
         self.assertEqual(result['obstacle_observation']['visual']['status'],
-                         'UNAVAILABLE')
+                         'DEFERRED_TO_OBSERVATION_AGENT')
         self.assertEqual(result['obstacle_observation']['depth']['confirmed'],True)
         self.assertEqual(r.step_callback.call_count,0)
         self.assertEqual(r._navigate_relative(0,.5)['status'],'BLOCKED')
-        r.visual_perception.describe_obstacle.assert_called_once()
+        r.visual_perception.describe_obstacle.assert_not_called()
 
     def test_joint_depth_and_visual_survive_compact_navigation_context(self):
         r,g=self.blocked_runtime()

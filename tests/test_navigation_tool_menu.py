@@ -18,17 +18,17 @@ def full_registry():
 
 
 class NavigationToolMenuTests(unittest.TestCase):
-    def test_full_executor_registry_kept_but_default_model_sees_nine(self):
+    def test_full_executor_registry_kept_but_default_model_sees_six(self):
         tools=full_registry()
         self.assertEqual(len(tools),20)
-        self.assertEqual(len(CORE_NAVIGATION_TOOLS),9)
+        self.assertEqual(len(CORE_NAVIGATION_TOOLS),6)
         offered=navigation_tool_menu(tools,{})
         self.assertEqual(tuple(offered),CORE_NAVIGATION_TOOLS)
         self.assertNotIn('analyze_scene',offered)
         self.assertNotIn('assess_entry',offered)
         self.assertNotIn('turn_and_observe',offered)
         self.assertNotIn('navigate_to_pixel',offered)
-        self.assertEqual(len(navigation_schema(offered)['oneOf']),9)
+        self.assertEqual(len(navigation_schema(offered)['oneOf']),6)
         self.assertEqual(len(navigation_schema(tools)['oneOf']),20)
         self.assertIn('analyze_scene',tools)
         self.assertIn('turn_and_observe',tools)
@@ -77,11 +77,11 @@ class NavigationToolMenuTests(unittest.TestCase):
             last_tool=dict(tool='inspect_geometry',status='OK'))
         offered=navigation_tool_menu(tools,state)
         self.assertIn('cancel_local_navigation',offered)
-        self.assertIn('get_waypoint_candidates',offered)
+        self.assertNotIn('get_waypoint_candidates',offered)
         self.assertIn('navigate_local',offered)
         self.assertIn('navigate_relative',offered)
         # A fixed candidate route is not authorization: we only advertise it.
-        self.assertEqual(offered['get_waypoint_candidates']['permission'],'READ_ONLY')
+        self.assertNotIn('inspect_geometry',offered)
         self.assertEqual(offered['cancel_local_navigation']['permission'],'READ_ONLY')
 
     def test_ambiguous_historical_visual_memory_opens_retrieval_only_when_useful(self):
@@ -105,7 +105,7 @@ class NavigationToolMenuTests(unittest.TestCase):
             information_options=['analyze_scene','query_task_memory',
                                  'query_spatial_memory','compare_views']))
         offered=navigation_tool_menu(tools,state)
-        self.assertIn('compare_views',offered)
+        self.assertNotIn('compare_views',offered)
         self.assertIn('query_task_memory',offered)
         self.assertIn('query_spatial_memory',offered)
         self.assertNotIn('analyze_scene',offered)
@@ -121,7 +121,9 @@ class NavigationToolMenuTests(unittest.TestCase):
     def test_actual_navigation_request_has_nine_and_rejects_hidden_tool(self):
         specs=full_registry()
         client=Mock()
-        client.complete.return_value=dict(tool='inspect_geometry',args={})
+        client.complete.return_value=dict(tool='observe_for_goal',
+            args=dict(objective='Confirm whether the robot reached the bottom',
+                target_types=['stairs'],mode='VERIFY'))
         rt=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value=specs),
             memory=SimpleNamespace(keyframes={},
@@ -133,7 +135,7 @@ class NavigationToolMenuTests(unittest.TestCase):
         with patch('havln_agent.navigation_agent.navigation_context',
                    return_value=state):
             result=NavigationAgent(rt).decide()
-        self.assertEqual(result['tool'],'inspect_geometry')
+        self.assertEqual(result['tool'],'observe_for_goal')
         args,kwargs=client.complete.call_args
         exposed=[branch['properties']['tool']['const'] for branch in args[4]['oneOf']]
         self.assertEqual(exposed,list(CORE_NAVIGATION_TOOLS))
@@ -143,7 +145,8 @@ class NavigationToolMenuTests(unittest.TestCase):
         with self.assertRaises(APIError):
             kwargs['validate'](dict(tool='turn_and_observe',args=dict(
                 relative_turn_deg=15,look='none')))
-        kwargs['validate'](dict(tool='inspect_geometry',args={}))
+        with self.assertRaises(APIError):
+            kwargs['validate'](dict(tool='inspect_geometry',args={}))
 
 
 if __name__=='__main__':
