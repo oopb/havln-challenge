@@ -366,8 +366,9 @@ class ObservationController:
                     or (mode!='VERIFY' and
                         ' '.join(prev.get('objective','').casefold().split())
                         !=' '.join(objective.casefold().split()))
-                    or (mode=='VERIFY' and prev.get('outcome')=='VISION_UNAVAILABLE'
-                        and now-prev.get('started_monotonic',-1e9)>20)
+                    or (prev.get('outcome')=='VISION_UNAVAILABLE' and
+                        (mode!='VERIFY' or
+                         now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
