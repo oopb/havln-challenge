@@ -180,6 +180,8 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual([e['status'] for e in mem.task.completion_evidence],
                          ['SUPERSEDED','SUPERSEDED'])
         self.assertEqual(mem.task.subgoal_generations['0'],1)
+        self.assertEqual(mem.task.subgoal_start_steps['0'],1)
+        self.assertEqual(mem.task.subgoal_started,1)
         self.assertEqual(len(mem.actions),1)
         self.assertEqual(mem.progress_stage,'IN_PROGRESS')
 

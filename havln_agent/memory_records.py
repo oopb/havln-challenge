@@ -489,11 +489,15 @@ class MemoryRecords:
         for affected_index in range(subgoal_index,len(task.subgoals)):
             key=str(affected_index)
             task.subgoal_generations[key]=task.subgoal_generations.get(key,0)+1
+            # New task generation begins NOW for fresh completion progress.
+            # Old action history remains immutable in self.actions and
+            # route_progress_summary, but must not count as newly performed
+            # motion after reopening a previously verified milestone.
+            task.subgoal_start_steps[key]=len(self.actions)
         for transition in task.provisional_transitions:
             if transition.get('from_subgoal',-1)>=subgoal_index:
                 transition['status']='SUPERSEDED_BY_COMPLETION_REVIEW'
-        task.subgoal_started=task.subgoal_start_steps.get(
-            str(subgoal_index),0)
+        task.subgoal_started=len(self.actions)
         self.progress_stage='IN_PROGRESS'
         self.progress_feedback=None
         self.event('subgoal_reopened_from_visual_review',

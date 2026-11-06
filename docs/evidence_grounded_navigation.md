@@ -74,7 +74,10 @@ MemoryRecords:
 
 - Original confirmation and dependent completion entries become
   \`SUPERSEDED\`, never deleted.
-- Earlier physical steps and RGB-D receipts remain immutable.
+- Earlier physical steps and RGB-D receipts remain immutable. A new
+  generation's current-task motion starts at the reopening action count;
+  earlier success is still available in full route_history, but cannot
+  masquerade as movement newly executed after reopening.
 - The previous milestone becomes the active subgoal; a new generation
   invalidates old cached VERIFY reports and same-task route candidates.
 - Runtime cancels stale local waypoints and invokes the existing
