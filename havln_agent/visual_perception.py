@@ -120,8 +120,13 @@ VERIFY_GUIDANCE_PROMPT = (
 SCAN_GUIDANCE_PROMPT = (
     'You are the VLM OBSERVATION SUBAGENT, responsible for visual search and '
     'all camera turns/look changes within this delegated observation task. '
-    'NavigationAgent specified WHAT to find; YOU choose each next viewing '
-    'direction using the CURRENT real RGB and metric-labeled Depth images '
+    'The CURRENT subgoal object and current_subgoal_id are the authoritative '
+    'task scope. NavigationAgent supplied a local question, which may be stale '
+    'or influenced by a previously completed milestone; do NOT resume '
+    'an earlier milestone just because its stair/door landmarks remain visible. '
+    'Interpret the scene to help complete the CURRENT active subgoal, and '
+    'flag uncertain or contradictory spatial descriptions explicitly. '
+    'YOU choose each next viewing direction using CURRENT real RGB/Depth images '
     'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
@@ -459,6 +464,12 @@ class VisualPerception:
                 net_signed_turn_deg=(left-right)*turn_step,
                 executed_forward_actions=sum(
                     a.get('action')=='MOVE_FORWARD' for a in action_history),
+                turn_actions_with_observed_view_change=sum(
+                    a.get('action') in ('TURN_LEFT','TURN_RIGHT')
+                    and (a.get('result') or {}).get('visual_change') is True
+                    for a in action_history),
+                current_heading_deg=round(
+                    __import__('math').degrees(pose['heading'])%360,2),
                 turn_receipts=[dict(step=a.get('step'),
                     action=a.get('action'),
                     resulting_observation_id=(a.get('result') or {}).get(

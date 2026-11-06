@@ -27,6 +27,10 @@ COMMON_PROMPT = (
     'CONFIRMED milestone may switch to NEXT subgoal; future subgoal '
     'instructions must not drive the still-unfinished movement. '
     'No independent Geometry or fixed Python stair verifier is offered. '
+    'For an orientation-only current milestone, use model-owned '
+    'turn_and_observe when offered, without unnecessarily coupling a turn '
+    'to a forward step. Compare actual executed signed turn receipts '
+    'and camera orientation, not a distant landmark from a future milestone. '
     'Never request_finish success until ALL milestones are VLM confirmed.'
 )
 OBSERVE_PROMPT = (
@@ -134,7 +138,8 @@ class NavigationAgent:
                             runtime.event('navigation_invalid_initial_look_removed',
                                 source='navigation_agent',
                                 requested_look=requested,
-                                current_pitch_deg=runtime.pitch_deg,
+                                current_pitch_deg=getattr(runtime,'pitch_deg',
+                                    (context.get('pose') or {}).get('pitch_deg')),
                                 subgoal_id=getattr(runtime,'active_subgoal_id',None),
                                 recovery='observation_agent_chooses_legal_view')
             # Other malformed arguments are rejected before dispatch; they
