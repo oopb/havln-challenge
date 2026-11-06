@@ -252,7 +252,8 @@ class PromptContractTests(unittest.TestCase):
         runtime = SimpleNamespace(client=client, memory=SimpleNamespace(task=task))
         with patch("havln_agent.task_planner.planner_context", return_value={}):
             value = TaskPlanner(runtime).review()
-        self.assertIn("Do not generate success_criteria", client.system)
+        self.assertIn("Legacy success_criteria", client.system)
+        self.assertIn("completion_description", client.system)
         self.assertIn("current semantic milestone", client.system.lower())
         self.assertEqual(value["success_criteria"], [
             "actual_descent_observed", "entry_confirmed", "final_arrival_visible",

@@ -561,9 +561,12 @@ class ObservationController:
                         heading_deg=round(math.degrees(
                             r.motion_controller.pose()['heading']),2),
                         center_obstruction=center,
+                        swept_body_state=wide.get('state'),
+                        swept_body_reason=wide.get('reason'),
                         swept_body_depth={k:swept[k] for k in (
                             'path_state','clearance','unknown_sweep_pixels',
-                            'nearest_collision_point','rejection_reasons') if k in swept},
+                            'nearest_collision_point','rejection_reasons',
+                            'human_occupancy') if k in swept},
                         scope='current_public_depth_only_not_route_certification')
                 except (AttributeError,RuntimeError,ValueError,TypeError):
                     geometry_facts=dict(status='UNAVAILABLE')

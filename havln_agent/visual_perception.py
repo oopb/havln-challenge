@@ -92,7 +92,7 @@ SCAN_GUIDANCE_PROMPT = (
     'all camera turns/look changes within this delegated observation task. '
     'NavigationAgent specified WHAT to find; YOU choose each next viewing '
     'direction using the CURRENT real RGB and metric-labeled Depth images '
-    'and the short search history. The first image is RGB; the second is '
+    'and the complete task-local RGB-D conversation history. The first image is RGB; the second is '
     'Depth when supplied (near black, far white, MAGENTA invalid). The '
     'display range in the request is meters, not raw normalized sensor units. '
     'Depth is a perspective measurement, not proof a visible floor is '
@@ -351,7 +351,8 @@ class VisualPerception:
         pose=source['pose']
         request=dict(mode='vlm_guided_observation',
             instruction=task.instruction,
-            subgoal=fields(subgoal,('action','target','landmark','semantic_description')),
+            subgoal=fields(subgoal,('action','target','landmark',
+                'semantic_description','completion_description')),
             objective=objective,target_types=list(target_types),
             observation_id=source['observation_id'],
             heading_deg=round(__import__('math').degrees(pose['heading']),2),
