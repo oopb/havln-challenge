@@ -356,11 +356,18 @@ class ObservationController:
                         'TARGET_CANDIDATE_FOUND','VLM_SEARCH_FINISHED',
                         'SEARCH_REGION_COVERED_NO_MATCH','CUE_ONLY',
                         'APPROACH_CANDIDATE_FOUND','NO_RELIABLE_CANDIDATE',
-                        'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN')
+                        'SUBGOAL_NOT_YET','SUBGOAL_UNCERTAIN',
+                        'VISION_UNAVAILABLE')
                     or prev.get('intent','APPROACH')!=mode
                     or prev.get('target_types')!=list(target_types)
-                    or ' '.join(prev.get('objective','').casefold().split())
-                       !=' '.join(objective.casefold().split())
+                    # VERIFY always assesses the current subgoal's completion.
+                    # Rewording that question must not trigger another expensive
+                    # panorama from identical RGB-D at the same physical stance.
+                    or (mode!='VERIFY' and
+                        ' '.join(prev.get('objective','').casefold().split())
+                        !=' '.join(objective.casefold().split()))
+                    or (mode=='VERIFY' and prev.get('outcome')=='VISION_UNAVAILABLE'
+                        and now-prev.get('started_monotonic',-1e9)>20)
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
                     or prev.get('start_depth_hash')!=initial.get('depth_hash')
@@ -377,6 +384,7 @@ class ObservationController:
                 outcome='REPEATED_SEARCH_NO_NEW_VIEW',
                 reason='unchanged_RGBD_stance_and_observation_intent_reuse',
                 verification=copy.deepcopy(prev.get('verification')),
+                navigation_feedback=copy.deepcopy(prev.get('navigation_feedback')),
                 observation_mode=mode,
                 covered_turn_deg=0,planned_sweep_deg=sweep_degrees,
                 checkpoints=[],best_candidate=rebound(prev.get('candidate')),
@@ -475,7 +483,31 @@ class ObservationController:
                     'evidence_observation_ids',[])),
                 missing_evidence=last_visual.get('missing_evidence',''),
                 source='vlm_real_rgbd_history') if mode=='VERIFY' else None)
+            # A concise narrative is useful to NavigationAgent, but it must
+            # never replace measurement provenance, clearance, or the actual
+            # final VERIFY result. Conflicting suggested transitions are
+            # discarded while keeping the original observation evidence.
+            advice_status=last_visual.get('recommended_next','UNKNOWN')
+            if (mode=='VERIFY' and final_status!='CONFIRMED'
+                    and advice_status=='PROCEED_NEXT_TASK'):
+                advice_status='UNKNOWN'
+            summary=(last_visual.get('observation_summary') or
+                last_visual.get('verification_evidence') or
+                last_visual.get('evidence') or '')
+            narrative=dict(
+                observation_summary=summary[:750],
+                navigation_suggestion=(last_visual.get('navigation_suggestion')
+                    or '')[:600],
+                recommended_next=advice_status,
+                observation_mode=mode,
+                outcome=outcome,
+                evidence_observation_ids=list(dict.fromkeys(
+                    p['observation_id'] for p in record['checkpoints'])),
+                measured_motion_is_distinct_from_visual_hypothesis=True,
+                advice_only_not_motion_authorization=True,
+                evidence_scope='real_RGBD_and_measurement_plus_VLM_hypothesis')
             record.update(verification=copy.deepcopy(verification),
+                navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
                 outcome=outcome,covered_turn_deg=turned,
                 visual_reports=copy.deepcopy(reports),
@@ -496,6 +528,7 @@ class ObservationController:
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),
+                navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
                 historical_context_observation_ids=list(
                     record['historical_context_observation_ids']),
@@ -531,7 +564,10 @@ class ObservationController:
         if look!='none':
             failed=do_action('LOOK_DOWN' if look=='down' else 'LOOK_UP')
             if failed:return finish('INTERRUPTED','PARTIAL',failed.get('reason'))
-        max_checks=min(16,max(3,math.ceil(sweep_degrees/30)+5))
+        # Verification is a bounded assessment, not another full search.
+        # Search and obstacle exploration retain their existing view budget.
+        max_checks=min(5 if mode=='VERIFY' else 16,
+                       max(3,math.ceil(sweep_degrees/30)+5))
         for _ in range(max_checks):
             if r.done:
                 return finish('INTERRUPTED','PARTIAL','environment_done')
