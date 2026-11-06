@@ -20,6 +20,7 @@ from havln_agent.active_observation import ObservationController
 from test_active_observation import FakeRuntime
 from test_vlm_led_observation import VLMGuide
 from havln_agent.navigation_agent import NavigationAgent
+from havln_agent.runtime import AgentRuntime
 from havln_agent.surface_measurement import measure_surface_region
 from havln_agent.tool_menu import navigation_tool_menu
 from havln_agent.visual_perception import (
@@ -235,6 +236,61 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaises(APIError):
             kw['validate'](dict(verdict='REOPEN',rationale='Wrong frames',
                 evidence_observation_ids=['old','fake']))
+
+    def test_runtime_review_reopens_and_reactivates_old_milestone_with_real_frames(self):
+        task=SimpleNamespace(current_subgoal_index=1,
+            subgoals=[dict(action='descend',target='bottom',completion_description='at landing'),
+                      dict(action='turn',target='right')],
+            completed_subgoals=[0],
+            completion_evidence=[dict(subgoal=0,status='ACTIVE',
+                evidence='Claimed old landing',observation_ids=['obs_0028'],
+                verification=dict(source_observation_id='obs_0028'))])
+        ledger=EvidenceLedger()
+        memory=SimpleNamespace(task=task,
+            current=dict(observation_id='obs_0035'),evidence=ledger,
+            route_progress_summary=Mock(return_value=dict(successful_segments=[])),
+            apply_completion_review=Mock(return_value=dict(
+                status='OK',review_outcome='REOPENED',reopened_subgoal=0,
+                current_subgoal_index=0)))
+        def read_frame(identifier):
+            return (SimpleNamespace(rgb='real',depth='real'),
+                    dict(observation_id=identifier,
+                         pose=dict(heading=math.radians(225),pitch_deg=-30)))
+        visual=SimpleNamespace(review_completion=Mock(return_value=dict(
+            verdict='REOPEN',
+            rationale='New measured below-floor surface contradicts claim',
+            evidence_observation_ids=['obs_0028','obs_0035'],
+            uncertainty='Estimated RGB-D not ground truth')))
+        runtime=SimpleNamespace(memory=memory,_vision_frame=Mock(
+            side_effect=read_frame),visual_perception=visual,
+            _cancel_local_navigation=Mock(),set_semantic_goal=Mock())
+        result=AgentRuntime._review_completed_subgoal(runtime,'sg_0',
+            'New authentic surface evidence contradicts sg0')
+        self.assertEqual(result['review_outcome'],'REOPENED')
+        self.assertEqual(runtime._vision_frame.call_count,2)
+        visual.review_completion.assert_called_once()
+        self.assertEqual(
+            memory.apply_completion_review.call_args.args[0],0)
+        runtime.set_semantic_goal.assert_called_once()
+        runtime._cancel_local_navigation.assert_called_once_with(
+            'prior_milestone_reopened')
+
+    def test_runtime_review_fails_closed_when_old_rgbd_is_unavailable(self):
+        task=SimpleNamespace(current_subgoal_index=1,
+            completed_subgoals=[0],completion_evidence=[
+                dict(subgoal=0,status='ACTIVE',
+                     verification=dict(source_observation_id='old'))])
+        memory=SimpleNamespace(task=task,
+            current=dict(observation_id='new'),evidence=EvidenceLedger())
+        runtime=SimpleNamespace(memory=memory,_vision_frame=Mock(
+            side_effect=ValueError('not archived')),
+            visual_perception=SimpleNamespace(review_completion=Mock()),
+            _cancel_local_navigation=Mock(),set_semantic_goal=Mock())
+        result=AgentRuntime._review_completed_subgoal(runtime,'sg_0',
+            'New RGB-D contradicts old milestone')
+        self.assertEqual(result['status'],'INSUFFICIENT_EVIDENCE')
+        runtime.visual_perception.review_completion.assert_not_called()
+        runtime.set_semantic_goal.assert_not_called()
 
     def test_tool_menu_exposes_review_only_after_a_confirmed_milestone(self):
         camera=SimpleNamespace(turn_angle=15,tilt_angle=30)
