@@ -106,6 +106,56 @@ class Batch418VerificationFeedbackTests(unittest.TestCase):
         self.assertEqual(vp.complete.call_args.kwargs['result_schema']
                          ['properties']['verification_evidence']['maxLength'],1800)
 
+    def test_failed_verify_at_unchanged_stance_uses_short_error_cooldown(self):
+        from havln_agent.api_client import APIError
+        r=FakeRuntime([])
+        class FailingVisual:
+            calls=0
+            def guide_scan_view(self,*args,**kwargs):
+                self.calls+=1
+                raise APIError('simulated_upstream_schema_error')
+        r.visual_perception=FailingVisual()
+        first=ObservationController(r).scan_vlm(
+            'Check current goal',['stairs'],90,mode='VERIFY')
+        second=ObservationController(r).scan_vlm(
+            'Rephrase the same completion question',['stairs'],90,mode='VERIFY')
+        self.assertEqual(first['outcome'],'VISION_UNAVAILABLE')
+        self.assertEqual(second['status'],'NO_NEW_INFORMATION')
+        self.assertEqual(r.visual_perception.calls,1)
+
+    def test_unspecified_model_advice_has_safe_natural_language_fallback(self):
+        r=FakeRuntime([])
+        r.visual_perception=VLMGuide([verify()])
+        result=ObservationController(r).scan_vlm(
+            'Check if the current milestone is complete',
+            ['stairs'],90,mode='VERIFY')
+        self.assertIn('Current subgoal remains unfinished',
+                      result['navigation_feedback']['navigation_suggestion'])
+        self.assertTrue(result['navigation_feedback']['advice_only_not_motion_authorization'])
+
+    def test_compact_navigation_context_does_not_leak_future_goal_or_duplicate_advice(self):
+        from havln_agent.contexts import compact_navigation_context
+        note=dict(observation_summary='The present goal is unfinished',
+                  navigation_suggestion='Continue current task',
+                  recommended_next='CONTINUE_CURRENT_TASK')
+        state=dict(progress_review=dict(current_subgoal_index=0,
+                next_subgoal=dict(action='turn right in future'),
+                latest_directional_step=dict(step=67,direction='UP',
+                    heading_deg=0,delta_y_m_est=.098,uncertainty_m_est=.026)),
+            last_tool=dict(tool='observe_for_goal',status='OK',
+                observation_task=dict(outcome='SUBGOAL_NOT_YET',
+                    navigation_feedback=note)),
+            latest_observation_task=dict(objective='Verify goal',
+                mode='vlm_led',outcome='SUBGOAL_NOT_YET',
+                navigation_feedback=note))
+        compact=compact_navigation_context(state)
+        self.assertNotIn('next_subgoal',compact['progress_review'])
+        self.assertEqual(compact['progress_review']['latest_directional_step']
+                         ['heading_deg'],0)
+        self.assertNotIn('navigation_feedback',
+                         compact['last_tool']['observation_task'])
+        self.assertEqual(compact['latest_observation_task']['navigation_feedback'],note)
+
     def test_expected_progress_survives_persistent_visual_memory(self):
         rt=SimpleNamespace(camera=SimpleNamespace(turn_angle=15),
             motion_controller=SimpleNamespace(pose=lambda:dict(heading=0,
