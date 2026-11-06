@@ -401,13 +401,14 @@ class VisualPerception:
         result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
-            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy',
-                                      allow_missing_unit=True),
+            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy'),
             image_url=images,cache=False,
             validate=validate,
             normalize=lambda value:normalize_coordinates(value,
                 SCAN_GUIDANCE_SCHEMA,default_unit='image_1000_xyxy'),
             result_schema=SCAN_GUIDANCE_SCHEMA,
+            validation_schema=coordinate_schema(SCAN_GUIDANCE_SCHEMA,
+                'image_1000_xyxy',allow_missing_unit=True),
             conversation_messages=session)
         save_dialogue(result)
         return result

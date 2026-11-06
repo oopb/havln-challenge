@@ -361,8 +361,9 @@ class MemoryRecords:
         ids=list(dict.fromkeys(verification.get('observation_ids') or []))
         live=verification.get('source_observation_id')
         if (not ids or live not in ids or live not in observed
-                or observed[live]['subgoal']!=index
-                or not verification.get('evidence','').strip()):
+                or not self.current or self.current['observation_id']!=live
+                or not isinstance(verification.get('evidence'),str)
+                or not verification['evidence'].strip()):
             return dict(status='INVALID_EVIDENCE',
                 reason='confirmation_requires_real_current_subgoal_RGBD')
         recorded=dict(subgoal=index,evidence=verification['evidence'],

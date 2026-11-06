@@ -50,6 +50,7 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         mem=MemoryRecords(SimpleNamespace(turn_angle=15.))
         mem.task.subgoals=[dict(action='descend'),dict(action='enter room')]
         mem.observations=[dict(observation_id='obs_0028',subgoal=0)]
+        mem.current=mem.observations[0]
         verdict=dict(status='CONFIRMED',source_observation_id='obs_0028',
             observation_ids=['obs_0028'],
             evidence='Robot is on the bottom flat landing',uncertainty='')
@@ -67,6 +68,7 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         mem=MemoryRecords(SimpleNamespace(turn_angle=15.))
         mem.task.subgoals=[dict(action='descend')]
         mem.observations=[dict(observation_id='obs_0028',subgoal=0)]
+        mem.current=mem.observations[0]
         for verdict in (
             dict(status='CONFIRMED',source_observation_id='imaginary',
                  observation_ids=['imaginary'],evidence='done'),
