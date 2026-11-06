@@ -43,6 +43,10 @@ COMPLETION_REVIEW_SCHEMA=object_schema(dict(
     evidence_observation_ids=dict(type='array',minItems=2,maxItems=5,
         uniqueItems=True,items=dict(type='string',minLength=1,maxLength=64)),
     missing_evidence=dict(type='string',maxLength=600)))
+# Low-cost vision models may omit supplemental prose. Source-backed decision
+# and citations remain mandatory; uncertainty details are optional.
+COMPLETION_REVIEW_SCHEMA['required']=[
+    'verdict','rationale','evidence_observation_ids']
 COMPLETION_REVIEW_PROMPT=(
     'You are Observation Agent reviewing one PREVIOUSLY CONFIRMED milestone. '
     'A confirmed prior milestone may have been wrong. Compare the genuine '
