@@ -499,13 +499,14 @@ class ObservationController:
                     wide_probe=getattr(geom,'movement_probe',None)
                     center=center_probe() if callable(center_probe) else {}
                     wide=wide_probe(0.) if callable(wide_probe) else {}
+                    swept=wide.get('depth',wide)
                     geometry_facts=dict(source_observation_id=source['observation_id'],
                         heading_deg=round(math.degrees(
                             r.motion_controller.pose()['heading']),2),
                         center_obstruction=center,
-                        swept_body_depth={k:wide[k] for k in (
+                        swept_body_depth={k:swept[k] for k in (
                             'path_state','clearance','unknown_sweep_pixels',
-                            'nearest_collision_point','rejection_reasons') if k in wide},
+                            'nearest_collision_point','rejection_reasons') if k in swept},
                         scope='current_public_depth_only_not_route_certification')
                 except (AttributeError,RuntimeError,ValueError,TypeError):
                     geometry_facts=dict(status='UNAVAILABLE')
