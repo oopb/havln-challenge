@@ -216,3 +216,64 @@ Run the new regression:
 ```bash
 python -m unittest discover -s tests -p 'test_rgbd_vlm_approach_search.py' -v
 ```
+
+
+## Batch 4-17: complete session and VLM-owned verification (Nov 2026)
+
+The NavigationAgent calls one of SEARCH, APPROACH, OBSTACLE_REVIEW or VERIFY
+through the existing `observe_for_goal` tool (`mode` is optional and defaults
+to APPROACH). All four modes share camera action control and the complete
+observation-session message history. On each VLM API call the entire previous
+session (real RGB and metric Depth images, prior assistant replies, and
+geometry feedback included in the previous request text) is transmitted
+alongside the new current RGB-D. The provider is stateless: messages are
+explicitly rebuilt, not presumed to live on the server. The session is
+task-local, not persisted as raw base64 in JSON diagnostics. Actual checkpoint
+records and provenance remain in Memory.
+
+At every checkpoint, current public Depth measurements are supplied to VLM:
+the coherent near-field center occupancy plus relevant swept-body Depth
+diagnostics. These are measured facts with unknown regions and sensor
+limitations, not an independent Python routing decision or clearance
+certificate. Only the reliable fresh central obstacle preflight remains in
+MOVE to prevent a planned atomic forward into a measured obstacle.
+After blocking, NavigationAgent delegates OBSTACLE_REVIEW and does not
+re-run a separate `inspect_geometry` tool. The registry retains older
+internal/archival tools; they are NOT advertised to NavigationAgent.
+
+The receipt-derived `route_progress` exposes grouped registered forward
+segments (heading, source and destination observation IDs, estimated
+height changes) and independently recorded obstacles at particular stances.
+A successful downward segment is never erased by a later BLOCKED direction;
+historical progress also never grants permanent clearance to move. Both
+NavigationAgent and Observation Agent see this summary when choosing routes
+or interpreting apparent up/down staircase orientation.
+
+When NavigationAgent suspects a semantic milestone has completed it requests
+mode VERIFY with a concrete question: for example, "Confirm that the ROBOT
+is at the flat bottom landing, not merely seeing flooring beyond steps."
+VLM returns CONFIRMED, NOT_YET or UNCERTAIN with cited real RGB-D sources.
+Only a nonempty, valid and current-subgoal-confirmed observation may append
+to `completed_subgoals` and advance to the next ordered milestone.
+NOT_YET and UNCERTAIN do not switch the task. The old separate
+`verify_subgoal` and `select_subgoal` calls are unadvertised, and the
+final STOP success gate checks only that every milestone has been confirmed
+through Observation Agent; no second stair-specific Python verifier is run.
+
+VLM-led approach results are de-duplicated by same RGB/Depth stance,
+observation mode, semantic goal and target types, even if NavigationAgent
+merely rewords its objective. Genuine viewpoint, Depth, goal or question-mode
+changes remain eligible for a new observation. `force_recheck` is an
+explicit override, not an automatic retry.
+
+Run focused regressions:
+
+```bash
+python -m unittest discover -s tests -p 'test_observation_session_verification.py' -v
+python -m unittest discover -s tests -p 'test_rgbd_vlm_approach_search.py' -v
+python -m unittest discover -s tests -p 'test_navigation_tool_menu.py' -v
+python -m unittest discover -s tests -p 'test_pre_forward_obstacle_perception.py' -v
+```
+
+A real Habitat batch (same episode with Batch 4-17 starting pose) is still
+needed to validate success rate, forward proportion, and token/latency cost.

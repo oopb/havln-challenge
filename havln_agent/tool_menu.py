@@ -5,7 +5,7 @@ tool dispatch. Only the current decision's advertised model-facing tools are
 selected here; this does not modify the runtime or bypass its validation.
 """
 
-# Exactly nine stable strategic tools. Search/scene analysis belongs to VLM.
+# The small strategic menu delegates visual confirmation and geometry to VLM.
 CORE_NAVIGATION_TOOLS = (
     'observe_for_goal',
     'navigate_relative',
@@ -96,8 +96,8 @@ def contextual_tool_names(state, *, orientation=False):
     if selection.get('provisional_transitions'):
         result.add('query_task_memory')
 
-    # Respect the precise missing-evidence options returned by a verifier
-    # or explicit geometry probe, rather than guessing scene-specific rules.
+    # Respect available memory follow-ups; retired independent verification
+    # and geometry inspection are not reintroduced into the main-agent menu.
     requested = set(last.get('information_options') or ())
     result.update(requested.intersection(CONTEXTUAL_TOOLS))
     # A tool suggestion must never reintroduce ordinary single-step camera
