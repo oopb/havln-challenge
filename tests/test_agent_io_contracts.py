@@ -117,15 +117,17 @@ class AgentIOContractsTests(unittest.TestCase):
             pose=dict(heading=math.radians(45),pitch_deg=0))
         observation=SimpleNamespace(depth='true_depth')
         with patch('havln_agent.visual_perception.image_url',
-                   return_value='rgb'),patch(
+                   return_value='rgb') as encode_rgb,patch(
                    'havln_agent.visual_perception.depth_image_url',
-                   return_value='depth'):
+                   return_value='depth') as encode_depth:
             vp.guide_scan_view(observation,source,'Find descent',['stairs'],[],
                 90,session=session)
             first_call=vp.complete.call_args
             vp.guide_scan_view(observation,source,'Find descent',['stairs'],[],
                 90,session=session)
             second_call=vp.complete.call_args
+        self.assertEqual(encode_rgb.call_count,1)
+        self.assertEqual(encode_depth.call_count,1)
         self.assertEqual(first_call.kwargs['image_url'],['rgb','depth'])
         self.assertIsNone(second_call.kwargs['image_url'])
         self.assertEqual(len(session),4)

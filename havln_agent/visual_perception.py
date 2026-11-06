@@ -371,11 +371,20 @@ class VisualPerception:
         request['observation_mode']=mode
         request['route_history']=route_history or {}
         request['measured_geometry']=geometry_evidence or {}
-        images=[image_url(observation,max_edge=640)]
+        # Check same-frame presence BEFORE expensive RGB/Depth encoding.
+        # A correction about unchanged obs_XXXX reuses full prior images.
+        seen_frame=any(msg.get('role')=='user' and
+            isinstance(msg.get('content'),list) and any(
+                part.get('type')=='text' and
+                '"observation_id": "'+source['observation_id']+'"' in part.get('text','')
+                for part in msg['content'])
+            for msg in (session or []))
+        images=[] if seen_frame else [image_url(observation,max_edge=640)]
         camera=getattr(self.runtime,'camera',None)
         if camera is not None and getattr(observation,'depth',None) is not None:
-            images.append(depth_image_url(observation,camera,max_edge=640,
-                                          display_max_m=5.0))
+            if not seen_frame:
+                images.append(depth_image_url(observation,camera,max_edge=640,
+                                              display_max_m=5.0))
             request['sensor_images']=['current_rgb','current_depth_gray_m']
             request['depth_visualization']=dict(
                 display_min_m=0.0,display_max_m=5.0,
@@ -388,14 +397,7 @@ class VisualPerception:
             request['sensor_images']=['current_rgb']
         if view_correction is not None:
             request['view_correction']=view_correction
-        # A same-frame VLM correction reuses previously supplied image bytes
-        # via the complete session instead of appending identical RGB-D twice.
-        seen_frame=any(msg.get('role')=='user' and
-            isinstance(msg.get('content'),list) and any(
-                part.get('type')=='text' and
-                '"observation_id": "'+source['observation_id']+'"' in part.get('text','')
-                for part in msg['content'])
-            for msg in (session or []))
+        # The complete session still contains this frame's RGB-D exactly once.
         include_images=not seen_frame
         if seen_frame:
             request['reuse_prior_RGBD_observation_id']=source['observation_id']
