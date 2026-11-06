@@ -42,7 +42,12 @@ def obstacle(confirmed):
 def make_runtime(replies,checks):
     r=FakeRuntime([])
     r.visual_perception=VLMGuide(replies)
-    measured=Mock(side_effect=[obstacle(check) for check in checks])
+    # The latest VLM protocol probes geometry at EVERY RGB-D checkpoint,
+    # including same-frame correction turns. Repeat the final synthetic depth
+    # value after a short fixture's explicit readings are exhausted.
+    values=[obstacle(check) for check in checks]
+    measured=Mock(side_effect=lambda:
+        values.pop(0) if len(values)>1 else values[0])
     geometry=SimpleNamespace(central_forward_obstruction=measured,
         assess_step=Mock(side_effect=AssertionError('full terrain not allowed')))
     r.geometry=Mock(return_value=geometry)
