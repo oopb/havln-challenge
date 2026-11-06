@@ -276,6 +276,132 @@ class MemoryRecords:
             self.active_attempt['actions'].append(entry)
         self.event('action_executed', action=action, result=feedback)
 
+    def route_progress_summary(self):
+        """Reconstruct successful segments AND blocked endpoints from receipts.
+
+        This is not a map, route permission, or inferred global odometry.
+        Failed probes never erase earlier registered movement.
+        """
+        segments=[]
+        for a in self.actions[-120:]:
+            if a.get('action')!='MOVE_FORWARD':
+                continue
+            feedback=a.get('result') or {}
+            motion=feedback.get('rgbd_motion') or {}
+            if (motion.get('status')!='ESTIMATED'
+                    or not motion.get('observed_frame_change',True)):
+                continue
+            translation=motion.get('translation_m') or {}
+            if not isinstance(translation,dict):
+                continue
+            pose=a.get('pose') or {}
+            if not isinstance(pose.get('heading'),(int,float)):
+                continue
+            yaw=round(math.degrees(pose['heading'])%360,1)
+            dy=translation.get('y_up')
+            epoch=pose.get('motion_epoch')
+            previous=segments[-1] if segments else None
+            consecutive=(previous and
+                a['step']==previous['last_step']+1 and
+                a.get('subgoal')==previous['subgoal'] and
+                epoch==previous['motion_epoch'] and
+                abs((yaw-previous['heading_deg']+180)%360-180)<=self.camera.turn_angle/2)
+            if consecutive:
+                previous['last_step']=a['step']
+                previous['forward_steps']+=1
+                previous['observed_height_change_m_est']=(
+                    round(previous['observed_height_change_m_est']+dy,3)
+                    if isinstance(dy,(int,float)) else
+                    previous['observed_height_change_m_est'])
+                previous['end_observation_id']=feedback.get('observation_after')
+            else:
+                segments.append(dict(subgoal=a.get('subgoal'),
+                    motion_epoch=epoch,heading_deg=yaw,
+                    first_step=a['step'],last_step=a['step'],
+                    forward_steps=1,
+                    observed_height_change_m_est=round(dy,3)
+                        if isinstance(dy,(int,float)) else 0.,
+                    start_observation_id=feedback.get('observation_before'),
+                    end_observation_id=feedback.get('observation_after'),
+                    evidence='registered_rgbd_motion_not_habitat_ground_truth'))
+        blocked=[]
+        for entry in self.tool_ledger[-50:]:
+            call=entry.get('call') or {}
+            if call.get('tool') not in (
+                    'navigate_relative','navigate_local','navigate_to_pixel'):
+                continue
+            result=entry.get('result') or {}
+            if (result.get('interrupted_status')!='BLOCKED' and
+                    result.get('status')!='BLOCKED'):
+                continue
+            # Use the actual end-of-attempt camera yaw after any TURN,
+            # not the older request yaw from before the turn.
+            end_id=result.get('end_observation_id')
+            end_record=next((o for o in reversed(self.observations)
+                if o['observation_id']==end_id),None)
+            pose=((end_record or {}).get('pose') or
+                (entry.get('request_context') or {}).get('pose') or {})
+            heading=pose.get('heading')
+            if not isinstance(heading,(int,float)):
+                continue
+            blocked.append(dict(
+                heading_deg=round(math.degrees(heading)%360,1),
+                source_observation_id=result.get('end_observation_id'),
+                reason=result.get('reason'),
+                subgoal=entry.get('subgoal_id'),
+                evidence='observed_block_at_stance_not_historical_route_veto'))
+        return dict(successful_segments=segments[-8:],
+            blocked_at_prior_stances=blocked[-6:],
+            current_subgoal=self.task.current_subgoal_index,
+            interpretation='past_success_is_progress_evidence_not_live_motion_clearance')
+
+    def confirm_subgoal_observation(self, verification, objective):
+        """Commit only a source-backed VLM confirmation, not Python semantics."""
+        task=self.task
+        index=task.current_subgoal_index
+        if index>=len(task.subgoals) or index in task.completed_subgoals:
+            return dict(status='NOT_APPLICABLE',reason='no_active_unconfirmed_subgoal')
+        if verification.get('status')!='CONFIRMED':
+            return dict(status='NOT_CONFIRMED',reason='vlm_did_not_confirm')
+        if (verification.get('subgoal_index')!=index
+                or verification.get('source')!='vlm_real_rgbd_history'):
+            return dict(status='INVALID_EVIDENCE',
+                reason='confirmation_session_does_not_match_active_subgoal')
+        observed={o['observation_id']:o for o in self.observations}
+        ids=list(dict.fromkeys(verification.get('observation_ids') or []))
+        live=verification.get('source_observation_id')
+        if (not ids or live not in ids or live not in observed
+                or not self.current or self.current['observation_id']!=live
+                or not isinstance(verification.get('evidence'),str)
+                or not verification['evidence'].strip()):
+            return dict(status='INVALID_EVIDENCE',
+                reason='confirmation_requires_real_current_subgoal_RGBD')
+        recorded=dict(subgoal=index,evidence=verification['evidence'],
+            objective=objective,observation_ids=ids,
+            executed_steps=[a['step'] for a in self.actions
+                if a.get('subgoal')==index and a.get('action')=='MOVE_FORWARD'],
+            verification=dict(status='VERIFIED',completion_confirmed=True,
+                supported=['vlm_observation_confirmed'],
+                evidence_origin='vlm_real_rgbd_history',
+                source_observation_id=live,
+                uncertainty=verification.get('uncertainty','')))
+        task.completed_subgoals.append(index)
+        task.completion_evidence.append(recorded)
+        next_index=index+1
+        while (next_index<len(task.subgoals) and
+                next_index in task.completed_subgoals):
+            next_index+=1
+        if next_index<len(task.subgoals):
+            task.current_subgoal_index=next_index
+            task.subgoal_start_steps.setdefault(str(next_index),len(self.actions))
+            task.subgoal_started=task.subgoal_start_steps[str(next_index)]
+        self.progress_stage='COMPLETED'
+        self.progress_feedback=recorded['verification']
+        self.event('subgoal_observation_confirmed',
+            subgoal=index,next_subgoal=next_index,observation_ids=ids)
+        return dict(status='CONFIRMED',subgoal=index,
+            next_subgoal=next_index,observation_ids=ids)
+
     def stats(self):
         outcomes = {}
         for a in self.experiences:

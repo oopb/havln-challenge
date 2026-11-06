@@ -16,12 +16,12 @@ COORDINATE_PROMPT = (
     'repeating the task or listing invisible components.')
 
 
-def coordinate_schema(base, unit=None):
+def coordinate_schema(base, unit=None, allow_missing_unit=False):
     normalized = copy.deepcopy(base)
     normalized['properties']['coordinate_space'] = dict(const='normalized_xyxy')
     thousand = copy.deepcopy(base)
     thousand['properties']['coordinate_space'] = dict(const='image_1000_xyxy')
-    thousand['required'] = list(thousand['required']) + ['coordinate_space']
+    thousand['required'] = list(thousand['required']) + ([] if allow_missing_unit else ['coordinate_space'])
 
     def convert(node):
         if isinstance(node, dict):
@@ -49,9 +49,9 @@ def coordinate_schema(base, unit=None):
             else dict(oneOf=[normalized, thousand]))
 
 
-def normalize_coordinates(value, text_schema=None):
+def normalize_coordinates(value, text_schema=None, default_unit='normalized_xyxy'):
     result = copy.deepcopy(value)
-    scale = 1000 if result.pop('coordinate_space', 'normalized_xyxy') == 'image_1000_xyxy' else 1
+    scale = 1000 if result.pop('coordinate_space', default_unit) == 'image_1000_xyxy' else 1
 
     def box(values, path):
         if values is None:

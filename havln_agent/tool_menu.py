@@ -5,15 +5,12 @@ tool dispatch. Only the current decision's advertised model-facing tools are
 selected here; this does not modify the runtime or bypass its validation.
 """
 
-# Exactly nine stable strategic tools. Search/scene analysis belongs to VLM.
+# The small strategic menu delegates visual confirmation and geometry to VLM.
 CORE_NAVIGATION_TOOLS = (
     'observe_for_goal',
     'navigate_relative',
     'navigate_local',
     'ground_landmark',
-    'inspect_geometry',
-    'verify_subgoal',
-    'select_subgoal',
     'request_task_review',
     'request_finish',
 )
@@ -24,12 +21,10 @@ CONTEXTUAL_TOOLS = (
     'turn_and_observe',
     'navigate_to_pixel',
     'cancel_local_navigation',
-    'get_waypoint_candidates',
     'recall_observation',
     'query_spatial_memory',
     'query_task_memory',
     'read_memory_record',
-    'compare_views',
 )
 # Scene/entry understanding is delegated to VLM-led observe_for_goal, not
 # re-exposed as competing main-agent observation entrypoints.
@@ -78,10 +73,6 @@ def contextual_tool_names(state, *, orientation=False):
     if has_current_box or has_current_grounding:
         result.add('navigate_to_pixel')
 
-    if (last.get('tool') == 'inspect_geometry'
-            or state.get('recent_navigation_block')
-            or last.get('measured_collision')):
-        result.add('get_waypoint_candidates')
 
     memory = state.get('navigation_memory') or {}
     targets = memory.get('visual_target_memory') or []
@@ -102,21 +93,17 @@ def contextual_tool_names(state, *, orientation=False):
             result.add('read_memory_record')
 
     selection = state.get('task_selection') or {}
-    if (selection.get('provisional_transitions')
-            or last.get('tool') == 'verify_subgoal'):
+    if selection.get('provisional_transitions'):
         result.add('query_task_memory')
 
-    # Respect the precise missing-evidence options returned by a verifier
-    # or explicit geometry probe, rather than guessing scene-specific rules.
+    # Respect available memory follow-ups; retired independent verification
+    # and geometry inspection are not reintroduced into the main-agent menu.
     requested = set(last.get('information_options') or ())
     result.update(requested.intersection(CONTEXTUAL_TOOLS))
     # A tool suggestion must never reintroduce ordinary single-step camera
     # control. Only genuine orientation instructions need that legacy tool.
     if not orientation:
         result.discard('turn_and_observe')
-    if last.get('tool') == 'verify_subgoal' and last.get('status') in (
-            'REJECTED', 'INSUFFICIENT_EVIDENCE'):
-        result.add('compare_views')
     return result
 
 

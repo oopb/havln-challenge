@@ -183,6 +183,9 @@ def tool_summary(result):
             best_candidate=result.get('best_candidate'),
             best_cue=result.get('best_cue'),
             best_approach=result.get('best_approach'),
+            observation_mode=result.get('observation_mode'),
+            verification=result.get('verification'),
+            subgoal_transition=result.get('subgoal_transition'),
             approach_candidates=result.get('approach_candidates',[])[:3],
             blocked_approaches=result.get('blocked_approaches',[])[:6],
             visual_reports=compact_vlm_reports(result.get('visual_reports')),
@@ -297,10 +300,11 @@ def navigation_progress_review(memory):
     changed_direction=any(a['direction']!=b['direction']
                           for a,b in zip(segments,segments[1:]))
     last_verifier=next((
-        entry.get('result') or {} for entry in
-        reversed(getattr(memory,'tool_ledger',[]))
-        if (entry.get('call') or {}).get('tool')=='verify_subgoal'
-        and entry.get('subgoal_id') in (None,'sg_%d'%index)),None)
+        item.get('verification') for item in reversed(
+            getattr(memory,'observation_searches',[]))
+        if item.get('intent')=='VERIFY' and
+        item.get('subgoal')==index and item.get('verification')
+    ),None)
     return dict(
         current_subgoal_index=index,
         next_subgoal=(fields(goals[index+1],
@@ -313,12 +317,12 @@ def navigation_progress_review(memory):
         directional_history=segments[-5:],
         observed_direction_reversal=changed_direction,
         latest_visual_hypotheses=latest_targets,
-        last_verification=(fields(last_verifier,('status','stage','reason',
-            'missing','supported')) if last_verifier else None),
+        last_verification=(fields(last_verifier,('status','evidence',
+            'uncertainty','source_observation_id')) if last_verifier else None),
         interpretation='local_measured_segments_are_historical_not_global_pose; '
             'visual_targets_are_unverified_hypotheses; no_subgoal_auto_completion',
         model_choices='If evidence suggests a phase change, evaluate '
-            'verify_subgoal, targeted ground_landmark, or model-owned '
+            'observe_for_goal(mode=VERIFY), targeted ground_landmark, or model-owned '
             'select_subgoal (provisional only); otherwise continue purposefully.')
 
 
@@ -385,6 +389,7 @@ def navigation_context(runtime):
             select_subgoal_is_navigation_decision_not_verified_completion=True),
         historical_motion_evidence={key:value for key,value in registered_motion_history(memory).items()
             if key!='rows'},
+        route_progress=memory.route_progress_summary(),
         action_calibration=dict(turn_step_deg=runtime.camera.turn_angle,
             forward_step_m=getattr(runtime.camera,'forward_step',None),
             turn_and_observe_max_deg=runtime.camera.turn_angle *
@@ -593,6 +598,8 @@ def navigation_context(runtime):
             candidate=recent_search.get('candidate'),
             best_cue=recent_search.get('best_cue'),
             best_approach=recent_search.get('best_approach'),
+            observation_mode=recent_search.get('intent'),
+            verification=recent_search.get('verification'),
             approach_candidates=recent_search.get('approach_candidates',[])[-3:],
             blocked_approaches=recent_search.get('blocked_approaches',[])[-6:],
             visual_reports=[dict(report,
@@ -651,6 +658,8 @@ def compact_navigation_context(state):
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_visual_hypotheses',
             'last_verification','interpretation','model_choices'))
+    if state.get('route_progress'):
+        out['route_progress']=state['route_progress']
     if state.get('forward_stall_evidence'):
         s=state['forward_stall_evidence']
         out['forward_stall_evidence']=fields(s,(
@@ -699,6 +708,9 @@ def compact_navigation_context(state):
                 best_candidate=v.get('best_candidate'),
                 best_cue=v.get('best_cue'),
                 best_approach=v.get('best_approach'),
+                observation_mode=v.get('observation_mode'),
+                verification=v.get('verification'),
+                subgoal_transition=v.get('subgoal_transition'),
                 approach_candidates=v.get('approach_candidates',[])[-3:],
                 blocked_approaches=v.get('blocked_approaches',[])[-4:],
                 checked_views=v.get('checked_views',[])[-3:])
@@ -751,6 +763,8 @@ def compact_navigation_context(state):
             objective=short(t.get('objective',''),120),outcome=t.get('outcome'),
             candidate=t.get('candidate'),best_cue=t.get('best_cue'),
             best_approach=t.get('best_approach'),
+            observation_mode=t.get('observation_mode'),
+            verification=t.get('verification'),
             approach_candidates=t.get('approach_candidates',[])[-3:],
             blocked_approaches=t.get('blocked_approaches',[])[-4:],
             visual_reports=compact_vlm_reports(t.get('visual_reports')),

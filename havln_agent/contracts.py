@@ -33,8 +33,9 @@ def registry(camera, max_actions, pitch_deg=0.):
         'analyze_scene': ('Ask one visual question about current openings/landmarks/people, or explicitly select historical observations.',
             dict(oneOf=[dict(object_schema(dict(question=text)), required=[]),
                 dict(object_schema(dict(history, question=text)), required=['scope', 'observation_ids'])])),
-        'observe_for_goal': ('Delegate the WHOLE active visual search to VLM: include in the existing objective what to look at now AND the visible cues expected at or near the end of the current subgoal, if identifiable. This is a visual reference, NOT a completion claim. VLM sees current RGB plus metrically encoded Depth, chooses yaw/pitch, proposes an aligned short-forward candidate, and receives lightweight measured obstacle feedback within the SAME observation; it reports candidate and rejected directions for model-directed movement. Optional sweep_degrees up to 360; omit direction. No forward motion by VLM.',
+        'observe_for_goal': ('Delegate a complete Observation Agent session. mode=SEARCH locates targets; APPROACH finds a promising short direction; OBSTACLE_REVIEW explores alternatives after measured blockage; VERIFY confirms whether the robot physically completed the current semantic subgoal. A VLM-confirmed result with real RGB-D sources advances the milestone. Geometry facts are input to VLM, not an independent route veto. VLM TURN/LOOK only; NavigationAgent owns MOVE.',
             dict(object_schema(dict(
+                mode=dict(enum=['SEARCH','APPROACH','OBSTACLE_REVIEW','VERIFY']),
                 objective=dict(TEXT,minLength=1),
                 target_types=dict(type='array',minItems=1,maxItems=3,uniqueItems=True,
                     items=dict(type='string',minLength=1,maxLength=80)),

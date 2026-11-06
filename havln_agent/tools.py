@@ -704,48 +704,16 @@ class ToolExecutor:
         return result
 
     def _finish_navigation(self, outcome, evidence):
-        if outcome == 'success' and set(self.memory.task.completed_subgoals) != set(range(len(
-            self.memory.task.subgoals
-        ))):
-            return dict(status='INSUFFICIENT_EVIDENCE', reason='ordered_subgoals_not_verified')
-        if outcome == 'success':
-            self.refresh()
-            scene = self.memory.scene_memory
-            if (
-                not self.memory.task.subgoals
-                or not scene
-                or not current_visual_evidence(scene['source'], self.memory, time.monotonic(),
-                                               self.config['max_scene_age_seconds'])
-                or not scene['scene']['final_target_visible']
-                or not scene['scene']['final_target_evidence'].strip()
-            ):
-                return dict(status='INSUFFICIENT_EVIDENCE', reason='fresh_final_arrival_evidence_required')
-            final = self.memory.task.subgoals[-1]
-            wanted = task_tokens(final['landmark'] + ' ' + final['target'])
-            nearby = [
-                g
-                for g in self.memory.groundings
-                if g['status'] == 'LOCALIZED'
-                and current_visual_evidence(g['source'], self.memory, time.monotonic(),
-                                            self.config['max_scene_age_seconds'])
-                and wanted & task_tokens(g['target'])
-                and g['position']['status'] == 'LOCALIZED'
-                and not self.estimate_goal(g)['requires_reconfirmation']
-                and math.hypot(g['position']['x_right'], g['position']['z_forward']) <= self.config['waypoint_distance']
-            ]
-            proof = self.memory.task.completion_evidence[-1].get('verification', {}) \
-                if self.memory.task.completion_evidence else {}
-            landing_arrival = (
-                proof.get('completion_confirmed')
-                and 'multi_frame_level_landing_transition' in proof.get('supported', [])
-                and not any(a['action'] == 'MOVE_FORWARD' for a in self.memory.actions
-                            if a['step'] >= self.memory.task.subgoal_started)
-                and any(g.get('landing_geometry', {}).get('status') == 'SUPPORTED'
-                        and current_visual_evidence(g['source'], self.memory, time.monotonic(),
-                                                    self.config['max_scene_age_seconds'])
-                        and wanted & task_tokens(g['target']) for g in self.memory.groundings)
-            )
-            if not nearby and not landing_arrival:
-                return dict(status='INSUFFICIENT_EVIDENCE', reason='fresh_nearby_final_grounding_required')
-        self.terminate('goal_completed' if outcome == 'success' else 'model_aborted', model_requested=True)
-        return dict(status='FINISHED', outcome=outcome, evidence=evidence)
+        """Only real Observation-Agent-confirmed milestones authorize success.
+
+        No second Python landmark/stair/floor verifier contradicts the VLM.
+        The simulator still owns atomic action legality and STOP.
+        """
+        if outcome=='success' and (not self.memory.task.subgoals or
+                set(self.memory.task.completed_subgoals)!=set(
+                    range(len(self.memory.task.subgoals)))):
+            return dict(status='INSUFFICIENT_EVIDENCE',
+                reason='not_all_subgoals_confirmed_by_observation_agent')
+        self.terminate('goal_completed' if outcome=='success'
+                       else 'model_aborted',model_requested=True)
+        return dict(status='FINISHED',outcome=outcome,evidence=evidence)

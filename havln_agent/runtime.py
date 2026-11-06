@@ -273,31 +273,15 @@ class AgentRuntime(ToolExecutor):
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
             reason='measured_centerline_obstacle')
-        # Do not repeatedly pay for an identical RGB-D/pose VLM request.
-        # A changed viewpoint or live human frame produces a different key.
-        pose=source['pose']
-        key=(self.memory.episode_id,source['rgb_hash'],source['depth_hash'],
-             pose['heading'],pose.get('pitch_deg',self.pitch_deg),
-             pose.get('viewpoint_generation',0))
-        previous=getattr(self,'_last_obstacle_vision',None)
-        if previous and previous['key']==key:
-            visual=copy.deepcopy(previous['visual'])
-            reused=True
-        else:
-            reused=False
-            try:
-                visual=self.visual_perception.describe_obstacle(
-                    self.observation,source,center)
-                visual=dict(visual,status='OK',
-                    evidence_origin='current_RGB_VLM_hypothesis')
-            except (APIError,BudgetExceeded,ValueError,RuntimeError) as error:
-                # A vision outage must never erase measured obstacle evidence
-                # or convert a confirmed near-field obstacle into free space.
-                visual=dict(status='UNAVAILABLE',visible=False,
-                    description='',visual_relation='unknown',
-                    uncertainty='visual_description_unavailable',
-                    error_type=type(error).__name__)
-            self._last_obstacle_vision=dict(key=key,visual=copy.deepcopy(visual))
+        # A measured central obstacle stops the pending atomic step.
+        # The NEXT Observation Agent OBSTACLE_REVIEW gets real RGB-D and
+        # measured facts; never run a second, isolated obstacle VLM here.
+        # The prior successful route remains in receipt-derived Memory.
+        source=self.source()
+        visual=dict(status='DEFERRED_TO_OBSERVATION_AGENT',
+            description='',
+            uncertainty='use_OBSTACLE_REVIEW_with_live_RGBD_and_geometry')
+        reused=False
         depth=probe['depth']
         safety=dict(
             path_state=depth['path_state'],
@@ -322,7 +306,7 @@ class AgentRuntime(ToolExecutor):
             identity_is_visual_hypothesis_only=True,
             next_action_selected_by='navigation_agent')
         self.event('pre_forward_obstacle_reported',
-            source='live_depth_plus_visual_perception',
+            source='live_depth_for_observation_agent',
             depth_observation_id=source['observation_id'],
             central_support_pixels=center['central_support_pixels'],
             visual_status=visual['status'],visual_reused=reused,
@@ -330,21 +314,31 @@ class AgentRuntime(ToolExecutor):
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
             safety=safety,obstacle_observation=combined,
-            information_options=['navigate_relative','observe_for_goal',
-                'inspect_geometry','get_waypoint_candidates'])
+            information_options=['observe_for_goal','navigate_relative'])
 
     def _observe_for_goal(self, objective, target_types, direction=None,
                           sweep_degrees=360, checkpoint_degrees=30,
-                          look='none', force_recheck=False):
-        # The VLM owns the camera subtask unless the caller explicitly asks
-        # for the legacy fixed-direction calibrated scan.
-        if direction is None:
-            return self.observation_controller.scan_vlm(
-                objective,target_types,sweep_degrees=sweep_degrees,
-                look=look,force_recheck=force_recheck)
-        return self.observation_controller.scan(
-            objective,target_types,direction,sweep_degrees,
-            checkpoint_degrees,look,force_recheck=force_recheck)
+                          look='none', force_recheck=False, mode='APPROACH'):
+        """Delegate one search/approach/obstacle/VERIFY task to the SAME VLM."""
+        if direction is not None:
+            if mode!='APPROACH':
+                return dict(status='INVALID_ARGUMENTS',
+                    reason='verification_requires_vlm_owned_camera')
+            return self.observation_controller.scan(
+                objective,target_types,direction,sweep_degrees,
+                checkpoint_degrees,look,force_recheck=force_recheck)
+        result=self.observation_controller.scan_vlm(
+            objective,target_types,sweep_degrees=sweep_degrees,
+            look=look,force_recheck=force_recheck,mode=mode)
+        if mode=='VERIFY' and result.get('outcome')=='SUBGOAL_CONFIRMED':
+            confirmation=self.memory.confirm_subgoal_observation(
+                result.get('verification') or {},objective)
+            result['subgoal_transition']=confirmation
+            if confirmation['status']=='CONFIRMED':
+                self._cancel_local_navigation('vlm_observed_subgoal_completed')
+                if confirmation['next_subgoal']<len(self.memory.task.subgoals):
+                    self.set_semantic_goal()
+        return result
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
         count = round(abs(relative_turn_deg)/self.camera.turn_angle)
@@ -844,7 +838,7 @@ class AgentRuntime(ToolExecutor):
         return dict(status='OK', reason=reason, control_event='task_review_requested')
 
     def _request_finish(self, outcome, evidence):
-        # The shared independent verifier alone can turn a success claim into STOP.
+        # No independent semantic verifier: all milestones came from VLM VERIFY.
         return self._finish_navigation(outcome, evidence)
 
     def assess(self, value):

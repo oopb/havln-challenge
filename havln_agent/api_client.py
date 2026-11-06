@@ -1,5 +1,6 @@
 """Three canonical model roles, bounded HTTP transport and one-object JSON protocol."""
 from contextlib import contextmanager
+import copy
 import hashlib
 import json
 import math
@@ -358,7 +359,8 @@ class APIClient:
 
     def complete(self, role, purpose, system, context, schema, image_url=None, cache=False, validate=None,
                  normalize=None, timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
-                 retry_safe=False, protocol=None, validation_schema=None):
+                 retry_safe=False, protocol=None, validation_schema=None,
+                 conversation_messages=None):
         # Only pure inference callers opt in. No environment tool executes until
         # a single response has been returned and independently validated.
         self.completion_requests += 1
@@ -371,7 +373,8 @@ class APIClient:
                     request_id,request_start,image_url=image_url,cache=cache,validate=validate,normalize=normalize,
                     timeout_seconds=timeout_seconds,format_retry=format_retry,result_schema=result_schema,
                     cache_context=cache_context,retry_safe=retry_safe,protocol=protocol,
-                    previous_endpoint_failures=failures,validation_schema=validation_schema)
+                    previous_endpoint_failures=failures,validation_schema=validation_schema,
+                    conversation_messages=conversation_messages)
             except BudgetExceeded:
                 raise
             except APIError as error:
@@ -387,7 +390,8 @@ class APIClient:
     def _complete_endpoint(self, role, purpose, system, context, schema, config, endpoint_index,
                  request_id, request_start, image_url=None, cache=False, validate=None, normalize=None,
                  timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
-                 retry_safe=False, protocol=None, previous_endpoint_failures=None, validation_schema=None):
+                 retry_safe=False, protocol=None, previous_endpoint_failures=None, validation_schema=None,
+                 conversation_messages=None):
         endpoint_id = 'primary' if endpoint_index==0 else 'fallback_%d' % endpoint_index
         validator = Draft7Validator(validation_schema or schema)
         result_validator = Draft7Validator(result_schema or validation_schema or schema)
@@ -405,6 +409,16 @@ class APIClient:
                 {'type': 'image_url', 'image_url': {'url': value}} for value in images]
             hashes = [hashlib.sha256(value.encode()).hexdigest() for value in images]
             logged_messages[1]['image_sha256'] = hashes if isinstance(image_url, list) else hashes[0]
+        # Re-send the task-local multimodal dialogue on each stateless request.
+        # Never persist raw historical image base64 payloads in the audit logs.
+        if conversation_messages:
+            if (not isinstance(conversation_messages,list) or
+                    any(not isinstance(turn,dict) or
+                        turn.get('role') not in ('user','assistant','tool')
+                        for turn in conversation_messages)):
+                raise APIError('invalid_observation_conversation',category='structured_field')
+            messages=[messages[0]]+copy.deepcopy(conversation_messages)+[messages[1]]
+            logged_messages[1]['prior_conversation_turns']=len(conversation_messages)
         response_format = {'type': config['response_format']}
         if config['response_format'] == 'json_schema':
             response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)

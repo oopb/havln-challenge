@@ -22,39 +22,26 @@ class CapturingClient:
 
 
 class PromptContractTests(unittest.TestCase):
-    def test_navigation_prompt_prioritizes_same_waypoint_and_real_safety(self):
-        client = CapturingClient(dict(tool="inspect_geometry", args={}))
-        runtime = SimpleNamespace(
-            client=client, registry=None,
-            make_registry=Mock(return_value={"inspect_geometry": {
-                "parameters": {"type": "object", "properties": {},
-                               "required": [], "additionalProperties": False},
-                "description": "Current geometry", "permission": "READ_ONLY"}}),
+    def test_navigation_prompt_delegates_full_RGBD_and_verification(self):
+        client=CapturingClient(dict(tool='observe_for_goal',args=dict(
+            objective='Has the robot reached the stair bottom?',
+            target_types=['stairs'],mode='VERIFY')))
+        specs=dict(observe_for_goal=dict(description='VLM observation',
+            permission='NAVIGATION',parameters=dict(type='object',
+                properties={},required=[],additionalProperties=True)))
+        runtime=SimpleNamespace(client=client,registry=None,
+            make_registry=Mock(return_value=specs),
             memory=SimpleNamespace(keyframes={}))
-        with patch("havln_agent.navigation_agent.navigation_context", return_value={
-            "candidate_waypoints": [{"id": "p0", "first_step": "EXECUTABLE"}],
-            "local_navigation": {"status": "IN_PROGRESS", "waypoint_id": "p0"}}):
+        with patch('havln_agent.navigation_agent.navigation_context',
+                   return_value=dict(goal=dict(target='stairs'))):
             NavigationAgent(runtime).decide()
-        self.assertEqual(client.role, "navigation_agent")
-        self.assertIn("SAME waypoint_id", client.system)
-        self.assertIn("grounding is PARTIAL or UNKNOWN", client.system)
-        self.assertIn("navigate_relative", client.system)
-        # Pixel steering is offered only with a fresh localized visual box,
-        # not unconditionally in the strategic prompt/tool menu.
-        self.assertNotIn("navigate_to_pixel", client.system)
-        self.assertIn("NOT a movement prohibition", client.system)
-        self.assertIn("Never bypass a measured collision", client.system)
-        self.assertIn("candidate_waypoints", client.system)
-        self.assertIn("fresh RGB-D", client.system)
-        self.assertIn("0.25m atomic forward action",client.system)
-        self.assertIn("UNCONFIRMED is NOT BLOCKED",client.system)
-        self.assertIn("NEEDS_VIEW", client.system)
-        self.assertIn("REQUIRES_ATTENTION", client.system)
-        self.assertIn("never request_finish", client.system)
-        self.assertIn("MODE: OBSERVE", client.system)
-        self.assertIn("navigation_memory", client.system)
-        self.assertNotIn("LOOK_DOWN and assess/ground the entrance", client.system)
-        self.assertTrue(client.kwargs["retry_safe"])
+        self.assertIn('mode=VERIFY',client.system)
+        self.assertIn('real',client.system.lower())
+        self.assertIn('CONFIRMED',client.system)
+        self.assertIn('BLOCKED',client.system)
+        self.assertIn('MODE: OBSERVE',client.system)
+        self.assertNotIn('verify_subgoal',client.system)
+        self.assertEqual(client.role,'navigation_agent')
 
     def test_observation_stagnation_requests_model_authored_direction_without_forced_motion(self):
         client=CapturingClient(dict(tool='navigate_relative',
@@ -82,12 +69,13 @@ class PromptContractTests(unittest.TestCase):
         self.assertEqual(client.role,'navigation_agent')
 
     def test_observation_intervention_is_one_shot_per_stance(self):
-        client=CapturingClient(dict(tool='inspect_geometry',args={}))
+        client=CapturingClient(dict(tool='navigate_relative',args=dict(
+            turn_deg=0,distance_m=.25)))
         runtime=SimpleNamespace(client=client,registry=None,
-            make_registry=Mock(return_value={'inspect_geometry':{
-                'parameters':dict(type='object',properties={},
-                    required=[],additionalProperties=False),
-                'description':'measure geometry','permission':'READ_ONLY'}}),
+            make_registry=Mock(return_value=dict(navigate_relative=dict(
+                description='move',permission='NAVIGATION',
+                parameters=dict(type='object',properties={},
+                    required=[],additionalProperties=False)))),
             memory=SimpleNamespace(keyframes={}),event=Mock())
         def state():
             return dict(task_selection=dict(current_subgoal_index=0),
@@ -98,25 +86,22 @@ class PromptContractTests(unittest.TestCase):
                     same_stance_observation_calls=16,
                     low_information_calls=15))
         with patch('havln_agent.navigation_agent.navigation_context',
-                   side_effect=lambda _: state()):
+                   side_effect=lambda _:state()):
             agent=NavigationAgent(runtime)
             agent.decide()
             agent.decide()
         self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[0])
         self.assertNotIn('NO CONFIRMED SAMPLED BEARING',client.system_history[1])
         self.assertEqual(runtime.event.call_count,1)
-        self.assertIn('other headings are UNMEASURED', client.system_history[0])
-        self.assertIn('DO NOT take max_atomic_steps',client.system)
-        # Same stance/subgoal but NEW plan revision must permit a new
-        # checkpoint, because the semantic route requirement may have changed.
         runtime.plan_revision=2
         with patch('havln_agent.navigation_agent.navigation_context',
-                   side_effect=lambda _: state()):
+                   side_effect=lambda _:state()):
             agent.decide()
         self.assertIn('NO CONFIRMED SAMPLED BEARING',client.system_history[-1])
         self.assertEqual(runtime.event.call_count,2)
 
     @staticmethod
+
     def _panorama_fixture():
         headings=[0,90,180,270]
         viewpoints=[
@@ -236,27 +221,25 @@ class PromptContractTests(unittest.TestCase):
             self.assertEqual(runtime.event.call_count,2)
             visual.panorama_direction_evidence.assert_called_once()
 
-    def test_orientation_only_goal_does_not_require_unrelated_translation(self):
-        client=CapturingClient(dict(tool='verify_subgoal',
-                                    args=dict(claim='subgoal_completed',evidence='turn',
-                                              observation_ids=['obs1'])))
+    def test_orientation_only_goal_offers_observation_verification(self):
+        client=CapturingClient(dict(tool='observe_for_goal',args=dict(
+            mode='VERIFY',objective='Is the robot facing the requested direction?',
+            target_types=['orientation'])))
+        spec=dict(description='observation',permission='NAVIGATION',
+            parameters=dict(type='object',properties={},
+                required=[],additionalProperties=True))
         runtime=SimpleNamespace(client=client,registry=None,
             make_registry=Mock(return_value=dict(
-                navigate_relative=dict(description='MOVE',permission='NAVIGATION',
-                    parameters=dict(type='object',properties={},
-                                    additionalProperties=False)),
-                verify_subgoal=dict(description='Verify turn',permission='READ_ONLY',
-                    parameters=dict(type='object',properties={},
-                                    additionalProperties=False)))),
+                observe_for_goal=spec,
+                navigate_relative=dict(spec,description='move'))),
             memory=SimpleNamespace(keyframes={},episode_id='ep-a'),event=Mock())
-        state=dict(panoramic_observation=dict(all_azimuths_observed=True),
-                   orientation=dict(requirement='turn_left'),
-                   task_selection=dict(current_subgoal_index=0),
-                   pose=dict(motion_epoch=0,position_xz_m_est=[0,0]))
+        state=dict(orientation=dict(requirement='turn_left'),
+            task_selection=dict(current_subgoal_index=0),
+            pose=dict(motion_epoch=0,position_xz_m_est=[0,0]))
         with patch('havln_agent.navigation_agent.navigation_context',
                    return_value=state):
             NavigationAgent(runtime).decide()
-        self.assertNotIn('FULL-360 OBSERVATION COMPLETE',client.system)
+        self.assertIn('VERIFY',client.system)
         self.assertEqual(len(client.schema['oneOf']),2)
         runtime.event.assert_not_called()
 
@@ -273,8 +256,8 @@ class PromptContractTests(unittest.TestCase):
                    return_value=dict(observation_stagnation=dict(
                        repeated_low_information=False))):
             NavigationAgent(runtime).decide()
-        self.assertIn('DO NOT take max_atomic_steps',client.system)
-        self.assertIn('continuously',client.system)
+        self.assertNotIn('max_atomic_steps',client.system)
+        self.assertIn('finite',client.system)
         self.assertNotIn('multiple bounded navigate_local batches',client.system)
         self.assertNotIn('MOVEMENT CONTINUITY',client.system)
         runtime.event.assert_not_called()
@@ -292,7 +275,7 @@ class PromptContractTests(unittest.TestCase):
                        repeated_low_information=False))):
             NavigationAgent(runtime).decide()
         self.assertNotIn('OBSERVATION-LOOP DECISION CHECKPOINT',client.system)
-        self.assertIn('Prefer a measured goal-approaching direction',client.system)
+        self.assertIn('Observation Agent',client.system)
 
     def test_task_review_never_asks_model_to_generate_predicates(self):
         client = CapturingClient(dict(intent="continue", subgoal="Descend stairs"))
