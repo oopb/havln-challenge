@@ -348,8 +348,16 @@ class MemoryRecords:
             if (result.get('interrupted_status')!='BLOCKED' and
                     result.get('status')!='BLOCKED'):
                 continue
-            # Use the actual end-of-attempt camera yaw after any TURN,
-            # not the older request yaw from before the turn.
+            # The executor's blocked_at pose is authoritative even if a
+            # later keyframe was evicted. Legacy receipts fall back to the
+            # actual end-of-call camera pose, not the pre-turn request pose.
+            exact=result.get('blocked_at')
+            if exact and exact.get('observation_id'):
+                blocked.append(dict(exact,
+                    source_observation_id=exact['observation_id'],
+                    subgoal=entry.get('subgoal_id'),
+                    evidence='measured_block_at_post_turn_stance'))
+                continue
             end_id=result.get('end_observation_id')
             end_record=next((o for o in reversed(self.observations)
                 if o['observation_id']==end_id),None)
@@ -357,12 +365,6 @@ class MemoryRecords:
                 (entry.get('request_context') or {}).get('pose') or {})
             heading=pose.get('heading')
             if not isinstance(heading,(int,float)):
-                continue
-            exact=result.get('blocked_at')
-            if exact and exact.get('observation_id'):
-                blocked.append(dict(exact,
-                    subgoal=entry.get('subgoal_id'),
-                    evidence='measured_block_at_post_turn_stance'))
                 continue
             blocked.append(dict(
                 heading_deg=round(math.degrees(heading)%360,1),

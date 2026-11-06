@@ -290,7 +290,8 @@ class AgentRuntime(ToolExecutor):
         blocked_pose=self.motion_controller.pose()
         blocked_at=self.memory.evidence.blocked_forward(
             source,blocked_pose,reason='measured_centerline_obstacle',
-            center=center)
+            center=center,
+            place_id=self.memory.current.get('place_id'))
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
             blocked_at=blocked_at,

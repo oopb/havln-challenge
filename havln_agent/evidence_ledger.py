@@ -61,10 +61,12 @@ class EvidenceLedger:
         self.route_outcomes.append(datum)
         return copy.deepcopy(datum)
 
-    def blocked_forward(self, source, pose, *, reason, center):
+    def blocked_forward(self, source, pose, *, reason, center,
+                        place_id=None):
         """Record pose AFTER turning but BEFORE a rejected atomic forward."""
         item=dict(
             subgoal_index=source.get('subgoal'),
+            place_id=place_id,
             observation_id=source['observation_id'],
             rgb_hash=source.get('rgb_hash'),
             depth_hash=source.get('depth_hash'),
