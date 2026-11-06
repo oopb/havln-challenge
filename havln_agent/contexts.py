@@ -254,7 +254,10 @@ def planner_context(runtime):
     return dict(current_subgoal=fields(task.subgoals[index],(
         'action','target','landmark','completion_description','semantic_description')),
         verified_milestones=[dict(subgoal=m['subgoal'],source_observation_ids=m.get('observation_ids',[])[-2:],
-            executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported']) for m in task.completion_evidence[-3:]],
+            executed_action_count=len(m.get('executed_steps',[])),supported=m['verification']['supported'])
+            for m in task.completion_evidence
+            if m['subgoal'] in task.completed_subgoals
+            and m.get('status','ACTIVE')=='ACTIVE'][-3:],
         new_evidence=runtime.memory.recall_observation(runtime.memory.current_place_id,
             landmark=task.subgoals[index]['target'],top_k=3)['observations'],
         review_reason=runtime.review_reason,
@@ -352,10 +355,15 @@ def navigation_progress_review(memory):
         latest_directional_step=(directed[-1] if directed else None),
         latest_visual_hypotheses=latest_targets,
         route_prediction_feedback=copy.deepcopy(memory.evidence.route_outcomes[-5:]),
+        completion_review_history=copy.deepcopy(
+            memory.evidence.completion_reviews[-3:]),
         recent_surface_measurements=copy.deepcopy(
             memory.evidence.surface_measurements[-3:]),
-        recent_verification_evidence=copy.deepcopy(
-            memory.evidence.verifications[-3:]),
+        recent_verification_evidence=copy.deepcopy([
+            item for item in memory.evidence.verifications
+            if item.get('subgoal_index')==index
+            and item.get('subgoal_generation',0)==task.subgoal_generations.get(
+                str(index),0)][-3:]),
         latest_blocked_stances=copy.deepcopy(memory.evidence.obstacle_blocks[-4:]),
         last_verification=(fields(last_verifier,('status','evidence',
             'uncertainty','source_observation_id')) if last_verifier else None),
@@ -701,7 +709,8 @@ def compact_navigation_context(state):
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_directional_step',
             'latest_visual_hypotheses','route_prediction_feedback',
-            'latest_blocked_stances','recent_surface_measurements',
+            'latest_blocked_stances','completion_review_history',
+            'recent_surface_measurements',
             'recent_verification_evidence',
             'last_verification','interpretation','model_choices'))
     if state.get('route_progress'):

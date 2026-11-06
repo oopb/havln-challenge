@@ -372,9 +372,29 @@ class ObservationController:
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
                     or prev.get('subgoal_generation',0)!=getattr(r.memory.task,'subgoal_generations',{}).get(
                         str(r.memory.task.current_subgoal_index),0)
-                    or prev.get('start_rgb_hash')!=initial.get('rgb_hash')
-                    or prev.get('start_depth_hash')!=initial.get('depth_hash')
-                    or not comparable_scan_pose(prev.get('start_pose'),start)):
+                    or not (
+                        # Exact same RGB-D and calibrated pose, OR an unchanged
+                        # previously inspected viewpoint after an explicit
+                        # NOT_YET that has had no newer motion/surface proof.
+                        (prev.get('start_rgb_hash')==initial.get('rgb_hash')
+                         and prev.get('start_depth_hash')==initial.get('depth_hash')
+                         and comparable_scan_pose(prev.get('start_pose'),start))
+                        or (mode=='VERIFY' and
+                            prev.get('outcome')=='SUBGOAL_NOT_YET' and
+                            (prev.get('verification') or {}).get('final_verdict')
+                            and not initial.get('new_visual_information',True)
+                            and prev.get('verification_forward_step')==next((
+                                a['step'] for a in reversed(r.memory.actions)
+                                if a.get('action')=='MOVE_FORWARD'),None)
+                            and prev.get('surface_evidence_count',0)==len(
+                                getattr(getattr(r.memory,'evidence',None),
+                                        'surface_measurements',()))
+                            and prev.get('start_pose',{}).get('motion_epoch')==
+                                start.get('motion_epoch')
+                            and math.hypot(
+                                prev.get('start_pose',{}).get('x',1e9)-start.get('x',0),
+                                prev.get('start_pose',{}).get('z',1e9)-start.get('z',0))
+                                <=0.08))):
                 continue
             current_heading=math.degrees(start['heading'])
             def rebound(hypothesis):
@@ -545,6 +565,9 @@ class ObservationController:
                 latest_forward=next((a['step'] for a in reversed(r.memory.actions)
                     if a.get('action')=='MOVE_FORWARD'),None)
                 ledger=getattr(r.memory,'evidence',None)
+                record['verification_forward_step']=latest_forward
+                record['surface_evidence_count']=len(
+                    getattr(ledger,'surface_measurements',()))
                 if ledger is not None:
                     ledger.note_verification(
                         verification,latest_forward,
@@ -665,8 +688,10 @@ class ObservationController:
                     pitch_key=str(round(past['pitch_deg'],1))
                     by_pitch.setdefault(pitch_key,set()).add(
                         round(past['heading_deg']/r.camera.turn_angle))
+                steps=range(-int(60//r.camera.tilt_angle),
+                            int(60//r.camera.tilt_angle)+1)
                 available_pitch=[
-                    x for x in range(-60,61,int(r.camera.tilt_angle))]
+                    round(i*r.camera.tilt_angle,2) for i in steps]
                 options['view_coverage']=dict(
                     current_pitch_deg=r.pitch_deg,
                     by_pitch={k:len(v) for k,v in by_pitch.items()},
