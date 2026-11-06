@@ -408,8 +408,11 @@ class MemoryRecords:
             task.current_subgoal_index=next_index
             task.subgoal_start_steps.setdefault(str(next_index),len(self.actions))
             task.subgoal_started=task.subgoal_start_steps[str(next_index)]
-        self.progress_stage='COMPLETED'
-        self.progress_feedback=recorded['verification']
+        self.progress_stage=(
+            'COMPLETED' if next_index>=len(task.subgoals) else 'NOT_STARTED')
+        self.progress_feedback=(
+            recorded['verification'] if next_index>=len(task.subgoals)
+            else None)
         self.event('subgoal_observation_confirmed',
             subgoal=index,next_subgoal=next_index,observation_ids=ids)
         return dict(status='CONFIRMED',subgoal=index,

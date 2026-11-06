@@ -42,6 +42,10 @@ class AgentRuntime(ToolExecutor):
         self.api_failure = None
         self.navigation_liveness = None
         self.event_callback, self.event_seq = None, 0
+        # Runtime events are emitted to events.jsonl, not to MemoryRecords'
+        # separate semantic-memory events list. Count physical event facts
+        # here so summary.json matches the exported runtime event trace.
+        self.runtime_event_counts={}
         self.task_planner = TaskPlanner(self)
         self.navigation_agent = NavigationAgent(self)
         self.visual_perception = VisualPerception(self)
@@ -80,6 +84,13 @@ class AgentRuntime(ToolExecutor):
             observation_id=(self.memory.current or {}).get('observation_id'),
             plan_revision=self.plan_revision, timestamp=time.time(), run_status=self.phase, source=source, **data)
         self.event_seq += 1
+        if event_type=='forward_side_depth_ambiguity':
+            k='forward_side_depth_ambiguity'
+            self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
+        elif (event_type=='pre_forward_obstacle_reported'
+              and data.get('atomic_move_not_executed') is True):
+            k='atomic_forward_confirmed_depth_block'
+            self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
         if self.event_callback:
             self.event_callback(record)
 
