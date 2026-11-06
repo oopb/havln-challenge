@@ -131,7 +131,14 @@ class NavigationAgent:
             if isinstance(value,dict) and value.get('tool')=='observe_for_goal':
                 args=value.get('args')
                 if isinstance(args,dict) and args.get('look') in ('up','down'):
-                    allowed=set((context.get('legal_look') or []))
+                    # The actual model-facing per-decision schema is the
+                    # single source of truth. Normal navigation removes
+                    # "look" entirely; orientation-mode retains only
+                    # dynamically calibrated directions.
+                    look_schema=(((offered_tools.get('observe_for_goal') or {})
+                        .get('parameters') or {}).get('properties') or {}
+                        ).get('look') or {}
+                    allowed=set(look_schema.get('enum') or ())
                     if args['look'] not in allowed:
                         requested=args.pop('look')
                         if hasattr(runtime,'event'):
