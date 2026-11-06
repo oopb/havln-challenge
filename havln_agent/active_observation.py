@@ -501,11 +501,25 @@ class ObservationController:
             summary=(last_visual.get('observation_summary') or
                 last_visual.get('verification_evidence') or
                 last_visual.get('evidence') or '')
+            default_suggestion=(
+                'Current subgoal is confirmed; inspect the next ordered task '
+                'for a grounded route before moving.'
+                if mode=='VERIFY' and final_status=='CONFIRMED' else
+                'Current subgoal remains unfinished. Use previously measured '
+                'progress, but inspect current obstacles before choosing '
+                'whether to continue or detour.'
+                if mode=='VERIFY' and final_status=='NOT_YET' else
+                'The verification is inconclusive. Seek the specific missing '
+                'evidence rather than repeating the same unchanged view.'
+                if mode=='VERIFY' else
+                'Choose from the observed candidate bearings; none is '
+                'permanent collision clearance.')
             narrative=dict(
                 observation_summary=summary[:750],
                 navigation_suggestion=((
-                    last_visual.get('navigation_suggestion') or '')[:600]
-                    if not invalid_advice else ''),
+                    (last_visual.get('navigation_suggestion') or
+                     default_suggestion)[:600])
+                    if not invalid_advice else default_suggestion),
                 recommended_next=advice_status,
                 observation_mode=mode,
                 outcome=outcome,
