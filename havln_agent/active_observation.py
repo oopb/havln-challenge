@@ -352,6 +352,44 @@ class ObservationController:
         approach_candidates=[]
         blocked_approaches=[]
         session=[]  # Full RGB-D and assistant replies for one observation task.
+        # A new task may need genuine before/after motion frames from a PREVIOUS
+        # observation. Only select source IDs backed by recorded RGB-D frames,
+        # never synthetic "images" or geometry-based motion clearance.
+        historical_frames=[]
+        recalled_ids=set()
+        frame_reader=getattr(r,'_vision_frame',None)
+        route_reader=getattr(r.memory,'route_progress_summary',None)
+        if callable(frame_reader) and callable(route_reader):
+            progress=route_reader()
+            segments=[v for v in progress.get('successful_segments',[])
+                if v.get('subgoal')==r.memory.task.current_subgoal_index]
+            blocks=progress.get('blocked_at_prior_stances',[])
+            ordered=[]
+            if segments:
+                ordered.extend([segments[-1].get('start_observation_id'),
+                                segments[-1].get('end_observation_id')])
+            if blocks:
+                ordered.append(blocks[-1].get('source_observation_id'))
+            for observation_id in ordered:
+                if (not observation_id or observation_id in recalled_ids
+                        or observation_id==initial['observation_id']):
+                    continue
+                try:
+                    frame,src=frame_reader(observation_id)
+                except (ValueError,KeyError,OSError,RuntimeError):
+                    continue
+                if src.get('observation_id')!=observation_id:
+                    continue
+                pose=src.get('pose') or {}
+                historical_frames.append((frame,dict(
+                    observation_id=observation_id,
+                    heading_deg=round(math.degrees(pose.get('heading',0)),2),
+                    pitch_deg=round(pose.get('pitch_deg',0),2))))
+                recalled_ids.add(observation_id)
+                if len(historical_frames)>=3:
+                    break
+        record['historical_context_observation_ids']=[
+            info['observation_id'] for _,info in historical_frames]
         seen=set()
         # Physical yaw visits help detect costly 180-degree undo sweeps even
         # when a LOOK changed pitch. Only VLM checkpoints count as SEMANTIC
@@ -419,6 +457,9 @@ class ObservationController:
                     if record['checkpoints'] else None),
                 observation_ids=list(dict.fromkeys(
                     p['observation_id'] for p in record['checkpoints'])),
+                cited_observation_ids=list(last_visual.get(
+                    'evidence_observation_ids',[])),
+                missing_evidence=last_visual.get('missing_evidence',''),
                 source='vlm_real_rgbd_history') if mode=='VERIFY' else None)
             record.update(verification=copy.deepcopy(verification),
                 session_rounds=len(session)//2,
@@ -442,6 +483,8 @@ class ObservationController:
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),
                 session_rounds=len(session)//2,
+                historical_context_observation_ids=list(
+                    record['historical_context_observation_ids']),
                 observation_owner='visual_perception_vlm',
                 view_replan_attempts=len(rejected_views),
                 candidate_refinement_views=record['candidate_refinement_views'],
@@ -530,7 +573,8 @@ class ObservationController:
                     r.observation,source,objective,target_types,history,
                     max(0,sweep_degrees-turned),session=session,mode=mode,
                     route_history=route_history,
-                    geometry_evidence=geometry_facts,**options)
+                    geometry_evidence=geometry_facts,
+                    historical_frames=historical_frames,**options)
             except (APIError,BudgetExceeded) as error:
                 return finish('VISION_UNAVAILABLE','PARTIAL',type(error).__name__)
             position=r.motion_controller.pose()
@@ -650,7 +694,13 @@ class ObservationController:
                            p['heading_deg']==proposal['heading_deg']
                            for p in approach_candidates):
                     approach_candidates.append(proposal)
-                best_approach=proposal
+                # Ranking is for presentation only; NavigationAgent still
+                # receives ALL measured candidates and owns route choice.
+                ranks={'ADVANCE':3,'DETOUR':2,'UNKNOWN':1,'REVERSE':0}
+                if (best_approach is None or
+                    ranks.get(proposal['expected_progress'],1)>=
+                    ranks.get(best_approach.get('expected_progress','UNKNOWN'),1)):
+                    best_approach=proposal
                 if candidate_found_checkpoint is None:
                     candidate_found_checkpoint=len(record['checkpoints'])-1
                 # Persist the accepted bearing's *visual* evidence rather
