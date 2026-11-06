@@ -95,7 +95,7 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     candidate_surface_box=dict(anyOf=[
         dict(type='array',minItems=4,maxItems=4,
             items=dict(type='number',minimum=0,maximum=1)),
-        dict(type='null')]))
+        dict(type='null')])))
 # Optional model-authored advice is never permission to MOVE or change subgoals.
 _ADVICE_FIELDS=dict(
     observation_summary=dict(type='string',maxLength=750),
