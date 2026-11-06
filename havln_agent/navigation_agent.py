@@ -45,7 +45,7 @@ OBSERVE_PROMPT = (
     'The Observation Agent navigation_feedback carries a measured/visual '
     'summary AND a separate advisory. Old subgoal observations are '
     'historical and must not replace the CURRENT milestone. '
-    'Recommendations are proposals, 
+    'Recommendations are proposals, '
     'not verified collision clearance or orders. '
     'When a registered forward step shows credible vertical progress '
     'opposite the current task intent, reconsider heading before issuing '
