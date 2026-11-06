@@ -1,5 +1,6 @@
 """One visual question per request; semantic reuse is keyed by image and question."""
 import copy
+import json
 import math
 
 from .api_client import TEXT,object_schema,APIError,BudgetExceeded
@@ -50,6 +51,29 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
     reason=dict(type='string',maxLength=250)))
+
+# The VLM confirms semantic outcomes from real observations, not from a
+# Python stair/landing predicate or a claimed movement distance.
+VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
+    verification_status=dict(enum=['CONFIRMED','NOT_YET','UNCERTAIN']),
+    verification_evidence=dict(type='string',maxLength=450),
+    uncertainty=dict(type='string',maxLength=300),
+    next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
+    turn_deg=dict(enum=[0,15,30,45,60,90]),
+    reason=dict(type='string',maxLength=250)))
+
+VERIFY_GUIDANCE_PROMPT = (
+    'You are Observation Agent confirming one semantic navigation subgoal. '
+    'Use current real RGB/metric Depth, genuine earlier views in this session '
+    'and evidence of measured robot movement from the same task. '
+    'Respond CONFIRMED only when the ROBOT reached the described milestone; '
+    'a distant destination or partially descended staircase does not mean '
+    'arrival. Respond NOT_YET when unfinished work is visible, otherwise '
+    'UNCERTAIN. You can ask to TURN/LOOK for additional real views, preserving '
+    'full session history, but cannot MOVE, certify free space or change goals. '
+    'Cite observed visual relationships, actual observation IDs and uncertainty. '
+    'Use finish when evidence suffices; turn angle must be 15-90 degrees and '
+    'look/finish angle must be zero. Return one schema-valid JSON object.')
 
 SCAN_GUIDANCE_PROMPT = (
     'You are the VLM OBSERVATION SUBAGENT, responsible for visual search and '
@@ -292,12 +316,10 @@ class VisualPerception:
 
     def guide_scan_view(self, observation, source, objective, target_types,
                         view_history, remaining_turn_deg, prior_targets=None,
-                        observed_yaw_pitch=None, view_correction=None):
-        """VLM-directed next camera action from one genuine current RGB view.
-
-        Provide only compact, source-labeled history, not a growing conversation
-        or full prior images. Every decision uses the current sensor image.
-        """
+                        observed_yaw_pitch=None, view_correction=None,
+                        session=None, mode='APPROACH', route_history=None,
+                        geometry_evidence=None):
+        """One current RGB-D step with the full task-local multimodal dialogue."""
         from .vision_protocol import coordinate_schema, coordinate_prompt
         from .vision_protocol import normalize_coordinates
         task=self.runtime.memory.task
@@ -316,6 +338,9 @@ class VisualPerception:
             observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
             prior_target_hypotheses=list(prior_targets or ())[-2:],
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        request['observation_mode']=mode
+        request['route_history']=route_history or {}
+        request['measured_geometry']=geometry_evidence or {}
         images=[image_url(observation,max_edge=640)]
         camera=getattr(self.runtime,'camera',None)
         if camera is not None and getattr(observation,'depth',None) is not None:
@@ -341,14 +366,47 @@ class VisualPerception:
             if not turns and value['turn_deg']!=0:
                 raise APIError('vlm_look_or_finish_requires_zero_turn',
                                category='structured_field')
-        return self.complete(
+        verifying=mode=='VERIFY'
+        def save_dialogue(result):
+            if session is None:
+                return
+            answer=copy.deepcopy(result)
+            if not verifying:
+                if answer.get('box') is not None:
+                    answer['box']=[int(round(x*1000)) for x in answer['box']]
+                answer['coordinate_space']='image_1000_xyxy'
+            session.append(dict(role='user',content=[
+                dict(type='text',text=json.dumps(request,ensure_ascii=False))]+[
+                dict(type='image_url',image_url=dict(url=img)) for img in images]))
+            session.append(dict(role='assistant',content=json.dumps(
+                answer,ensure_ascii=False)))
+        if verifying:
+            result=self.complete('visual_perception','vlm_verify_subgoal',
+                VERIFY_GUIDANCE_PROMPT,request,VERIFY_GUIDANCE_SCHEMA,
+                image_url=images,cache=False,validate=validate,
+                result_schema=VERIFY_GUIDANCE_SCHEMA,
+                conversation_messages=session)
+            save_dialogue(result)
+            return dict(target_visible=False,target_type='verification',
+                confidence='low',box=None,evidence=result['verification_evidence'],
+                uncertainty=result['uncertainty'],target_kind='UNKNOWN',
+                candidate_approach=False,next_action=result['next_action'],
+                turn_deg=result['turn_deg'],reason=result['reason'],
+                verification_status=result['verification_status'],
+                verification_evidence=result['verification_evidence'])
+        result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
-            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy'),
+            request,coordinate_schema(SCAN_GUIDANCE_SCHEMA,'image_1000_xyxy',
+                                      allow_missing_unit=True),
             image_url=images,cache=False,
             validate=validate,
-            normalize=lambda value:normalize_coordinates(value,SCAN_GUIDANCE_SCHEMA),
-            result_schema=SCAN_GUIDANCE_SCHEMA)
+            normalize=lambda value:normalize_coordinates(value,
+                SCAN_GUIDANCE_SCHEMA,default_unit='image_1000_xyxy'),
+            result_schema=SCAN_GUIDANCE_SCHEMA,
+            conversation_messages=session)
+        save_dialogue(result)
+        return result
 
     def grounding(self,observation,source,target):
         return ground(self,observation,Geometry(observation,self.runtime.camera,self.runtime.config['safety_margin']),
