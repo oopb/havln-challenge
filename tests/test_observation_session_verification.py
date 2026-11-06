@@ -64,6 +64,19 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         self.assertEqual(mem.confirm_subgoal_observation(verdict,
             'replay a stale answer')['status'],'INVALID_EVIDENCE')
 
+    def test_last_milestone_keeps_valid_index_until_finish(self):
+        mem=MemoryRecords(SimpleNamespace(turn_angle=15.))
+        mem.task.subgoals=[dict(action='reach destination')]
+        mem.observations=[dict(observation_id='obs_0099',subgoal=0)]
+        mem.current=mem.observations[0]
+        reply=dict(status='CONFIRMED',source_observation_id='obs_0099',
+            observation_ids=['obs_0099'],
+            evidence='Robot is physically inside requested destination')
+        result=mem.confirm_subgoal_observation(reply,'Confirm final arrival')
+        self.assertEqual(result['next_subgoal'],1)
+        self.assertEqual(mem.task.current_subgoal_index,0)
+        self.assertEqual(mem.task.completed_subgoals,[0])
+
     def test_unsupported_text_or_bad_observation_does_not_confirm(self):
         mem=MemoryRecords(SimpleNamespace(turn_angle=15.))
         mem.task.subgoals=[dict(action='descend')]

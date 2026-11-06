@@ -709,8 +709,9 @@ class ToolExecutor:
         No second Python landmark/stair/floor verifier contradicts the VLM.
         The simulator still owns atomic action legality and STOP.
         """
-        if outcome=='success' and set(self.memory.task.completed_subgoals)!=set(
-                range(len(self.memory.task.subgoals))):
+        if outcome=='success' and (not self.memory.task.subgoals or
+                set(self.memory.task.completed_subgoals)!=set(
+                    range(len(self.memory.task.subgoals)))):
             return dict(status='INSUFFICIENT_EVIDENCE',
                 reason='not_all_subgoals_confirmed_by_observation_agent')
         self.terminate('goal_completed' if outcome=='success'
