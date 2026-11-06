@@ -572,8 +572,10 @@ class ObservationController:
                     # never silently erased because it lacks an exact label.
                     best_cue=candidate
             action=visual['next_action']
-            if mode=='VERIFY' and (action=='finish' or
-                    visual.get('verification_status')=='CONFIRMED'):
+            # A semantic verdict is FINAL only when the VLM itself chooses
+            # finish; a tentative CONFIRMED with a requested look/turn must
+            # obtain that fresh RGB-D checkpoint first.
+            if mode=='VERIFY' and action=='finish':
                 verdict=visual.get('verification_status','UNCERTAIN')
                 return finish({'CONFIRMED':'SUBGOAL_CONFIRMED',
                     'NOT_YET':'SUBGOAL_NOT_YET',
