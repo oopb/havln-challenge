@@ -137,7 +137,8 @@ SCAN_GUIDANCE_PROMPT = (
     'Return expected_progress=ADVANCE, REVERSE, DETOUR, or UNKNOWN if you '
     'can infer whether this CURRENT bearing advances the active goal. '
     'UNKNOWN is preferred when the spatial relation is unclear. '
-    'Use route_history to preserve measured earlier forward progress, and blocked '
+    'Use route_history in the initial session message to preserve measured '
+    'earlier forward progress, and blocked '
     'headings at particular stances. A view opposite successful downward motion '
     'may represent going back UP; use RGB-D to distinguish, not just a stair label. '
     'Measured geometry is information to interpret, not a separate veto. '
@@ -245,10 +246,10 @@ def session_frame_ids(messages):
     current=set()
     historical=set()
     for msg in messages or ():
-        if msg.get('role')!='user':
+        if not isinstance(msg,dict) or msg.get('role')!='user':
             continue
         for part in msg.get('content',()):
-            if part.get('type')!='text':
+            if not isinstance(part,dict) or part.get('type')!='text':
                 continue
             try:
                 request=json.loads(part['text'])
@@ -387,9 +388,14 @@ class VisualPerception:
             heading_deg=round(__import__('math').degrees(pose['heading']),2),
             pitch_deg=round(pose.get('pitch_deg',0),2),
             remaining_turn_deg=int(remaining_turn_deg),
-            previously_inspected_views=list(view_history)[-12:],
+            # The full conversation already carries old images, observations
+            # and replies. Only keep a compact angle coverage map on later
+            # turns; retain legacy short view summaries without a session.
+            previously_inspected_views=(list(view_history)[-12:]
+                if session is None else []),
             observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
-            prior_target_hypotheses=list(prior_targets or ())[-2:],
+            prior_target_hypotheses=(list(prior_targets or ())[-2:]
+                if not session else []),
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
         turn_step=float(getattr(getattr(self.runtime,'camera',None),
                                 'turn_angle',15))
@@ -398,7 +404,10 @@ class VisualPerception:
             if int(i*turn_step)<=90]
         request['allowed_turn_deg']=allowed_turns
         request['observation_mode']=mode
-        request['route_history']=route_history or {}
+        if not session:
+            request['route_history']=route_history or {}
+        else:
+            request['route_history_reference']='initial_session_message'
         request['measured_geometry']=geometry_evidence or {}
         # Check same-frame presence BEFORE expensive RGB/Depth encoding.
         # A correction about unchanged obs_XXXX reuses full prior images.
