@@ -60,7 +60,7 @@ SCAN_GUIDANCE_SCHEMA['required'].remove('expected_progress')
 # Python stair/landing predicate or a claimed movement distance.
 VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     verification_status=dict(enum=['CONFIRMED','NOT_YET','UNCERTAIN']),
-    verification_evidence=dict(type='string',maxLength=450),
+    verification_evidence=dict(type='string',maxLength=1800),
     uncertainty=dict(type='string',maxLength=300),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
@@ -68,6 +68,15 @@ VERIFY_GUIDANCE_SCHEMA=object_schema(dict(
     missing_evidence=dict(type='string',maxLength=350),
     evidence_observation_ids=dict(type='array',maxItems=8,uniqueItems=True,
                                   items=dict(type='string',minLength=1,maxLength=64))))
+# Optional model-authored advice is never permission to MOVE or change subgoals.
+_ADVICE_FIELDS=dict(
+    observation_summary=dict(type='string',maxLength=750),
+    navigation_suggestion=dict(type='string',maxLength=600),
+    recommended_next=dict(enum=['CONTINUE_CURRENT_TASK','EXPLORE_ALTERNATIVE',
+        'GATHER_MORE_EVIDENCE','PROCEED_NEXT_TASK','UNKNOWN']))
+for _schema in (SCAN_GUIDANCE_SCHEMA,VERIFY_GUIDANCE_SCHEMA):
+    _schema['properties'].update(copy.deepcopy(_ADVICE_FIELDS))
+
 VERIFY_GUIDANCE_SCHEMA['required'].remove('missing_evidence')
 VERIFY_GUIDANCE_SCHEMA['required'].remove('evidence_observation_ids')
 
@@ -78,11 +87,24 @@ VERIFY_GUIDANCE_PROMPT = (
     'Respond CONFIRMED only when the ROBOT reached the described milestone; '
     'a distant destination or partially descended staircase does not mean '
     'arrival. Respond NOT_YET when unfinished work is visible, otherwise '
-    'UNCERTAIN. You can ask to TURN/LOOK for additional real views, preserving '
+    'UNCERTAIN. VERIFY is an assessment, NOT a prolonged visual search: '
+    'when current RGB-D already demonstrates NOT_YET, finish immediately '
+    'with the evidence; do not repeatedly scan to find a contradictory '
+    'completion scene. If uncertain, request a targeted TURN/LOOK for '
+    'specific missing visual evidence, including a different pitch when '
+    'needed, rather than repeatedly rotating horizontally. '
+    'You can ask to TURN/LOOK for additional real views, preserving '
     'full session history, but cannot MOVE, certify free space or change goals. '
     'Cite observed visual relationships and actual observation IDs; optionally '
-    'return evidence_observation_ids and missing_evidence. For NOT_YET or '
-    'UNCERTAIN, say exactly what has not been observed. '
+    'return evidence_observation_ids and missing_evidence. The '
+    'verification_evidence should normally be two concise sentences; '
+    'detailed grounded evidence is allowed rather than repeatedly rejected. '
+    'For NOT_YET or UNCERTAIN, say exactly what has not been observed. '
+    'Optionally return observation_summary describing visible facts, '
+    'navigation_suggestion as a short uncertain proposal, and '
+    'recommended_next. PROCEED_NEXT_TASK is appropriate only after '
+    'CONFIRMED; a historically successful bearing is not current '
+    'collision clearance, especially after a measured obstacle. '
     'The geometry report is a measurement, not the sole completion verdict. '
     'Use finish when evidence suffices; turn angle must be 15-90 degrees and '
     'look/finish angle must be zero. Return one schema-valid JSON object.')
@@ -162,7 +184,11 @@ SCAN_GUIDANCE_PROMPT = (
     'hit is NOT a confirmed blocker and can be handed off as uncertain. '
     'Avoid re-proposing the same blocked current bearing on identical RGB-D. '
     'You never execute MOVE_FORWARD, decide a route distance or complete '
-    'semantic goals. Detecting a visual candidate does NOT by itself terminate this task: '
+    'semantic goals. Optionally return observation_summary and '
+    'navigation_suggestion as separate grounded one-sentence observations '
+    'and proposals, and recommended_next as a coarse next-step class. '
+    'These are hypotheses and never motion authorization. '
+    'Detecting a visual candidate does NOT by itself terminate this task: '
     'if another real camera view would resolve a concrete ambiguity, choose '
     'that look/turn; choose finish when enough evidence is collected. '
     'Avoid already-observed yaw/pitch combinations and useless 15-degree '
@@ -504,7 +530,10 @@ class VisualPerception:
                 verification_status=result['verification_status'],
                 verification_evidence=result['verification_evidence'],
                 missing_evidence=result.get('missing_evidence',''),
-                evidence_observation_ids=result.get('evidence_observation_ids',[]))
+                evidence_observation_ids=result.get('evidence_observation_ids',[]),
+                observation_summary=result.get('observation_summary',''),
+                navigation_suggestion=result.get('navigation_suggestion',''),
+                recommended_next=result.get('recommended_next','UNKNOWN'))
         result=self.complete(
             'visual_perception','vlm_guided_observation',
             SCAN_GUIDANCE_PROMPT+coordinate_prompt(request),
