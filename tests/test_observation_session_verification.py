@@ -34,6 +34,23 @@ class ObservationSessionVerificationTests(unittest.TestCase):
         self.assertEqual(r.step_calls,[])
         self.assertEqual(r.visual_perception.calls[0]['history'],[])
 
+    def test_verify_waits_for_requested_second_view_before_confirming(self):
+        r=FakeRuntime([])
+        first=dict(guidance('turn_left',15),
+            verification_status='CONFIRMED',
+            verification_evidence='Looks like a landing but needs a turn',
+            uncertainty='uncertain perspective')
+        final=dict(guidance('finish'),
+            verification_status='NOT_YET',
+            verification_evidence='Turn revealed descending stairs still ahead',
+            uncertainty='')
+        r.visual_perception=VLMGuide([first,final])
+        result=ObservationController(r).scan_vlm(
+            'Verify physical arrival',['landing'],90,mode='VERIFY')
+        self.assertEqual(result['outcome'],'SUBGOAL_NOT_YET')
+        self.assertEqual(r.step_calls,['TURN_LEFT'])
+        self.assertEqual(len(r.visual_perception.calls),2)
+
     def test_verify_not_yet_preserves_semantic_goal(self):
         r=FakeRuntime([])
         answer=dict(guidance('finish'),
