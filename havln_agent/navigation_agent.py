@@ -3,11 +3,16 @@ from .contracts import navigation_schema, compact_navigation_protocol, navigatio
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
+from .perception import image_url
 from jsonschema import Draft7Validator
 
 COMMON_PROMPT = (
     'You are NavigationAgent. Own semantic subgoals, route decisions, motion and STOP. '
-    'Observation Agent alone owns RGB-D camera exploration, geometry evidence '
+    'You directly SEE the CURRENT real RGB image attached to this decision '
+    '(its observation ID and pose are in current_rgb). It is not an older '
+    'Observation Agent keyframe. Independently inspect walls, stair direction, '
+    'doors and visible topology; never infer traversability from RGB alone. '
+    'Observation Agent owns detailed RGB-D camera exploration, geometry evidence '
     'interpretation and semantic milestone confirmation. '
     'Output exactly one registered JSON tool+args object. '
     'When evidence suggests the CURRENT subgoal may be complete, call '
@@ -42,6 +47,11 @@ OBSERVE_PROMPT = (
     'and retains all prior RGB-D frames, replies and feedback in the same task. '
     'Do not paraphrase the same unanswered question at unchanged pose/RGB-D. '
     'Read latest_observation_task, route_progress and progress_review. '
+    'Compare the CURRENT RGB with the Observation Agent hypotheses AND '
+    'the measured motion outcomes in route_prediction_feedback. A predicted '
+    'descent that actually moved upward is contradictory evidence, not '
+    'authoritative route guidance. Preserve successful previous movement '
+    'without assuming the old bearing is still collision-free. '
     'The Observation Agent navigation_feedback carries a measured/visual '
     'summary AND a separate advisory. Old subgoal observations are '
     'historical and must not replace the CURRENT milestone. '
@@ -202,15 +212,50 @@ class NavigationAgent:
             else '')
         if advisory and not first_checkpoint:
             stagnation['intervention_delivery']='previously_issued_or_pending_route'
+        # A camera RGB and the JSON pose must originate from the SAME
+        # accepted observation. No second simulator refresh here: the
+        # scheduler owns refresh, and refreshing twice could mix frame/pose.
+        frame=getattr(runtime,'observation',None)
+        record=getattr(runtime.memory,'current',None)
+        rgb_data=None
+        context_for_model=compact_navigation_context(dict(
+            context,instruction=getattr(
+                getattr(runtime.memory,'task',None),'instruction',
+                context.get('instruction'))))
+        if frame is not None and record is not None:
+            source=runtime.source()
+            pose_now=source['pose']
+            if (record['observation_id']!=source['observation_id']
+                    or record['rgb_hash']!=source['rgb_hash']
+                    or record['depth_hash']!=source['depth_hash']
+                    or record.get('pose')!=pose_now):
+                raise APIError('navigation_current_RGBD_pose_identity_mismatch',
+                               category='structured_field')
+            rgb_data=image_url(frame,max_edge=640)
+            context_for_model['current_rgb']=dict(
+                observation_id=source['observation_id'],
+                rgb_hash=source['rgb_hash'],
+                heading_deg=round(__import__('math').degrees(pose_now['heading'])%360,2),
+                pitch_deg=pose_now.get('pitch_deg'),
+                image_attached=True,
+                scope='current_real_sensor_RGB',
+                depth_scope='structured_measurement_only')
+            if hasattr(runtime,'event'):
+                runtime.event('navigation_current_rgb_attached',
+                    source='navigation_agent',
+                    observation_id=source['observation_id'],
+                    rgb_hash=source['rgb_hash'])
+        else:
+            context_for_model['current_rgb']=dict(
+                image_attached=False,reason='no_accepted_frame_in_fixture_or_runtime',
+                scope='NO_VISUAL_EVIDENCE')
         result=runtime.client.complete(
             'navigation_agent', 'navigation_decision',
             COMMON_PROMPT + OBSERVE_PROMPT +
             (PANORAMA_REVIEW_PROMPT if panorama_review else advisory_prompt),
-            compact_navigation_context(dict(
-                context,instruction=getattr(
-                    getattr(runtime.memory,'task',None),'instruction',
-                    context.get('instruction')))),
+            context_for_model,
             navigation_schema(offered_tools), validate=validate,
+            image_url=rgb_data,
             format_retry=int(bool(format_feedback)), retry_safe=True,
             protocol=compact_navigation_protocol(offered_tools),
             validation_schema=navigation_envelope(offered_tools))
