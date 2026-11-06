@@ -322,7 +322,12 @@ class AgentRuntime(ToolExecutor):
     def _observe_for_goal(self, objective, target_types, direction=None,
                           sweep_degrees=360, checkpoint_degrees=30,
                           look='none', force_recheck=False, mode='APPROACH'):
-        """Delegate one search/approach/obstacle/VERIFY task to the SAME VLM."""
+        """One camera task; VERIFY always binds to the runtime ACTIVE milestone.
+
+        The model may propose a question, but it cannot relabel an already
+        verified sg_0 as the completion condition of sg_1. This is a
+        task-identity contract, not a Python semantic completion heuristic.
+        """
         if direction is not None:
             if mode!='APPROACH':
                 return dict(status='INVALID_ARGUMENTS',
@@ -330,17 +335,65 @@ class AgentRuntime(ToolExecutor):
             return self.observation_controller.scan(
                 objective,target_types,direction,sweep_degrees,
                 checkpoint_degrees,look,force_recheck=force_recheck)
+        original_objective=objective
+        active_index=self.memory.task.current_subgoal_index
+        active_id='sg_%d'%active_index
+        if mode=='VERIFY':
+            if active_id!=self.active_subgoal_id:
+                return dict(status='STALE_TARGET',
+                    reason='active_subgoal_not_synchronized_with_task_state')
+            if active_index>=len(self.memory.task.subgoals):
+                return dict(status='INVALID_ARGUMENTS',
+                    reason='no_active_subgoal_to_verify')
+            goal=self.memory.task.subgoals[active_index]
+            condition=goal.get('completion_description') or (
+                str(goal.get('action',''))+' '+str(goal.get('target','')))
+            objective=(
+                'Assess ONLY the current milestone '+active_id+
+                ', action: '+str(goal.get('action',''))+
+                ', target: '+str(goal.get('target',''))+
+                '. Completion criterion: '+condition+
+                '. Earlier milestones are already recorded as confirmed; '
+                'do not re-evaluate their completion here. '
+                'Use real visual evidence and actual action/heading history. '
+                'For an orientation milestone, compare the executed turn '
+                'against the requested orientation; merely seeing or not '
+                'seeing a previous/future landmark is not this criterion.')
+            # The VLM must not be steered by sg_0 stair labels while sg_1
+            # asks for a right turn. Keep only labels from the active goal.
+            labels=[str(goal.get(k,''))[:80] for k in ('action','target')]
+            target_types=list(dict.fromkeys(v for v in labels if v.strip()))
+            if not target_types:
+                target_types=['current semantic milestone']
+        # Execution-side fallback protects legacy/manual tool calls; the
+        # dynamic model-facing schema prevents this invalid proposal earlier.
+        requested_look=look
+        if look in ('up','down'):
+            delta=self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle
+            if abs(self.pitch_deg+delta)>60:
+                look='none'
+                self.event('observation_initial_pitch_clamped',
+                    source='runtime',requested_look=requested_look,
+                    selected_look='none',current_pitch_deg=self.pitch_deg,
+                    subgoal_id=self.active_subgoal_id)
         result=self.observation_controller.scan_vlm(
             objective,target_types,sweep_degrees=sweep_degrees,
             look=look,force_recheck=force_recheck,mode=mode)
-        if mode=='VERIFY' and result.get('outcome')=='SUBGOAL_CONFIRMED':
-            confirmation=self.memory.confirm_subgoal_observation(
-                result.get('verification') or {},objective)
-            result['subgoal_transition']=confirmation
-            if confirmation['status']=='CONFIRMED':
-                self._cancel_local_navigation('vlm_observed_subgoal_completed')
-                if confirmation['next_subgoal']<len(self.memory.task.subgoals):
-                    self.set_semantic_goal()
+        if mode=='VERIFY':
+            result['verification_goal']=dict(
+                subgoal_id=active_id,completion_description=condition,
+                objective_bound_to_runtime=True,
+                model_objective_overridden=(original_objective!=objective))
+            if result.get('outcome')=='SUBGOAL_CONFIRMED':
+                confirmation=self.memory.confirm_subgoal_observation(
+                    result.get('verification') or {},objective)
+                result['subgoal_transition']=confirmation
+                if confirmation['status']=='CONFIRMED':
+                    self._cancel_local_navigation(
+                        'vlm_observed_subgoal_completed')
+                    if confirmation['next_subgoal']<len(
+                            self.memory.task.subgoals):
+                        self.set_semantic_goal()
         return result
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
