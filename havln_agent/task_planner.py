@@ -105,7 +105,7 @@ class TaskPlanner:
             'instruction or changing the ordered goals. Preserve human activities as landmark '
             'attributes. Do not plan coordinates, waypoints or atomic actions. '
             'Do not generate success_criteria: Runtime deterministically owns completion predicates '
-            'and independent evidence verification. No visual claim by itself proves task progress. '
+            'and Observation Agent confirmation. No visual claim by itself proves task progress. '
             'Return exactly one JSON object with intent and subgoal.',
             dict(planner_context(r),required_success_criteria=sorted(required_conditions(goal,index==len(task.subgoals)-1)),
                 **({'format_feedback':format_feedback} if format_feedback else {})),TASK_REVIEW,
