@@ -676,8 +676,8 @@ def compact_navigation_context(state):
                 'decision_liveness','format_feedback'):
         if key in state:out[key]=state[key]
     for key,names in (
-        ('task_selection',('current_subgoal_index','total_subgoals',
-            'verified_subgoals','unverified_subgoal_indices')),
+        ('task_selection',('current_subgoal_index','subgoal_generation',
+            'total_subgoals','verified_subgoals','unverified_subgoal_indices')),
         ('pose',('heading_deg','pitch_deg','position_coordinates_valid',
             'position_xz_m_est','confidence','place_id','viewpoint_generation')),
         ('current_view',('observation_id','semantic_status','description',
@@ -709,12 +709,14 @@ def compact_navigation_context(state):
             'observed_upward_m_est','directional_history',
             'observed_direction_reversal','latest_directional_step',
             'latest_visual_hypotheses','route_prediction_feedback',
-            'latest_blocked_stances','completion_review_history',
+            'completion_review_history',
             'recent_surface_measurements',
             'recent_verification_evidence',
             'last_verification','interpretation','model_choices'))
     if state.get('route_progress'):
-        out['route_progress']=state['route_progress']
+        out['route_progress']=fields(state['route_progress'],(
+            'successful_segments','blocked_at_prior_stances',
+            'current_subgoal','interpretation'))
     if state.get('forward_stall_evidence'):
         s=state['forward_stall_evidence']
         out['forward_stall_evidence']=fields(s,(
