@@ -84,43 +84,80 @@ class MemoryRecords:
         self.events.append(entry)
 
     def note_navigation_assessment(self, decision):
-        """Save model interpretation as editable Memory, never as measurement truth.
+        """Revision log for model assessments, never a verified sensor fact.
 
-        Only real observation IDs can be cited; a hallucinated ID cannot become
-        sensor evidence or block model-selected movement.
+        Each revision has an actual decision-frame identity even if the model
+        omits citations. This context frame is not promoted to task evidence;
+        only explicit, existing IDs and VLM checkpoint IDs become evidence.
+        Unchanged repeated reports are not new historical events.
         """
         task=self.task
         allowed={o['observation_id'] for o in self.observations}
-        references=[o for o in decision.get('evidence_observation_ids',[])
-                    if isinstance(o,str) and o in allowed]
-        changed=False
+        cited=list(dict.fromkeys(o for o in
+            (decision.get('evidence_observation_ids') or [])
+            if isinstance(o,str) and o in allowed))
         previous=dict(progress_narrative=task.progress_narrative,
-                      navigation_intent=task.navigation_intent)
-        for key,maximum in [('progress_narrative',1200),('navigation_intent',700)]:
+                      navigation_intent=task.navigation_intent,
+                      uncertainties=list(task.uncertainties))
+        changed=False
+        for key,maximum in [('progress_narrative',1200),
+                            ('navigation_intent',700)]:
             value=decision.get(key)
-            if isinstance(value,str) and value.strip() and value.strip()!=getattr(task,key):
-                setattr(task,key,value.strip()[:maximum])
+            if isinstance(value,str) and value.strip():
+                proposed=value.strip()[:maximum]
+                if getattr(task,key)!=proposed:
+                    setattr(task,key,proposed)
+                    changed=True
+        if isinstance(decision.get('uncertainties'),list):
+            proposed=[v.strip()[:220]
+                      for v in decision['uncertainties'][:8]
+                      if isinstance(v,str) and v.strip()]
+            if proposed!=task.uncertainties:
+                task.uncertainties=proposed
                 changed=True
-        uncertainty=decision.get('uncertainties')
-        if isinstance(uncertainty,list):
-            task.uncertainties=[v.strip()[:220] for v in uncertainty[:8]
-                                if isinstance(v,str) and v.strip()]
-            changed=True
-        for identifier in references:
+        new_refs=[]
+        for identifier in cited:
             if identifier not in task.evidence_observation_ids:
                 task.evidence_observation_ids.append(identifier)
-        if changed or references:
-            entry=dict(step=len(self.actions),
+                new_refs.append(identifier)
+        if changed or new_refs:
+            context_id=(self.current or {}).get('observation_id')
+            entry=dict(
+                step=len(self.actions),
                 source='navigation_agent_model_assessment_not_sensor_fact',
-                prior=previous,progress_narrative=task.progress_narrative,
+                context_observation_id=(context_id
+                    if context_id in allowed else None),
+                prior=previous,
+                progress_narrative=task.progress_narrative,
                 navigation_intent=task.navigation_intent,
                 uncertainties=list(task.uncertainties),
-                evidence_observation_ids=references,
-                linked_observation_ids_verified=True)
+                evidence_observation_ids=cited,
+                cited_observation_ids_validated=True,
+                completion_verified=False)
             task.progress_history.append(entry)
             task.progress_history=task.progress_history[-60:]
             self.event('mission_progress_updated',**entry)
-        return dict(changed=changed,evidence_observation_ids=references)
+        return dict(changed=changed,
+                    evidence_observation_ids=cited,
+                    new_evidence_observation_ids=new_refs,
+                    context_observation_id=(self.current or {}).get('observation_id'))
+
+    def note_observation_evidence(self, identifiers, objective=''):
+        """Link genuine VLM checkpoints to Memory, not to task completion."""
+        existing={o['observation_id'] for o in self.observations}
+        added=[]
+        for identifier in identifiers:
+            if (identifier in existing and
+                    identifier not in self.task.evidence_observation_ids):
+                self.task.evidence_observation_ids.append(identifier)
+                added.append(identifier)
+        if added:
+            self.event('observation_evidence_indexed',
+                objective=str(objective)[:200],
+                observation_ids=added,
+                source='authentic_RGBD_observation_checkpoints',
+                completion_verified=False)
+        return added
 
     def observe(self, observation, pose, diagnostics):
         info = frame_info(observation, self.camera)

@@ -6,6 +6,7 @@ on:
       - "havln_agent/**"
       - "configs/agent.yaml"
       - "tests/test_mission_navigation_architecture.py"
+      - "tests/test_mission_history_and_headings.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -23,5 +24,7 @@ jobs:
         run: python -m compileall -q havln_agent
       - name: Verify whole-instruction navigation, evidence Memory and RGB-D observation contracts
         run: python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+      - name: Verify canonical heading, session identity and cross-agent evidence consistency
+        run: python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
       - name: Verify RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
