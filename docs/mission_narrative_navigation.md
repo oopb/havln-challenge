@@ -1,3 +1,97 @@
+# v9: pre-decision Depth, motion camera alignment and physical failures
+
+This update addresses the `eval-batch4-23` failure mode: multiple accepted
+`MOVE_FORWARD` commands with byte-identical before/after RGB-D, too many
+rotations, and repeated attempts at the same local obstacle. It does not infer
+Habitat collision states from RGB-D, force a route, or add stair-specific
+rules.
+
+## Runtime decision and execution order
+
+```text
+Refresh current public RGB-D
+    -> forward_preflight(stage=navigation_decision) [no action, no VLM]
+    -> NavigationAgent receives current RGB, CLEAR/BLOCKED/UNKNOWN,
+       measured centerline obstacle ROI and the unified Memory projection
+    -> NavigationAgent independently selects movement / observation / turn
+    -> Movement tool executes model-authored TURN steps (if any)
+    -> Before each MOVE_FORWARD:
+        - Physically LOOK_UP/LOOK_DOWN toward 0° iff camera is tilted
+          (actual Habitat actions and budget, no synthetic angle change)
+        - Refresh public RGB-D
+        - Reuse identical forward_preflight logic (stage=atomic_forward)
+        - BLOCKED central body evidence: do not issue MOVE; return ROI
+        - CLEAR or UNKNOWN: ordinary model-requested motion can attempt
+    -> After real MOVE: compare actual RGB and Depth
+        - unchanged RGB-D: STALLED_AFTER_FORWARD, no collision claimed;
+          interrupt current finite route and return to model
+        - changed RGB-D: registration estimates remain uncertain evidence
+```
+
+The pre-decision scan is only valid for the **current** heading and pitch.
+It cannot certify future headings. Each post-turn step uses a new live
+Depth reading. A CLEAR reading does not guarantee Habitat can translate,
+and UNKNOWN is not treated as blocked. High-confidence central obstacle
+pixels still conservatively veto the attempted atomic forward; a side-only
+wide-depth warning alone does not.
+
+## One measured ROI schema in both places
+
+`havln_agent/forward_preflight.py` emits the exact same:
+`status`, `source_observation_id`, RGB/Depth hashes, yaw and pitch,
+`blocker.focus_region_xyxy_norm`, `blocker.source_pixel_xy`,
+`blocker.nearest_along_m`, `clearance_m` and `path_state`.
+NavigationAgent gets it under `front_depth_preflight` before inference.
+Observation Agent gets `current_front_depth_preflight` with its real RGB-D.
+Executed tools return the same blocker under
+`obstacle_observation.depth.*`, and `mission_history.py` now reads this
+**flat** Depth dictionary rather than incorrectly indexing `depth.center`.
+
+## Physical failure Memory
+
+`EvidenceLedger` separately records:
+
+- `BLOCKED_BEFORE_FORWARD`: measured central obstacle; simulator forward
+  **not issued**.
+- `STALLED_AFTER_FORWARD`: simulator accepted `MOVE_FORWARD` but RGB and
+  Depth were byte-identical before/after; **not** proof of a wall/collision.
+
+Additionally, `observed_front_blocks` stores a **third, read-only sensor fact**:
+front Depth blocked during a NavigationAgent or Observation Agent preflight,
+even when no forward action was attempted. It is not labeled as an
+executed collision or a rejected forward action. It remains source-frame
+specific and is capped and deduplicated.
+
+Histories deduplicate repeated identical RGB/Depth hashes **plus** local
+yaw, pitch, estimated position, motion epoch and viewpoint generation,
+not just `observation_id`. Distinctive visual and positional failures remain
+separate. Models see repeat counts, source frame and actual evidence without
+automatic Python steering/recovery rules. The original whole-mission
+navigation and Observation Agent roles are unchanged.
+
+Camera alignment occurs only if camera pitch is nonzero when the finite
+model-authored route reaches a MOVE_FORWARD step. Subsequent forward steps
+have no alignment overhead if already level. LOOKs count toward the
+competition's atomic action budget. If camera alignment cannot complete,
+motion is not attempted and the model receives an interruption.
+
+## Local smoke test
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
+```
+
+Use a new output directory (for example `eval-batch4-24`) and verify
+`forward_depth_preflight`, `camera_recentered_for_motion`,
+`pre_forward_obstacle_reported`, and `forward_motion_stalled` events,
+plus per-role API costs, valid forwards, and mission completion. The
+protocol identity is `havln-agent-v9-live-forward-depth-preflight`.
+
+---
+
 # v8: explicit turn directions and canonical mission history
 
 This update fixes problems observed in `eval-batch4-22` after the v7

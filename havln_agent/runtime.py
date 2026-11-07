@@ -15,7 +15,8 @@ from .grounding import project_grounding
 from .progress import current_visual_evidence
 from .motion import registered_action, landing_support
 from .tools import ToolExecutor
-from .safety import forward_probe
+from .forward_preflight import sense_forward
+from .evidence_ledger import physical_view_key
 from .waypoint import rank_candidates
 from .spatial import validity
 from .contracts import registry
@@ -91,6 +92,9 @@ class AgentRuntime(ToolExecutor):
             else:
                 record[key] = value
         self.event_seq += 1
+        if event_type=='forward_motion_stalled':
+            k='forward_motion_stalled'
+            self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
         if event_type=='forward_side_depth_ambiguity':
             k='forward_side_depth_ambiguity'
             self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
@@ -229,103 +233,160 @@ class AgentRuntime(ToolExecutor):
                 valid = registered_action(action_record, {o['observation_id']:o for o in self.memory.observations})
                 action_record['evidence_state'] = 'motion_verified' if valid else 'sensor_recorded'
                 self.memory.note_motion()
+                alert=(value['feedback'].get('motion_alert') or {})
+                if alert.get('reason')=='no_observed_frame_change_after_forward':
+                    self.event('forward_motion_stalled',source='environment_receipt',
+                        action_step=alert['action_step'],
+                        before_observation_id=alert['observation_before'],
+                        after_observation_id=alert['observation_after'],
+                        repeated_same_RGBD_stance_heading=alert.get(
+                            'repeat_count_same_RGBD_heading'),
+                        collision_proven=False)
             self.event('atomic_action', source='environment_receipt', action=action, feedback=value['feedback'])
         return value
 
-    def _prepare_forward(self):
-        """Fresh Depth -> (confirmed central obstacle) -> one RGB VLM -> NAV.
+    def forward_preflight(self, stage='navigation_decision'):
+        """Instantaneous, READ-ONLY current front Depth evidence for the model.
 
-        Called once immediately before each atomic MOVE_FORWARD. Uncertain
-        depth, side-only geometry and ordinary stair edges do not authorize
-        an automatic veto. The VLM describes only the same current RGB frame;
-        it never changes the motion command or selects a route.
+        Called before NavigationAgent inference AND from the atomic MOVE
+        preflight. Same geometry and status semantics, but only an actual
+        attempted atomic forward may add a BLOCKED receipt to EvidenceLedger.
         """
-        geometry=self.geometry()
-        probe=forward_probe(geometry)
-        self._last_forward_depth_probe=dict(
-            status=probe['state'],reason=probe.get('reason'),
-            observation_id=self.memory.current['observation_id'],
-            check_mode='automatic_central_near_field_depth',
-            center_confirmed=False)
-        if probe['state'] != 'BLOCKED':
-            return None
-        center=geometry.central_forward_obstruction()
-        if not center['confirmed']:
-            # The generic wide body sweep also sees nearby side walls/risers.
-            # They are useful diagnostic data, not enough to suppress actual
-            # model-authored motion; physical collision still belongs to Habitat.
-            self.event('forward_side_depth_ambiguity',
-                source='live_depth',geometry_state=probe['state'],
-                reason=center['reason'],
-                center_support_pixels=center['central_support_pixels'],
-                physical_collision_proven=False)
-            return None
+        self.assert_owner()
+        if self.memory.current is None or self.observation is None:
+            return dict(status='UNKNOWN',reason='no_live_RGBD',
+                        source_observation_id=None,
+                        camera_pitch_deg=self.pitch_deg)
+        source=self.source()
+        result=sense_forward(self.geometry(),source)
+        result['stage']=stage
+        result['camera_pitch_deg']=self.pitch_deg
+        # Keep measured pre-decision obstacles even when the model chooses
+        # TURN/OBSERVE and no forward was ever requested. This is not a
+        # physical collision receipt or a globally forbidden bearing.
+        if stage in ('navigation_decision','observation_view'):
+            note=self.memory.evidence.note_predecision_obstacle(result)
+            if note:
+                result['repeat_count_same_predecision_view']=note['seen_count']
+        view_key=physical_view_key(dict(
+            observation_id=source['observation_id'],
+            rgb_hash=source['rgb_hash'],
+            depth_hash=source['depth_hash'],
+            heading_deg=result['heading_deg'],
+            pitch_deg=result['pitch_deg'],
+            motion_epoch=result['motion_epoch'],
+            viewpoint_generation=result['viewpoint_generation'],
+            local_position_xz_m_est=result['local_position_xz_m_est']))
+        result['repeat_count_prior_blocks']=sum(
+            physical_view_key(v)==view_key
+            for v in self.memory.evidence.obstacle_blocks)
+        result['repeat_count_prior_stalls']=sum(
+            physical_view_key(v)==view_key
+            for v in self.memory.evidence.motion_stalls)
+        self.event('forward_depth_preflight',source='live_depth',
+            stage=stage,state=result['status'],
+            preflight_source_observation_id=source['observation_id'],
+            heading_deg=result['heading_deg'],pitch_deg=self.pitch_deg,
+            center_confirmed=result['center_confirmed'],
+            repeat_count_prior_blocks=result['repeat_count_prior_blocks'],
+            obstacle_roi=(result['blocker'] or {}).get('focus_region_xyxy_norm'))
+        return result
 
+    def _center_camera_for_forward(self):
+        """Once before the next forward step, return camera to level.
+
+        No action when already level. LOOK actions consume real episode budget
+        and are auditable, unlike silently overwriting pitch_deg. The pose
+        heading and the model-authored route are not changed.
+        """
+        tilt=self.camera.tilt_angle
+        required=int(round(abs(self.pitch_deg)/tilt))
+        if abs(self.pitch_deg)<1e-4:
+            return dict(status='OK',actions=[],pitch_deg=0.,
+                        reason='already_level')
+        if required>math.ceil(60/tilt) or abs(required*tilt-abs(self.pitch_deg))>1e-3:
+            return dict(status='CAMERA_ALIGNMENT_UNCERTAIN',
+                        reason='pitch_not_on_camera_tilt_grid',
+                        pitch_deg=self.pitch_deg,actions=[])
+        before=self.pitch_deg
+        actions=[]
+        for _ in range(required):
+            direction='LOOK_UP' if self.pitch_deg<0 else 'LOOK_DOWN'
+            feedback=self._step(direction)
+            if feedback.get('status')!='EXECUTED':
+                return dict(status=feedback.get('status','PARTIAL'),
+                    reason=feedback.get('reason','camera_recenter_interrupted'),
+                    pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
+                    actions=actions)
+            actions.append(direction)
+        if abs(self.pitch_deg)>1e-3:
+            return dict(status='CAMERA_ALIGNMENT_UNCERTAIN',
+                reason='camera_pitch_did_not_recenter',
+                pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
+                actions=actions)
+        self.event('camera_recentered_for_motion',source='action_receipts',
+            actions=actions,pitch_before_deg=before,
+            pitch_after_deg=self.pitch_deg)
+        return dict(status='OK',actions=actions,
+            pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
+            reason='physical_camera_look_receipts')
+
+    def _prepare_forward(self):
+        """Same calibrated Depth test as the pre-decision model input.
+
+        This is called ONLY on the freshest public RGB-D after any turn and
+        camera alignment, immediately before an actual atomic forward. Only
+        measured central occupancy stops the pending atomic command.
+        """
+        result=self.forward_preflight(stage='atomic_forward')
+        self._last_forward_depth_probe=dict(result,
+            check_mode='live_same_schema_decision_and_atomic_forward')
+        if result['status']!='BLOCKED':
+            return None
         source=self.source()
-        blocked_pose=self.motion_controller.pose()
+        block=result['blocker']
         blocked_at=self.memory.evidence.blocked_forward(
-            source,blocked_pose,reason='measured_centerline_obstacle',
-            center=center,
-            place_id=self.memory.current.get('place_id'))
-        repeated=sum(
-            b.get('observation_id')==source['observation_id']
-            and b.get('heading_deg')==blocked_at.get('heading_deg')
-            and b.get('motion_epoch')==blocked_at.get('motion_epoch')
-            for b in self.memory.evidence.obstacle_blocks)
-        blocked_at['repeated_same_RGBD_stance_heading']=repeated
-        self._last_forward_depth_probe.update(
-            status='BLOCKED',center_confirmed=True,
-            blocked_at=blocked_at,
-            reason='measured_centerline_obstacle')
-        # A measured central obstacle stops the pending atomic step.
-        # The NEXT Observation Agent OBSTACLE_REVIEW gets real RGB-D and
-        # measured facts; never run a second, isolated obstacle VLM here.
-        # The prior successful route remains in receipt-derived Memory.
-        source=self.source()
-        visual=dict(status='DEFERRED_TO_OBSERVATION_AGENT',
-            description='',
-            uncertainty='use_OBSTACLE_REVIEW_with_live_RGBD_and_geometry')
-        reused=False
-        depth=probe['depth']
-        safety=dict(
-            path_state=depth['path_state'],
-            clearance=depth['clearance'],
-            required_forward_step=depth['required_forward_step'],
-            nearest_obstacle_distance=depth.get('nearest_obstacle_distance'),
-            nearest_collision_travel=depth.get('nearest_collision_travel'),
-            nearest_collision_point=depth.get('nearest_collision_point'),
-            rejection_reasons=depth.get('rejection_reasons',[]),
-            collision_points=depth.get('collision_points',0),
-            unknown_sweep_pixels=depth.get('unknown_sweep_pixels',0),
-            human_occupancy=depth.get('human_occupancy',{}),
-            geometry_invocation='automatic_one_step_central_obstacle_only',
-            model_selected_route_unchanged=True)
+            source,self.motion_controller.pose(),
+            reason='measured_centerline_obstacle',
+            center=block,place_id=self.memory.current.get('place_id'))
+        repeat=blocked_at['repeat_count_at_recording']
+        # Structure and ROI are identical in model predecision, tool feedback,
+        # and historical Memory. A depth.center nesting mismatch was the v8 bug.
         combined=dict(
             source_observation_id=source['observation_id'],
-            depth=dict(center,wide_probe_state=probe['state'],
-                clearance_m=depth['clearance'],
-                body_step_m=self.camera.forward_step),
-            visual=visual,
-            visual_reused_for_identical_frame=reused,
-            repeated_same_RGBD_stance_heading=repeated,
-            requested_followup='inspect_specific_blocker_ROI_and_alternative_bearings'
-                if repeated>=2 else None,
+            depth=dict(block,wide_probe_state=result['raw_probe_state'],
+                       clearance_m=result['clearance_m'],
+                       body_step_m=self.camera.forward_step),
+            visual=dict(status='DEFERRED_TO_OBSERVATION_AGENT',
+                description='',uncertainty='look_at_real_RGBD_and_depth_ROI'),
+            visual_reused_for_identical_frame=False,
+            repeated_same_RGBD_stance_heading=repeat,
+            requested_followup='inspect_blocker_and_choose_different_bearing'
+                if repeat>=2 else None,
             identity_is_visual_hypothesis_only=True,
             next_action_selected_by='navigation_agent')
         self.event('pre_forward_obstacle_reported',
-            source='live_depth_for_observation_agent',
+            source='live_depth_for_navigation_agent',
             depth_observation_id=source['observation_id'],
-            central_support_pixels=center['central_support_pixels'],
-            visual_status=visual['status'],visual_reused=reused,
+            central_support_pixels=block['central_support_pixels'],
+            focus_region_xyxy_norm=block.get('focus_region_xyxy_norm'),
             atomic_move_not_executed=True,
-            repeated_same_RGBD_stance_heading=repeated,
+            repeated_same_RGBD_stance_heading=repeat,
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
             blocked_at=blocked_at,
-            repeated_same_RGBD_stance_heading=repeated,
-            blockage_interpretation=('same_frame_and_heading_no_new_sensor_evidence'
-                if repeated>=2 else 'fresh_centerline_depth_occupancy'),
-            safety=safety,obstacle_observation=combined,
+            repeated_same_RGBD_stance_heading=repeat,
+            blockage_interpretation=(
+                'same_RGBD_heading_prior_block_repeated'
+                if repeat>=2 else 'fresh_centerline_depth_occupancy'),
+            forward_depth_preflight=result,
+            obstacle_observation=combined,
+            safety=dict(path_state=result['path_state'],
+                clearance=result['clearance_m'],
+                required_forward_step=result['required_forward_step_m'],
+                center_confirmed=True,
+                center_support_pixels=block['central_support_pixels'],
+                geometry_invocation='automatic_live_central_depth_only'),
             information_options=['observe_for_goal','navigate_relative'])
 
     def _observe_for_goal(self, objective, sweep_degrees=180):

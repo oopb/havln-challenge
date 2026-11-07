@@ -18,6 +18,20 @@ MISSION_PROMPT=(
     'obstacles and previous Observation Agent reports. '
     'Do not treat historic poses as the current stance. '
     'You own all route, movement, observation and STOP decisions. '
+    'front_depth_preflight is a FRESH calibrated Depth check of the CURRENT '
+    'front heading BEFORE this decision. CLEAR means no measured central '
+    'obstruction, not guaranteed Habitat passage; BLOCKED includes actual '
+    'central pixel ROI and distance; UNKNOWN is uncertain, NOT a veto. '
+    'This says nothing about a heading you have not yet turned to. '
+    'The motion executor physically levels a tilted camera before an '
+    'actual forward and rechecks Depth at the NEW yaw and pitch; a tilted '
+    'camera probe must never be treated as permanent route prohibition. '
+    'Read observed_front_blocks for previously sensed blocked bearings '
+    'where you correctly chose to turn away WITHOUT an attempted move. '
+    'They are historical evidence only, not global route prohibitions. '
+    'If the current direction is BLOCKED, use that measured evidence to '
+    'choose another approach or ask Observation Agent to inspect the '
+    'specific ROI; do not blindly repeat the same blocked forward command. '
     'When a direction is clear, make useful finite forward progress; do not '
     'spend the episode validating earlier stages. For unclear visual layout, '
     'call observe_for_goal using a natural-language request that includes the '
@@ -62,6 +76,11 @@ class NavigationAgent:
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
         context=compact_navigation_context(navigation_context(r))
+        # This scan must precede model reasoning, not only the attempted
+        # atomic MOVE. Runtime._prepare_forward reuses the SAME calibrated
+        # Depth policy on a fresh frame after any model-selected TURN.
+        context['front_depth_preflight']=r.forward_preflight(
+            stage='navigation_decision')
         if format_feedback:
             context['format_feedback']=format_feedback
         evidence=context['memory']

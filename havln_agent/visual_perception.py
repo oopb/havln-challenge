@@ -96,10 +96,14 @@ SCAN_GUIDANCE_PROMPT=(
     'without using hardcoded stair-specific completion rules. '
     'Use mission_memory as the shared evidence index: previous observation '
     'task IDs, real viewpoint headings, and blocked source frames. '
-    'For a recent central-depth block, read the blocker ROI normalized box '
-    'and estimate whether the region visually corresponds to a wall, rail, '
-    'human or uncertain surface. Suggest DIFFERENT visible approach bearings '
-    'when the same source frame and heading were already blocked repeatedly. '
+    'For a recent central-depth block, read current_front_depth_preflight '
+    'and recent_forward_failures. Use the measured blocker '
+    'focus_region_xyxy_norm / source_pixel_xy to inspect the corresponding '
+    'REAL RGB region. State whether it looks like wall, rail, human or '
+    'uncertain; do not invent metric clearance. Distinguish a pre-forward '
+    'Depth BLOCKED from STALLED_AFTER_FORWARD (physical move attempted '
+    'but RGB-D stayed unchanged, not proof of collision). '
+    'Suggest DIFFERENT visually grounded bearings after repeated failures. '
     'Do not relabel a measured wall as passable solely to satisfy the task. '
     'Keep uncertainty explicit, and distinguish sensed obstacles from '
     'historical model guesses. NavigationAgent owns all movement and final '
@@ -331,6 +335,10 @@ class VisualPerception:
                               self.runtime.motion_controller.pose(),
                               max_observation_tasks=4) if not session else
                               'see_initial_observation_session_message'),
+            current_front_depth_preflight=(
+                self.runtime.forward_preflight(stage='observation_view')
+                if callable(getattr(self.runtime,'forward_preflight',None))
+                else dict(status='UNKNOWN',reason='depth_preflight_unavailable')),
             current_sensor_images=['RGB','depth_gray_m'],
             depth_visualization=dict(min_m=0,max_m=5,
                 near='black',far='white',invalid='magenta',
