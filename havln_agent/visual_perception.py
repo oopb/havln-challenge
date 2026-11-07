@@ -243,15 +243,13 @@ class VisualPerception:
 
     def scene(self,observation,source,question):
         task=self.runtime.memory.task
-        index=task.current_subgoal_index
-        goal=task.subgoals[min(index,len(task.subgoals)-1)] if task.subgoals else {}
         context=dict(mode='scene',question=question,
-            current_task=fields(goal,('action','landmark','target','semantic_description')),
+            full_instruction=task.instruction,
+            progress_narrative=task.progress_narrative,
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
-        if task.subgoals and index>=len(task.subgoals)-1:
-            context['stopping_condition']=task.final_target
         return perceive(self,observation,context,
-            dict(observation_id=source['observation_id'],scope=source.get('image_scope','current')))
+            dict(observation_id=source['observation_id'],
+                 scope=source.get('image_scope','current')))
 
     def search_view(self, observation, source, objective, target_types, force_recheck=False):
         """One RGB checkpoint for an active scan; never grants motion safety."""
