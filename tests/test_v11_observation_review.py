@@ -65,6 +65,42 @@ class V11ReadOnlyVisualJson(unittest.TestCase):
         parsed,_=decode_response(raw,allow_identical_duplicates=True)
         self.assertFalse(Draft7Validator(SCAN_GUIDANCE_SCHEMA).is_valid(parsed))
 
+    def test_actual_client_accepts_identical_duplicate_only_for_vlm_observation(self):
+        settings=dict(
+            provider='openai_compatible',base_url='https://test.invalid/v1',
+            api_key_env='FAKE_HAVLN_TEST_KEY',model='test-model',
+            response_format='json_object',temperature=0,
+            timeout_seconds=10,max_retries=0,max_tokens=500)
+        response=json.dumps(visual_answer()).replace(
+            '"target_visible": false',
+            '"target_visible": false, "target_visible": false',1)
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+                'os.environ',{'FAKE_HAVLN_TEST_KEY':'fake-key'}):
+            client=APIClient({
+                'navigation_agent':settings,'visual_perception':settings},root)
+            client.begin_episode('episode',12,None)
+            client._request=Mock(return_value=dict(
+                choices=[dict(message=dict(content=response),
+                              finish_reason='stop')],
+                model='test-model',usage={}))
+            parsed=client.complete(
+                'visual_perception','vlm_guided_observation','Observe',
+                dict(source_observation_id='obs_0000'),SCAN_GUIDANCE_SCHEMA)
+            self.assertEqual(parsed,visual_answer())
+            self.assertEqual(client.normalizations,1)
+            self.assertEqual(client.calls,1)
+            # Same duplicated JSON is NOT allowed by NavigationAgent.
+            client._request=Mock(return_value=dict(
+                choices=[dict(message=dict(content='{"tool":"x","tool":"x"}'),
+                              finish_reason='stop')],
+                model='test-model',usage={}))
+            nav_schema=dict(type='object',properties=dict(
+                tool=dict(type='string')),required=['tool'])
+            with self.assertRaises(APIError) as caught:
+                client.complete('navigation_agent','navigation_decision',
+                                'Navigate',{},nav_schema)
+            self.assertEqual(caught.exception.category,'json_syntax')
+
     def test_model_vision_format_retry_keeps_exact_same_source(self):
         client=Mock()
         error=APIError('invalid_model_response',category='json_syntax')
