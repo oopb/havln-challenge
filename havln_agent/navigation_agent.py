@@ -54,6 +54,13 @@ MISSION_PROMPT=(
     'the ROBOT is beside the FINAL requested destination, not because an '
     'intermediate landmark is visible. Abort only when genuinely unable to '
     'proceed. Human obstacles are dynamic: respect live safety feedback. '
+    'camera_controls gives CURRENT allowed_look_now and pitch bounds. '
+    'The turn_and_observe tool LOOK enum is stable (none/up/down), '
+    'but a LOOK that exceeds physical pitch limits is rejected BEFORE '
+    'any TURN, as recoverable CAMERA_PITCH_LIMIT tool feedback. '
+    'When this happens, read recent_camera_pitch_limits and choose '
+    'another allowed action; do not keep requesting the same invalid LOOK. '
+    'This is not task failure, and you keep all navigation authority. '
     'Tool turns use explicit turn_direction LEFT/RIGHT/NONE and NONNEGATIVE '
     'turn_degrees. RIGHT 30 physically turns right 30; LEFT 60 turns left '
     '60; NONE requires zero. NEVER output signed turn angles. Absolute yaw '
@@ -119,6 +126,24 @@ class NavigationAgent:
                                         scope='no_live_image_available')
         schema=navigation_schema(tools)
         def validate(value):
+            # Truly malformed tool arguments remain format errors; the error
+            # names the specific field, while physical LOOK limits belong to
+            # execution-time feedback and do not fail the JSON schema.
+            if isinstance(value,dict) and isinstance(value.get('tool'),str):
+                spec=tools.get(value['tool'])
+                args=value.get('args')
+                if spec and isinstance(args,dict):
+                    issue=next(Draft7Validator(spec['parameters']).iter_errors(args),
+                               None)
+                    if issue is not None:
+                        field='.'.join(map(str,issue.path)) or 'args'
+                        detail=(('allowed='+str(issue.validator_value)+
+                                 ', received='+repr(issue.instance)[:80])
+                                if issue.validator=='enum' else issue.message)
+                        raise APIError(
+                            ('navigation_invalid_tool_argument:'+
+                             value['tool']+'.'+field+':'+detail)[:300],
+                            category='structured_field')
             if not Draft7Validator(schema).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
