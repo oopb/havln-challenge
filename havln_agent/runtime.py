@@ -261,17 +261,21 @@ class AgentRuntime(ToolExecutor):
         result=sense_forward(self.geometry(),source)
         result['stage']=stage
         result['camera_pitch_deg']=self.pitch_deg
+        view_key=physical_view_key(dict(
+            observation_id=source['observation_id'],
+            rgb_hash=source['rgb_hash'],
+            depth_hash=source['depth_hash'],
+            heading_deg=result['heading_deg'],
+            pitch_deg=result['pitch_deg'],
+            motion_epoch=result['motion_epoch'],
+            viewpoint_generation=result['viewpoint_generation'],
+            local_position_xz_m_est=result['local_position_xz_m_est']))
         result['repeat_count_prior_blocks']=sum(
-            physical_view_key(v)==physical_view_key(dict(
-                    observation_id=source['observation_id'],
-                    rgb_hash=source['rgb_hash'],
-                    depth_hash=source['depth_hash'],
-                    heading_deg=result['heading_deg'],
-                    pitch_deg=result['pitch_deg'],
-                    motion_epoch=result['motion_epoch'],
-                    viewpoint_generation=result['viewpoint_generation'],
-                    local_position_xz_m_est=result['local_position_xz_m_est']))
+            physical_view_key(v)==view_key
             for v in self.memory.evidence.obstacle_blocks)
+        result['repeat_count_prior_stalls']=sum(
+            physical_view_key(v)==view_key
+            for v in self.memory.evidence.motion_stalls)
         self.event('forward_depth_preflight',source='live_depth',
             stage=stage,state=result['status'],
             preflight_source_observation_id=source['observation_id'],
