@@ -76,7 +76,6 @@ class MemoryRecords:
         self._features = []
         self.queries = 0
         self.tool_ledger = []
-        self.progress_stage, self.progress_feedback = 'NOT_STARTED', None
         self.evidence=EvidenceLedger()
 
     def event(self, kind, **data):
@@ -432,5 +431,7 @@ class MemoryRecords:
             statistics=self.stats(),
             evidence_ledger=self.evidence.summary(),
             tool_ledger=self.tool_ledger,
-            progress_state=dict(stage=self.progress_stage, feedback=self.progress_feedback),
+            progress_state=dict(progress_narrative=self.task.progress_narrative,
+                navigation_intent=self.task.navigation_intent,
+                uncertainties=list(self.task.uncertainties)),
         )
