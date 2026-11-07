@@ -314,10 +314,8 @@ class VisualPerception:
         if pitch-tilt>=-60:allowed_actions.append('look_down')
         request=dict(
             mode='natural_language_mission_observation',
-            complete_instruction=task.instruction,
-            progress_narrative=task.progress_narrative,
-            navigation_intent=task.navigation_intent,
-            uncertainties=list(task.uncertainties[-6:]),
+            # The shared mission-memory document is injected exactly once
+            # at the start of the dialogue (see mission_memory below).
             observation_request=objective,
             requested_targets=list(target_types),
             source_observation_id=source['observation_id'],
