@@ -28,7 +28,8 @@ class ObservationController:
         m=r.memory
         pose=r.motion_controller.pose()
         start_id=m.current['observation_id']
-        record=dict(mode='mission_vlm',objective=objective.strip(),
+        record=dict(observation_task_id='observation_%03d'%len(m.observation_searches),
+            mode='mission_vlm',objective=objective.strip(),
             mission_instruction=m.task.instruction,
             progress_at_start=m.task.progress_narrative,
             intent_at_start=m.task.navigation_intent,
