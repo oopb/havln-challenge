@@ -9,6 +9,7 @@ on:
       - "tests/test_mission_history_and_headings.py"
       - "tests/test_forward_preflight_v9.py"
       - "tests/test_recoverable_camera_pitch.py"
+      - "tests/test_navigation_blocked_history_contract.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -32,5 +33,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
       - name: Verify stable LOOK schema, recoverable pitch boundaries and scheduler continuation
         run: python -m unittest discover -s tests -p 'test_recoverable_camera_pitch.py' -v
+      - name: Verify real navigation inference after measured Depth block (eval-batch4-25)
+        run: python -m unittest discover -s tests -p 'test_navigation_blocked_history_contract.py' -v
       - name: Verify RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
