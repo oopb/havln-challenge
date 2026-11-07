@@ -7,6 +7,7 @@ from .api_client import TEXT,object_schema,APIError,BudgetExceeded
 from .grounding import ground
 from .perception import Geometry,image_url,depth_image_url,perceive,perceive_views
 from .contexts import fields
+from .mission_history import mission_evidence, selected_history_frames
 
 # A one-frame, geometry-directed visual description. No model-created pixel box,
 # trajectory, clearance decision or task-completion verdict is accepted.
@@ -80,8 +81,11 @@ SCAN_GUIDANCE_PROMPT=(
     'language. If a useful local direction is visible, optionally mark '
     'candidate_approach=true and give distance_m_hint (0.25..3m) only when '
     'there is a reasoned, locally measured distance; otherwise omit it. '
-    'A candidate direction points along the CURRENT camera heading. '
-    'Its pixel box and metric distance are hypotheses, not walkability '
+    'A candidate with a visible pixel box is localized by the box CENTER; '
+    'a box to the RIGHT of image center is right of camera centerline, and '
+    'a box to the LEFT is left. A camera heading is not automatically the '
+    'bearing of an off-center object. A missing box gives no precise target '
+    'bearing. Its metric distance is a hypothesis, not walkability '
     'certificates; walls, glass, rails, drop-offs and people may intervene. '
     'Avoid repeating unchanged views; when helpful choose the next camera '
     'TURN/LOOK, otherwise finish. You may control stationary TURN_LEFT, '
@@ -171,9 +175,12 @@ def session_frame_ids(messages):
                 continue
             if not isinstance(request,dict):
                 continue
-            if isinstance(request.get('observation_id'),str):
-                current.add(request['observation_id'])
-            for frame in request.get('historical_images') or ():
+            current_id=request.get('source_observation_id',
+                                   request.get('observation_id'))
+            if isinstance(current_id,str):
+                current.add(current_id)
+            for frame in (request.get('historical_images')
+                          or request.get('historical_keyframes') or ()):
                 if isinstance(frame,dict) and isinstance(
                         frame.get('observation_id'),str):
                     historical.add(frame['observation_id'])
@@ -315,7 +322,10 @@ class VisualPerception:
             previously_inspected_views=list(view_history[-12:] if not session else []),
             observed_yaw_pitch=list(observed_yaw_pitch or ())[-12:],
             measured_geometry=geometry_evidence or {},
-            route_history=(route_history or {}) if not session else 'see_first_session_message',
+            mission_memory=(mission_evidence(self.runtime.memory,
+                              self.runtime.motion_controller.pose(),
+                              max_observation_tasks=4) if not session else
+                              'see_initial_observation_session_message'),
             current_sensor_images=['RGB','depth_gray_m'],
             depth_visualization=dict(min_m=0,max_m=5,
                 near='black',far='white',invalid='magenta',
@@ -333,19 +343,26 @@ class VisualPerception:
         if already:
             request['reuse_prior_RGBD_observation_id']=source['observation_id']
         historical=[]
-        # Introduce recent actual keyframes ONCE at session start. The current
-        # frame remains authoritative for free space and human positions.
+        # Source-aligned, diverse RGB-D memories selected by one shared
+        # Memory index, never arbitrary three newest turn-only frames.
         if not session:
-            candidates=[p for p in self.runtime.memory.observations[:-1]
-                if p.get('input_file') and p['observation_id']!=source['observation_id']]
-            for item in candidates[-3:]:
+            by_id={v['observation_id']:v for v in
+                   self.runtime.memory.observations}
+            for descriptor in selected_history_frames(
+                    self.runtime.memory,source['observation_id'],max_frames=3):
+                item=by_id.get(descriptor['observation_id'])
+                if item is None:continue
                 try:
                     frame=(self.runtime.load_observation(item)
                         if self.runtime.load_observation else
                         self.runtime.frames[item['observation_id']])
-                    h=math.degrees(item['pose']['heading'])%360
-                    historical.append(dict(observation_id=item['observation_id'],
-                        heading_deg=round(h,2),pitch_deg=item['pose'].get('pitch_deg'),
+                    historical.append(dict(
+                        observation_id=item['observation_id'],
+                        heading_deg=descriptor['heading_deg'],
+                        pitch_deg=descriptor['pitch_deg'],
+                        motion_epoch=descriptor['motion_epoch'],
+                        place_id=descriptor['place_id'],
+                        observation_summary=descriptor['observation_summary'],
                         historical_only=True,
                         image_indices=[len(images),len(images)+1]))
                     images.append(image_url(frame,max_edge=640))
@@ -353,7 +370,8 @@ class VisualPerception:
                         max_edge=640,display_max_m=5.0))
                 except (KeyError,OSError,ValueError,TypeError):
                     continue
-        if historical:request['historical_keyframes']=historical
+        if historical:
+            request['historical_images']=historical
         schema=copy.deepcopy(SCAN_GUIDANCE_SCHEMA)
         schema['properties']['turn_deg']['enum']=allowed_turns
         schema['properties']['next_action']['enum']=allowed_actions
