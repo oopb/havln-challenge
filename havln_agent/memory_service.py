@@ -8,12 +8,6 @@ from .memory_records import MemoryRecords, task_tokens
 from .motion import registered_action
 
 
-def milestone_summary(value):
-    proof=value.get('verification', {})
-    return dict(subgoal=value['subgoal'],source_observation_ids=value.get('observation_ids',[])[-2:],
-        executed_action_count=len(value.get('executed_steps',[])),
-        record_id='task_%d' % value['subgoal'], evidence_state='task_verified',
-        verification=fields(proof, ('completion_confirmed','supported','confirmed_phases','vertical_motion')))
 
 
 class MemoryService(MemoryRecords):
@@ -116,8 +110,7 @@ class MemoryService(MemoryRecords):
         current_goal=(copy.deepcopy(goal) if goal is not None
             else dict(objective=objective,target_types=list(target_types)))
         for existing in reversed(self.visual_targets):
-            if (existing.get('subgoal_index')==self.task.current_subgoal_index
-                    and existing.get('selected_observation_id')==identifier
+            if (existing.get('selected_observation_id')==identifier
                     and existing.get('target_type')==candidate.get('target_type')
                     and existing.get('target_kind')==kind):
                 return existing
@@ -128,7 +121,6 @@ class MemoryService(MemoryRecords):
         record=dict(
             id='visual_target_%04d'%len(self.visual_targets),
             visual_source='vlm_active_observation',
-            subgoal_index=self.task.current_subgoal_index,
             place_id=selected['place_id'],
             motion_epoch=pose.get('motion_epoch',0),
             viewpoint_generation=pose.get('viewpoint_generation',0),
@@ -175,7 +167,6 @@ class MemoryService(MemoryRecords):
                 relative_heading_deg_at_review=view['relative_turn_deg_from_current']))
         main=by_id[identifier]
         record=dict(id='visual_target_%04d'%len(self.visual_targets),
-            subgoal_index=self.task.current_subgoal_index,
             place_id=self.keyframes[identifier]['place_id'],
             motion_epoch=self.runtime.motion_controller.pose()['motion_epoch'],
             goal=copy.deepcopy(goal),
@@ -262,62 +253,46 @@ class MemoryService(MemoryRecords):
                 route.update(state='TRAVERSED',evidence_state='motion_verified')
 
     def navigation_summary(self):
-        """Short motion and failure history; never a certificate of task completion."""
-        from .progress import registered_motion_history
-        goal_index = self.task.current_subgoal_index
-        policy = getattr(self.runtime, 'semantic_motion_policy',
-                         getattr(self.runtime, 'motion_policy', 'LEVEL_ONLY'))
-        motions = []
+        """All-episode evidence, not measurements filtered to a subgoal."""
+        motions=[]
         for action in self.actions:
-            if action.get('subgoal') != goal_index or action.get('action') != 'MOVE_FORWARD':
+            if action.get('action')!='MOVE_FORWARD':
                 continue
-            feedback = action.get('result') or {}
-            motion = feedback.get('rgbd_motion') or {}
-            estimated = motion.get('status') == 'ESTIMATED'
-            displacement = motion.get('translation_m') or {}
-            motions.append(dict(
-                step=action['step'],
+            feedback=action.get('result') or {}
+            m=feedback.get('rgbd_motion') or {}
+            registered=m.get('status')=='ESTIMATED'
+            d=m.get('translation_m') or {}
+            motions.append(dict(step=action.get('step'),
                 observation_id=feedback.get('observation_after'),
-                heading_deg=round(math.degrees(action['pose']['heading']), 1),
-                vertical_motion=motion.get('vertical_motion', 'UNKNOWN') if estimated else 'UNKNOWN',
-                vertical_change_m_est=round(displacement.get('y_up', 0), 3) if estimated else None,
-                uncertainty_m=round(motion.get('uncertainty_m', 0), 3) if estimated else None,
-                semantic_direction_mismatch=bool(feedback.get('semantic_direction_mismatch', False))))
-        desired = ('DOWN' if policy == 'DESCEND_STAIRS' else
-                   'UP' if policy == 'ASCEND_STAIRS' else 'LEVEL')
-        successes = [item for item in motions if item['vertical_motion'] == desired]
-        failures = []
-        for record in reversed(self.tool_ledger):
-            call, result = record.get('call') or {}, record.get('result') or {}
-            if call.get('tool') not in ('navigate_local','navigate_relative','navigate_to_pixel'):
+                heading_deg=round(math.degrees(
+                    action.get('pose',{}).get('heading',0))%360,1),
+                vertical_motion=m.get('vertical_motion','UNKNOWN') if registered else 'UNKNOWN',
+                vertical_change_m_est=round(d.get('y_up',0),3) if registered else None,
+                uncertainty_m=round(m.get('uncertainty_m',0),3) if registered else None,
+                observed_frame_change=m.get('observed_frame_change')))
+        failures=[]
+        for item in reversed(self.tool_ledger):
+            call=item.get('call') or {}
+            result=item.get('result') or {}
+            if call.get('tool') not in ('navigate_relative','navigate_local'):
                 continue
-            if record.get('subgoal_id') not in (None, 'sg_%d' % goal_index):
-                continue
-            effective = result.get('interrupted_status') or result.get('status')
-            if effective in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION','INTERRUPTED','STALE_TARGET'):
-                args=call.get('args') or {}
+            state=result.get('interrupted_status') or result.get('status')
+            if state in ('BLOCKED','NEEDS_VIEW','REQUIRES_ATTENTION',
+                         'INTERRUPTED','STALE_TARGET'):
                 failures.append(dict(
-                    tool_call_id=record.get('call_id'),tool=call.get('tool'),
-                    status=effective,reason=result.get('reason'),
-                    waypoint_id=result.get('waypoint_id') or args.get('waypoint_id'),
+                    tool_call_id=item.get('call_id'),status=state,
+                    reason=result.get('reason'),
                     requested_motion=result.get('requested_motion') or
-                        {k:args[k] for k in ('turn_deg','distance_m') if k in args},
-                    pixel_target=result.get('pixel_target'),
+                        fields(call.get('args') or {},('turn_deg','distance_m')),
                     observation_id=result.get('end_observation_id')))
-            if len(failures) == 3:
+            if len(failures)==4:
                 break
-        return dict(
-            expected_vertical_motion=desired,
-            total_forward_actions=len(motions),
-            recent_forward_motion=motions[-6:],
-            last_progress_motion=successes[-1] if successes else None,
-            visual_target_memory=[copy.deepcopy(v) for v in getattr(self,'visual_targets',[])
-                if v['subgoal_index']==goal_index][-3:],
-            last_motion=motions[-1] if motions else None,
-            recent_failed_waypoints=failures,
-            historical_motion_evidence={key:value for key,value in registered_motion_history(self).items()
-                if key!='rows'},
-            note='RGB-D translation is estimated, not simulator ground truth')
+        return dict(total_forward_actions=len(motions),
+            recent_forward_motion=motions[-8:],
+            recent_failed_motion=failures,
+            visual_target_memory=copy.deepcopy(self.visual_targets[-4:]),
+            latest_actual_blocks=copy.deepcopy(self.evidence.obstacle_blocks[-4:]),
+            note='Measured translation is uncertain RGB-D evidence, not ground truth.')
 
     def _routes(self):
         now=time.monotonic()
@@ -370,26 +345,18 @@ class MemoryService(MemoryRecords):
         return dict(place=fields(place,('id','position','height_y_m_est','confidence','position_uncertainty_m','headings_deg')) if place else None,
             items=copy.deepcopy(items),dynamic_locations_authorize_motion=False)
 
-    def query_task_memory(self, subgoal_id=None):
+    def query_task_memory(self):
         self.queries+=1
         task=self.task
-        index=task.current_subgoal_index
-        if subgoal_id is not None:
-            if not subgoal_id.startswith('sg_') or not subgoal_id[3:].isdigit():
-                raise ValueError('unknown_subgoal_id')
-            index=int(subgoal_id[3:])
-            if index>=len(task.subgoals):raise ValueError('unknown_subgoal_id')
-        milestones=[m for m in task.completion_evidence if subgoal_id is None or m['subgoal']==index]
-        feedback=self.progress_feedback or {}
-        return dict(current_subgoal_id='sg_%d' % task.current_subgoal_index,
-            provisional_transitions=copy.deepcopy(task.provisional_transitions[-4:]),
-            verified_subgoal_indices=list(task.completed_subgoals),
-            unverified_subgoal_indices=[i for i in range(len(task.subgoals))
-                if i not in task.completed_subgoals],
-            goal=fields(task.subgoals[index],('action','target','landmark','success_criteria')) if index<len(task.subgoals) else None,
-            goal_evidence_state='intent',verified_milestones=[milestone_summary(m) for m in milestones[-4:]],
-            missing_evidence=feedback.get('missing',[]) if feedback.get('subgoal')==index else ['fresh_task_verification'],
-            hypotheses=copy.deepcopy(self.notes[-2:]))
+        return dict(instruction=task.instruction,
+            progress_narrative=task.progress_narrative,
+            navigation_intent=task.navigation_intent,
+            uncertainties=copy.deepcopy(task.uncertainties),
+            progress_history=copy.deepcopy(task.progress_history[-10:]),
+            evidence_observation_ids=list(task.evidence_observation_ids[-20:]),
+            recent_observation_tasks=copy.deepcopy(self.observation_searches[-3:]),
+            relevant_motion=self.navigation_summary(),
+            hypotheses=copy.deepcopy(self.notes[-4:]))
 
     def read_memory_record(self, record_id):
         if record_id in self.keyframes:
@@ -400,9 +367,6 @@ class MemoryService(MemoryRecords):
         for values,key in [(self.tool_ledger,'call_id'),(self.groundings,'grounding_id'),
                            (self.visual_targets,'id')]:
             value=next((v for v in values if v[key]==record_id),None)
-            if value is not None:return dict(detail_requested=True,record=copy.deepcopy(value))
-        if record_id.startswith('task_') and record_id[5:].isdigit():
-            value=next((v for v in self.task.completion_evidence if v['subgoal']==int(record_id[5:])),None)
             if value is not None:return dict(detail_requested=True,record=copy.deepcopy(value))
         raise ValueError('unknown_memory_record')
 
