@@ -339,112 +339,6 @@ class AgentRuntime(ToolExecutor):
             actual_turn_deg=actual_turn if relative_turn_deg>=0 else -actual_turn,
             observation_id=self.memory.current['observation_id'])
 
-    def _inspect_geometry(self):
-        self.refresh()
-        geometry=self.geometry()
-        check=geometry.assess_step()
-        directions=[]
-        for degrees in range(-45,46,int(self.camera.turn_angle)):
-            item=geometry.assess_step(math.radians(degrees))
-            directions.append(dict(bearing_deg=degrees,status=item['state'],reason=item['reason'],
-                clearance_m=item['depth']['clearance'],support=item['support']['status']))
-        alternatives=[d for d in directions if d['status']=='EXECUTABLE']
-        # Model-requested geometry: keep measurements only for this frame.
-        self.memory.current['directions']=[dict(angle_degrees=d['bearing_deg'],
-            motion_state=d['status'],reason=d['reason'],clearance=d['clearance_m'])
-            for d in directions]
-        # Landing analysis is now opt-in, not an automatic MOVE side effect.
-        latest=self.memory.actions[-1] if self.memory.actions else None
-        landing=None
-        if (latest and latest.get('action')=='MOVE_FORWARD'
-                and (latest.get('result') or {}).get('observation_after')==self.memory.current['observation_id']
-                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('status')=='ESTIMATED'
-                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('vertical_motion')=='LEVEL'
-                and getattr(self,'semantic_motion_policy',self.motion_policy)
-                    in ('ASCEND_STAIRS','DESCEND_STAIRS')):
-            landing=landing_support(geometry)
-            latest['result']['landing_support']=dict(landing,
-                evidence_source='model_requested_inspect_geometry',
-                inspection_observation_id=self.memory.current['observation_id'])
-        front=dict(check['depth']);front['depth_state']=front.pop('path_state')
-        value=dict(status=check['state'],reason=check['reason'],
-            geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
-                terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
-            alternatives=alternatives,landing_support=landing,
-            geometry_invocation='explicit_model_requested_inspect_geometry',
-            information_options=['get_waypoint_candidates','turn_and_observe'])
-        value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
-            self.camera.turn_angle,round(360/self.camera.turn_angle))
-        if alternatives:
-            value['suggestion']='request_waypoints_then_choose_a_measured_clear_approach_direction'
-        elif value['exploration']['unexplored_directions']:
-            value['suggestion']='inspect_a_new_absolute_heading_from_exploration; do_not_revisit_blocked_views'
-        else:
-            value['suggestion']='local_coverage_exhausted_request_route_or_semantic_review'
-        return value
-
-    def _compare_views(self, observation_ids, question):
-        compared, frames = self.visual_perception.compare(
-            [self._vision_frame(i) for i in observation_ids], question)
-        sources = {source['observation_id']:source for _, source in frames}
-        scenes = []
-        for view in compared['views']:
-            source = sources[view['observation_id']]
-            self.memory.record_historical_scene(view['scene'], source)
-            self.memory.note_semantics(source, [l['name'] for l in view['scene'].get('landmarks', [])])
-            scenes.append(dict(view, source=source))
-        self.memory.visual_changes.extend(compared['changes'])
-        return dict(status='OK', scenes=scenes, changes=compared['changes'],
-            image_scope='historical_keyframes', usable_for_live_safety=False)
-
-    def _analyze_scene(self, scope='current', observation_ids=None, question=None):
-        question = question or 'Which openings, stair entries, goal landmarks and nearby people are visible?'
-        if scope == 'historical' and len(observation_ids) > 1:
-            return self._compare_views(observation_ids, question)
-        observation, source = self._vision_frame(observation_ids[0] if scope == 'historical' else None)
-        scene = self.visual_perception.scene(observation, source, question)
-        live = scope == 'current' and self._same_live_view(source)
-        if live:
-            self.memory.record_scene(scene, source)
-            self.memory.note_scene(scene, source)
-        else:
-            self.memory.record_historical_scene(scene, source)
-            self.memory.note_semantics(source, [l['name'] for l in scene.get('landmarks', [])])
-        return dict(status='OK' if live or scope == 'historical' else 'STALE_OBSERVATION', scene=scene,
-            source=source, image_scope='current' if live else 'historical_keyframe', usable_for_live_safety=live)
-
-    def _same_live_view(self, source):
-        self.refresh()
-        current = self.source()
-        if any(source[k] != current[k] for k in ('rgb_hash', 'pose')):
-            return False
-        source['semantic_source_observation_id'] = source['observation_id']
-        source.update(current, image_scope='current', revalidated_at=current['captured_at'])
-        return True
-
-    def _ground_landmark(self, target, scope='current', observation_id=None):
-        observation, source = self._vision_frame(observation_id if scope == 'historical' else None)
-        value = self.visual_perception.grounding(observation, source, target)
-        live = scope == 'current' and self._same_live_view(source)
-        source['image_scope'] = 'current' if live else 'historical_keyframe'
-        if live:
-            value = project_grounding(value['semantic'], self.geometry(), target, source)
-        value['source'] = dict(source)
-        value['grounding_id'] = 'ground_%04d' % len(self.memory.groundings)
-        self.memory.groundings.append(copy.deepcopy(value))
-        self.memory.note_semantics(source, [target+': '+value['semantic']['evidence']])
-        if scope == 'current' and not live:
-            return dict(status='STALE_OBSERVATION', reason='view_changed_during_grounding', source=source)
-        return value
-
-    def _assess_entry(self, question):
-        self.refresh()
-        source = self.source()
-        value = self.visual_perception.entry(question)
-        live = self._same_live_view(source)
-        self.memory.note_semantics(source, ['entry: '+str(value)])
-        return dict(status='OK' if live else 'STALE_OBSERVATION', assessment=value, source=source)
-
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
@@ -501,42 +395,6 @@ class AgentRuntime(ToolExecutor):
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='model_selected_atomic_actions_not_metric_arrival'))
 
-    def _navigate_to_pixel(self, u, v, distance_m):
-        """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
-        if not (math.isfinite(u) and math.isfinite(v) and
-                0 <= u <= 1 and 0 <= v <= 1):
-            return dict(status='INVALID_ARGUMENTS',reason='invalid_normalized_pixel')
-        self.refresh()
-        geometry = self.geometry()
-        x = min(self.camera.width-1, max(0, round(u*(self.camera.width-1))))
-        y = min(self.camera.height-1, max(0, round(v*(self.camera.height-1))))
-        import numpy as np
-        y0,y1=max(0,y-2),min(self.camera.height,y+3)
-        x0,x1=max(0,x-2),min(self.camera.width,x+3)
-        valid = geometry.valid[y0:y1,x0:x1]
-        if int(valid.sum()) < 5:
-            return dict(status='NEEDS_VIEW',reason='pixel_target_depth_unmeasured',
-                        pixel=dict(u=u,v=v),missing_evidence=['valid_local_depth'])
-        xs = geometry.x[y0:y1,x0:x1][valid]
-        zs = geometry.z[y0:y1,x0:x1][valid]
-        x_m,z_m=float(np.median(xs)),float(np.median(zs))
-        if z_m <= 0:
-            return dict(status='NEEDS_VIEW',reason='pixel_target_not_forward_projectable',
-                        pixel=dict(u=u,v=v))
-        measured_bearing = math.degrees(math.atan2(-x_m,z_m))
-        turn_deg = round(measured_bearing/self.camera.turn_angle)*self.camera.turn_angle
-        if abs(turn_deg) > 180:
-            return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
-        pixel_source = self.source()
-        result = self._navigate_relative(turn_deg,distance_m,
-                                         _source=pixel_source)
-        return dict(result, pixel_target=dict(u=u,v=v,
-            source_observation_id=pixel_source['observation_id'],
-            measured_depth_m=round(float(np.median(geometry.depth[y0:y1,x0:x1][valid])),3),
-            measured_bearing_deg=round(measured_bearing,2),
-            selected_turn_deg=turn_deg,
-            interpretation='direction_hint_only_pixel_not_walkability_certificate'))
-
     def _navigate_local(self, waypoint_id):
         path = self.paths.get(waypoint_id)
         if path is None:
@@ -562,12 +420,6 @@ class AgentRuntime(ToolExecutor):
             return dict(result,waypoint_type=path['type'],waypoint_arrival_completes_task=False)
         finally:
             self.motion_policy = original
-
-    def _recall_observation(self, **args):
-        return dict(status='OK', memory=self.memory.recall_observation(**args))
-
-    def _query_spatial_memory(self, **args):
-        return dict(status='OK', memory=self.memory.query_spatial_memory(**args))
 
     def _read_memory_record(self, record_id):
         return dict(status='OK', memory=self.memory.read_memory_record(record_id))
