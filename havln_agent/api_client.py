@@ -332,10 +332,22 @@ class APIClient:
             messages=record.get('messages', [])
             record['input_text_chars']=sum(len(m['content']) if isinstance(m.get('content'),str) else
                 sum(len(c.get('text','')) for c in m.get('content',[])) for m in messages)
+            record['prior_conversation_text_chars']=(
+                messages[1].get('prior_conversation_text_chars',0)
+                if len(messages)>1 else 0)
+            record['prior_conversation_image_count']=(
+                messages[1].get('prior_conversation_image_count',0)
+                if len(messages)>1 else 0)
+            record['prior_conversation_turns']=(
+                messages[1].get('prior_conversation_turns',0)
+                if len(messages)>1 else 0)
+            record['input_text_chars']+=record['prior_conversation_text_chars']
             record['system_chars']=sum(len(m['content']) for m in messages if m['role']=='system')
             record['request_text_plus_schema_chars'] = record['input_text_chars'] + record.get('native_schema_chars', 0)
             picture_hashes=messages[1].get('image_sha256',[]) if len(messages)>1 else []
-            record['image_count']=len(picture_hashes) if isinstance(picture_hashes,list) else int(bool(picture_hashes))
+            record['image_count']=(len(picture_hashes) if isinstance(picture_hashes,list)
+                                   else int(bool(picture_hashes)))+record[
+                                       'prior_conversation_image_count']
             line = canonical(dict(episode_id=self.episode_id, **self.trace_context, **record))
             for key in self.keys.values():
                 line = line.replace(key, '[REDACTED]')
@@ -450,7 +462,29 @@ class APIClient:
                         for turn in conversation_messages)):
                 raise APIError('invalid_observation_conversation',category='structured_field')
             messages=[messages[0]]+copy.deepcopy(conversation_messages)+[messages[1]]
-            logged_messages[1]['prior_conversation_turns']=len(conversation_messages)
+            # The audit deliberately omits historical base64 image payloads.
+            # Still count the REAL earlier dialogue sent over the wire:
+            # the old input_text_chars/image_count silently excluded it.
+            history_text_chars=0
+            history_image_count=0
+            for turn in conversation_messages:
+                content=turn.get('content')
+                if isinstance(content,str):
+                    history_text_chars+=len(content)
+                elif isinstance(content,list):
+                    for part in content:
+                        if not isinstance(part,dict):
+                            continue
+                        if isinstance(part.get('text'),str):
+                            history_text_chars+=len(part['text'])
+                        if part.get('type')=='image_url':
+                            history_image_count+=1
+            logged_messages[1]['prior_conversation_turns']=len(
+                conversation_messages)
+            logged_messages[1]['prior_conversation_text_chars']=(
+                history_text_chars)
+            logged_messages[1]['prior_conversation_image_count']=(
+                history_image_count)
         response_format = {'type': config['response_format']}
         if config['response_format'] == 'json_schema':
             response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)
