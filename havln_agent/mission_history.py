@@ -109,6 +109,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
                 item['relative_bearing_deg_from_current']=None
             waypoints.append(item)
         searches.append(dict(
+            observation_task_id=search.get('observation_task_id'),
             objective=str(search.get('objective',''))[:240],
             outcome=search.get('outcome'),
             start_observation_id=search.get('start_observation_id'),
