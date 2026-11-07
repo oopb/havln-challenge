@@ -54,6 +54,7 @@ class TaskMemory:
     uncertainties: list = field(default_factory=list)
     progress_history: list = field(default_factory=list)
     evidence_observation_ids: list = field(default_factory=list)
+    observed_landmarks: list = field(default_factory=list)
 
 
 class MemoryRecords:
