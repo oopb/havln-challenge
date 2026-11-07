@@ -20,7 +20,7 @@ from havln_agent.runtime import AgentRuntime
 
 
 def camera():
-    return SimpleNamespace(turn_angle=15,tilt_angle=30,forward_step=.25)
+    return SimpleNamespace(turn_angle=15,tilt_angle=30,forward_step=.25,hfov=90)
 
 
 def pose():
@@ -75,7 +75,7 @@ class MissionContracts(unittest.TestCase):
         schema=navigation_schema(tools)
         Draft7Validator.check_schema(schema)
         message=dict(tool='navigate_relative',
-            args=dict(turn_deg=-45,distance_m=.5),
+            args=dict(turn_direction='RIGHT',turn_degrees=45,distance_m=.5),
             progress_narrative='I have descended the stairs, but have not located the piano.',
             navigation_intent='Find the hall and cross it toward the piano.',
             uncertainties=['Hall entry not yet localized.'],
@@ -125,15 +125,16 @@ class MissionContracts(unittest.TestCase):
     def test_observation_returns_narrative_and_optional_local_waypoint(self):
         m=MemoryRecords(camera())
         m.reset('episode','Descend, find right-hand hall, stop at piano.')
-        m.current=dict(observation_id='obs_0000')
-        m.keyframes={}
         state=pose()
+        m.current=dict(observation_id='obs_0000',pose=state)
+        m.observations=[dict(observation_id='obs_0000',pose=state)]
+        m.keyframes={}
         guidance=Mock(return_value=dict(
             next_action='finish',turn_deg=0,
             observation_summary='A hallway entrance is ahead to the right.',
             navigation_suggestion='Approach the entrance cautiously.',
-            candidate_approach=True,confidence='medium',
-            target_type='hall',box=None,
+            candidate_approach=True,target_visible=True,confidence='medium',
+            target_type='hall',box=[.7,.3,.9,.7],
             evidence='Hallway visible',uncertainty='Distance uncertain',
             reason='Visible entrance'))
         r=SimpleNamespace(memory=m,camera=camera(),done=False,
@@ -146,7 +147,11 @@ class MissionContracts(unittest.TestCase):
         out=ObservationController(r).scan_mission(
             'We have descended. Find the right-hand hall to continue.')
         self.assertEqual(out['status'],'OK')
-        self.assertEqual(out['waypoints'][0]['relative_bearing_deg_from_current'],0)
+        self.assertLess(out['waypoints'][0]['relative_bearing_deg_from_current'],0)
+        self.assertEqual(out['waypoints'][0]['recommended_turn_direction'],'RIGHT')
+        self.assertEqual(out['waypoints'][0]['bearing_source'],
+            'source_RGB_target_box_center_and_calibrated_HFOV')
+        self.assertEqual(m.task.evidence_observation_ids,['obs_0000'])
         self.assertEqual(out['waypoints'][0]['traversability'],'UNCONFIRMED')
         self.assertFalse(out['motion_authorized'])
         self.assertEqual(m.observation_searches[-1]['mode'],'mission_vlm')
