@@ -8,6 +8,7 @@ import copy
 import json
 import math
 from .heading import same_local_stance, relative_bearing
+from .evidence_ledger import physical_view_key
 
 def _view(record, observation):
     pose=observation.get('pose') or {}
@@ -119,32 +120,64 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             selected_views=actual[-3:],
             waypoints=waypoints))
     blocked=[]
-    seen_block_keys=set()
-    # One fact per distinct source-frame / stance / bearing, with a count;
-    # don't flood both models with three copies of the same unchanged wall.
-    for block in reversed(memory.evidence.obstacle_blocks):
-        key=(block.get('observation_id'),block.get('heading_deg'),
-             block.get('motion_epoch'),block.get('viewpoint_generation'))
-        if key in seen_block_keys:continue
-        seen_block_keys.add(key)
-        source=by_id.get(block.get('observation_id'))
-        if not source:continue
-        repeat=sum(
-            (v.get('observation_id'),v.get('heading_deg'),
-             v.get('motion_epoch'),v.get('viewpoint_generation'))==key
-            for v in memory.evidence.obstacle_blocks)
+    # Dedup a *physical* view (RGB/Depth hashes and local pose), not an
+    # observation_id assigned by the record writer on each sensor refresh.
+    block_counts={}
+    for item in memory.evidence.obstacle_blocks:
+        key=physical_view_key(item)
+        block_counts[key]=block_counts.get(key,0)+1
+    block_keys=set()
+    for item in reversed(memory.evidence.obstacle_blocks):
+        key=physical_view_key(item)
+        if key in block_keys:continue
+        block_keys.add(key)
+        source=by_id.get(item.get('observation_id'))
         blocked.append(dict(
-            observation_id=block['observation_id'],
-            heading_deg=block.get('heading_deg'),
-            pitch_deg=block.get('pitch_deg'),
-            motion_epoch=block.get('motion_epoch'),
-            source_stance_matches_current=same_local_stance(source.get('pose'),pose),
-            repeated_same_frame_heading_attempts=repeat,
-            center_support_pixels=block.get('central_support_pixels'),
-            nearest_along_m=block.get('nearest_along_m'),
-            reason=block.get('reason'),
-            obstacle_is_live_only_at_source_stance=True))
+            kind='BLOCKED_BEFORE_FORWARD',
+            source_observation_id=item.get('observation_id'),
+            rgb_hash=item.get('rgb_hash'),
+            depth_hash=item.get('depth_hash'),
+            heading_deg=item.get('heading_deg'),
+            pitch_deg=item.get('pitch_deg'),
+            motion_epoch=item.get('motion_epoch'),
+            source_stance_matches_current=(
+                same_local_stance(source.get('pose'),pose) if source else False),
+            repeated_same_frame_heading_attempts=block_counts[key],
+            central_support_pixels=item.get('central_support_pixels'),
+            nearest_along_m=item.get('nearest_along_m'),
+            focus_region_xyxy_norm=item.get('focus_region_xyxy_norm'),
+            source_pixel_xy=item.get('source_pixel_xy'),
+            reason=item.get('reason'),
+            forward_atomic_action_executed=False,
+            historical_depth_does_not_prove_current_obstacle=True))
         if len(blocked)>=5:break
+    stall_counts={}
+    for item in memory.evidence.motion_stalls:
+        key=physical_view_key(item)
+        stall_counts[key]=stall_counts.get(key,0)+1
+    stall_keys=set()
+    stalls=[]
+    for item in reversed(memory.evidence.motion_stalls):
+        key=physical_view_key(item)
+        if key in stall_keys:continue
+        stall_keys.add(key)
+        source=by_id.get(item.get('observation_id'))
+        stalls.append(dict(
+            kind='STALLED_AFTER_FORWARD',
+            source_observation_id=item.get('observation_id'),
+            after_observation_id=item.get('after_observation_id'),
+            rgb_hash=item.get('rgb_hash'),depth_hash=item.get('depth_hash'),
+            heading_deg=item.get('heading_deg'),pitch_deg=item.get('pitch_deg'),
+            motion_epoch=item.get('motion_epoch'),
+            source_stance_matches_current=(
+                same_local_stance(source.get('pose'),pose) if source else False),
+            repeated_same_frame_heading_attempts=stall_counts[key],
+            last_action_step=item.get('action_step'),
+            forward_atomic_action_executed=True,
+            visual_change=False,collision_proven=False,
+            displacement_verified=False,
+            reason='executed_forward_same_RGBD_before_and_after'))
+        if len(stalls)>=5:break
     tool_feedback=[]
     receipt_keys=set()
     for receipt in reversed(memory.tool_ledger[-12:]):
@@ -159,7 +192,9 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             receipt_keys.add(key)
         obstacle=result.get('obstacle_observation') or {}
         depth=obstacle.get('depth') or {}
-        center=depth.get('center') or {}
+        # v8 incorrectly assumed depth.center nesting. The actual source
+        # is obstacle_observation.depth.focus_region_xyxy_norm.
+        center=depth.get('center') or depth
         tool_feedback.append(dict(
             tool_call_id=receipt.get('call_id'),tool=call.get('tool'),
             args=copy.deepcopy(args),
@@ -200,6 +235,10 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         observation_tasks=searches,
         historical_frames=selected_history_frames(memory,current_id),
         blocked_at_source_stances=blocked,
+        stalled_forward_at_source_stances=stalls,
+        # Preserve the two distinct evidence modalities. Never infer a
+        # measured wall from an executed MOVE with unchanged RGB-D.
+        recent_forward_failures=(blocked[:3]+stalls[:3]),
         recent_tool_receipts=tool_feedback,
         successful_motion_segments=(route.get('successful_segments') or [])[-5:],
         bearing_convention=dict(
