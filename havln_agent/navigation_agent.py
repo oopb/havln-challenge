@@ -70,7 +70,7 @@ class NavigationAgent:
                 pitch_deg=pose.get('pitch_deg'),rgb_hash=source['rgb_hash'],
                 scope='current_public_RGB_not_historical')
             r.event('navigation_current_rgb_attached',source='navigation_agent',
-                    observation_id=source['observation_id'],
+                    source_observation_id=source['observation_id'],
                     rgb_hash=source['rgb_hash'])
         else:
             context['current_rgb']=dict(image_attached=False,
