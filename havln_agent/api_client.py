@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v8-consistent-mission-evidence'
+PROMPT_VERSION = 'havln-agent-v9-live-forward-depth-preflight'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
