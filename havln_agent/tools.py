@@ -685,6 +685,7 @@ class ToolExecutor:
                 0,self.config['max_steps']-1-len(self.memory.actions)))
 
 
+    def _finish_navigation(self, outcome, evidence):
         """Execute model-owned whole-mission STOP; official scoring is external."""
         self.terminate('goal_completed' if outcome=='success'
                        else 'model_aborted',model_requested=True)
