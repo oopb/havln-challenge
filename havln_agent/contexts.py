@@ -6,6 +6,7 @@ from the same immutable Memory records.
 """
 import copy
 from .mission_history import mission_evidence
+from .contracts import CAMERA_PITCH_LIMIT_DEG, camera_look_options
 
 def fields(value,names):
     return {k:copy.deepcopy(value[k]) for k in names
@@ -20,6 +21,14 @@ def navigation_context(runtime):
             forward_step_m=runtime.camera.forward_step,
             turn_step_deg=runtime.camera.turn_angle,
             max_direct_segment_m=3.0),
+        camera_controls=dict(
+            current_pitch_deg=runtime.motion_controller.pitch_deg,
+            pitch_limits_deg=[-CAMERA_PITCH_LIMIT_DEG,CAMERA_PITCH_LIMIT_DEG],
+            tilt_step_deg=runtime.camera.tilt_angle,
+            allowed_look_now=camera_look_options(
+                runtime.motion_controller.pitch_deg,runtime.camera.tilt_angle),
+            tool_look_enum_stable=['none','up','down'],
+            pitch_limit_is_recoverable_tool_feedback=True),
         actions_remaining=max(0,runtime.config['max_steps']-
                               len(runtime.memory.actions)-1),
         navigation_mode=getattr(runtime,'navigation_mode','OBSERVE'),
