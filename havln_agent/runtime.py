@@ -92,6 +92,9 @@ class AgentRuntime(ToolExecutor):
             else:
                 record[key] = value
         self.event_seq += 1
+        if event_type=='forward_motion_stalled':
+            k='forward_motion_stalled'
+            self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
         if event_type=='forward_side_depth_ambiguity':
             k='forward_side_depth_ambiguity'
             self.runtime_event_counts[k]=self.runtime_event_counts.get(k,0)+1
@@ -230,6 +233,15 @@ class AgentRuntime(ToolExecutor):
                 valid = registered_action(action_record, {o['observation_id']:o for o in self.memory.observations})
                 action_record['evidence_state'] = 'motion_verified' if valid else 'sensor_recorded'
                 self.memory.note_motion()
+                alert=(value['feedback'].get('motion_alert') or {})
+                if alert.get('reason')=='no_observed_frame_change_after_forward':
+                    self.event('forward_motion_stalled',source='environment_receipt',
+                        action_step=alert['action_step'],
+                        before_observation_id=alert['observation_before'],
+                        after_observation_id=alert['observation_after'],
+                        repeated_same_RGBD_stance_heading=alert.get(
+                            'repeat_count_same_RGBD_heading'),
+                        collision_proven=False)
             self.event('atomic_action', source='environment_receipt', action=action, feedback=value['feedback'])
         return value
 
