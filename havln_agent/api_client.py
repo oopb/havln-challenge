@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v9-live-forward-depth-preflight'
+PROMPT_VERSION = 'havln-agent-v10-recoverable-camera-pitch'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
