@@ -6,6 +6,7 @@ import time
 from .contexts import fields
 from .memory_records import MemoryRecords, task_tokens
 from .motion import registered_action
+from .mission_history import mission_evidence
 
 
 
@@ -346,17 +347,20 @@ class MemoryService(MemoryRecords):
             items=copy.deepcopy(items),dynamic_locations_authorize_motion=False)
 
     def query_task_memory(self):
+        """On-demand expansion of the SAME canonical history given to both agents."""
         self.queries+=1
-        task=self.task
-        return dict(instruction=task.instruction,
-            progress_narrative=task.progress_narrative,
-            navigation_intent=task.navigation_intent,
-            uncertainties=copy.deepcopy(task.uncertainties),
-            progress_history=copy.deepcopy(task.progress_history[-10:]),
-            evidence_observation_ids=list(task.evidence_observation_ids[-20:]),
-            recent_observation_tasks=copy.deepcopy(self.observation_searches[-3:]),
-            relevant_motion=self.navigation_summary(),
-            hypotheses=copy.deepcopy(self.notes[-4:]))
+        return dict(
+            mission_evidence=mission_evidence(
+                self,self.runtime.motion_controller.pose(),
+                max_observation_tasks=6),
+            progress_revision_audit=[
+                dict(step=v.get('step'),
+                     progress_narrative=v.get('progress_narrative'),
+                     navigation_intent=v.get('navigation_intent'),
+                     context_observation_id=v.get('context_observation_id'),
+                     evidence_observation_ids=v.get('evidence_observation_ids'))
+                for v in self.task.progress_history[-10:]],
+            history_scope='all_episode_factual_memory_projected_to_bounded_model_context')
 
     def read_memory_record(self, record_id):
         if record_id in self.keyframes:
