@@ -56,6 +56,12 @@ Executed tools return the same blocker under
 - `STALLED_AFTER_FORWARD`: simulator accepted `MOVE_FORWARD` but RGB and
   Depth were byte-identical before/after; **not** proof of a wall/collision.
 
+Additionally, `observed_front_blocks` stores a **third, read-only sensor fact**:
+front Depth blocked during a NavigationAgent or Observation Agent preflight,
+even when no forward action was attempted. It is not labeled as an
+executed collision or a rejected forward action. It remains source-frame
+specific and is capped and deduplicated.
+
 Histories deduplicate repeated identical RGB/Depth hashes **plus** local
 yaw, pitch, estimated position, motion epoch and viewpoint generation,
 not just `observation_id`. Distinctive visual and positional failures remain
