@@ -31,6 +31,10 @@ class CameraToolBoundaryRegression(unittest.TestCase):
                     turn_direction='RIGHT',turn_degrees=30,look='down')))
                 self.assertTrue(Draft7Validator(schema).is_valid(dict(
                     turn_direction='LEFT',turn_degrees=30,look='up')))
+                self.assertFalse(Draft7Validator(schema).is_valid(dict(
+                    turn_direction='LEFT',turn_degrees=30,look='sideways')))
+                self.assertFalse(Draft7Validator(schema).is_valid(dict(
+                    turn_direction='LEFT',look='down')))
         self.assertEqual(camera_look_options(-60,15),['none','up'])
         self.assertEqual(camera_look_options(60,15),['none','down'])
 
