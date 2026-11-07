@@ -159,6 +159,33 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
 
+    def test_uncertain_side_only_probe_does_not_become_veto(self):
+        r,actions=test_runtime(changed_forwards=True)
+        g=geometry('BLOCKED',False)
+        r.geometry=Mock(return_value=g)
+        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
+            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
+            uncertainty_m=.01)
+        with patch('havln_agent.tools.estimate_translation',
+                   return_value=motion):
+            result=r._navigate_relative('NONE',0,.5)
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(len(r.memory.evidence.obstacle_blocks),0)
+        self.assertGreaterEqual(g.central_forward_obstruction.call_count,2)
+
+    def test_camera_alignment_cannot_spend_reserved_stop_action(self):
+        r,actions=test_runtime()
+        r.config['max_steps']=2  # Only one non-STOP action remains.
+        r.motion_controller.pitch_deg=-30
+        r.refresh()
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        result=r._navigate_relative('NONE',0,.25)
+        self.assertEqual(result['status'],'BUDGET_LIMIT')
+        self.assertEqual(actions,['LOOK_UP'])
+        self.assertEqual(r.pitch_deg,-15)
+        self.assertFalse(any(a=='MOVE_FORWARD' for a in actions))
+
     def test_stall_is_not_silently_treated_as_collision(self):
         r,actions=test_runtime()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
