@@ -170,7 +170,7 @@ class ToolExecutor:
         elif call.get('tool')=='observe_for_goal':
             # Declared scope only; VLM controls camera headings and real
             # executed camera actions are counted separately.
-            requested=round(args.get('sweep_degrees',360)/self.camera.turn_angle)+int(args.get('look','none')!='none')
+            requested=round(args.get('sweep_degrees',180)/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
