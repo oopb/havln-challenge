@@ -102,7 +102,7 @@ SCAN_GUIDANCE_PROMPT=(
     'when the same source frame and heading were already blocked repeatedly. '
     'Do not relabel a measured wall as passable solely to satisfy the task. '
     'Keep uncertainty explicit, and distinguish sensed obstacles from '
-    'historical model guesses. NavigationAgent owns all movement and final 
+    'historical model guesses. NavigationAgent owns all movement and final '
     'mission completion.'
 )
 
