@@ -13,7 +13,6 @@ CORE_NAVIGATION_TOOLS = (
     'ground_landmark',
     'request_task_review',
     'request_finish',
-    'review_completed_subgoal',
 )
 
 # Auxiliary capabilities never disappear from ToolExecutor; add them only
@@ -121,10 +120,6 @@ def navigation_tool_menu(registry, state, *, orientation=False,
     names = CORE_NAVIGATION_TOOLS + tuple(
         name for name in CONTEXTUAL_TOOLS if name in extras)
     offered = {name: registry[name] for name in names if name in registry}
-    verified=(state.get('task_selection') or {}).get('verified_subgoals') or []
-    if not verified:
-        offered.pop('review_completed_subgoal',None)
-
     if 'observe_for_goal' in offered and not orientation:
         # Normal navigation only sees VLM-owned observation. Legacy fixed
         # direction subtask arguments remain supported in the executor.

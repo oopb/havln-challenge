@@ -370,8 +370,6 @@ class ObservationController:
                         (mode!='VERIFY' or
                          now-prev.get('started_monotonic',-1e9)>20))
                     or prev.get('subgoal')!=r.memory.task.current_subgoal_index
-                    or prev.get('subgoal_generation',0)!=getattr(r.memory.task,'subgoal_generations',{}).get(
-                        str(r.memory.task.current_subgoal_index),0)
                     or not (
                         # Exact same RGB-D and calibrated pose, OR an unchanged
                         # previously inspected viewpoint after an explicit
@@ -419,8 +417,6 @@ class ObservationController:
                 next_step='navigation_agent_use_existing_evidence_or_choose_new_goal')
         record=dict(mode='vlm_led',intent=mode,objective=objective,target_types=list(target_types),
             subgoal=r.memory.task.current_subgoal_index,
-            subgoal_generation=getattr(r.memory.task,'subgoal_generations',{}).get(
-                str(r.memory.task.current_subgoal_index),0),
             start_observation_id=initial['observation_id'],start_pose=dict(start),
             start_rgb_hash=initial.get('rgb_hash'),start_depth_hash=initial.get('depth_hash'),
             started_monotonic=now,direction='vlm_selected',look=look,
@@ -572,8 +568,7 @@ class ObservationController:
                     getattr(ledger,'surface_measurements',()))
                 if ledger is not None:
                     ledger.note_verification(
-                        verification,latest_forward,
-                        generation=record['subgoal_generation'])
+                        verification,latest_forward)
             record.update(verification=copy.deepcopy(verification),
                 navigation_feedback=copy.deepcopy(narrative),
                 session_rounds=len(session)//2,
@@ -589,27 +584,15 @@ class ObservationController:
                 blocked_approaches=copy.deepcopy(blocked_approaches),
                 rejected_view_requests=copy.deepcopy(rejected_views))
             store=getattr(r.memory,'note_active_observation_target',None)
-            # Persist ALL actionable hypotheses and attach stable IDs before
-            # delivering them. NavigationAgent can explicitly select one ID
-            # and later compare the prediction with measured motion.
-            proposed=approach_candidates[:] if approach_candidates else []
-            if not proposed and (best_candidate or best_cue):
-                proposed=[best_candidate or best_cue]
-            if callable(store):
-                for proposal in proposed:
-                    saved=store(proposal,objective,target_types,
-                        goal=getattr(r,'active_subgoal',None))
-                    if saved:
-                        proposal['candidate_id']=saved['id']
-                        for selected in (best_approach,best_candidate,best_cue):
-                            if (selected and
-                                    selected.get('observation_id')==proposal.get('observation_id')
-                                    and selected.get('heading_deg')==proposal.get('heading_deg')):
-                                selected['candidate_id']=saved['id']
-                # record/update fields must include IDs, not stale copies.
-                record['best_approach']=copy.deepcopy(best_approach)
-                record['approach_candidates']=copy.deepcopy(approach_candidates)
-                record['candidate']=copy.deepcopy(best_candidate)
+            # Preserve visual hypotheses in Memory without a second,
+            # hard-linked prediction/route execution protocol. These are
+            # historical findings and not walking clearance certificates.
+            hypothesis=(best_approach if best_approach and
+                best_approach.get('target_kind') in ('ENTRY','APPROACH','TARGET','CUE')
+                else best_candidate or best_cue)
+            if hypothesis and callable(store):
+                store(hypothesis,objective,target_types,
+                    goal=getattr(r,'active_subgoal',None))
             return dict(status=status,outcome=outcome,reason=reason,
                 objective=objective,target_types=list(target_types),
                 observation_mode=mode,verification=copy.deepcopy(verification),

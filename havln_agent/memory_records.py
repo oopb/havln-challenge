@@ -61,7 +61,6 @@ class TaskMemory:
     provisional_transitions: list = field(default_factory=list)
     # Incremented on explicit review-driven reactivation; a prior
     # CONFIRMED is archived, not an active result of the new attempt.
-    subgoal_generations: dict = field(default_factory=dict)
 
 
 class MemoryRecords:
@@ -379,8 +378,6 @@ class MemoryRecords:
         return dict(successful_segments=segments[-8:],
             blocked_at_prior_stances=blocked[-6:],
             current_subgoal=self.task.current_subgoal_index,
-            latest_route_prediction_feedback=copy.deepcopy(
-                self.evidence.route_outcomes[-5:]),
             latest_exact_blocked_at=copy.deepcopy(
                 self.evidence.obstacle_blocks[-4:]),
             interpretation='past_success_is_progress_evidence_not_live_motion_clearance')
@@ -406,8 +403,7 @@ class MemoryRecords:
                 or not verification['evidence'].strip()):
             return dict(status='INVALID_EVIDENCE',
                 reason='confirmation_requires_real_current_subgoal_RGBD')
-        recorded=dict(subgoal=index,status='ACTIVE',
-            evidence=verification['evidence'],
+        recorded=dict(subgoal=index,evidence=verification['evidence'],
             objective=objective,observation_ids=ids,
             executed_steps=[a['step'] for a in self.actions
                 if a.get('subgoal')==index and a.get('action')=='MOVE_FORWARD'],
@@ -435,78 +431,6 @@ class MemoryRecords:
             subgoal=index,next_subgoal=next_index,observation_ids=ids)
         return dict(status='CONFIRMED',subgoal=index,
             next_subgoal=next_index,observation_ids=ids)
-
-    def apply_completion_review(self, subgoal_index, verdict, evidence,
-                                observation_ids, current_observation_id):
-        """Record model-owned review and atomically restore an invalid milestone.
-
-        This changes task bookkeeping, not physics or semantic judgement.
-        Prior registered movement remains in self.actions forever.
-        """
-        task=self.task
-        record=next((item for item in reversed(task.completion_evidence)
-            if item['subgoal']==subgoal_index and item.get('status','ACTIVE')
-            =='ACTIVE'),None)
-        if record is None or subgoal_index not in task.completed_subgoals:
-            return dict(status='NOT_APPLICABLE',reason='subgoal_not_confirmed')
-        if subgoal_index>=task.current_subgoal_index:
-            return dict(status='INVALID_TARGET',reason='review_requires_prior_milestone')
-        originals=set(record.get('observation_ids',()))
-        observed={o['observation_id']:o for o in self.observations}
-        observed_ids=set(observation_ids)
-        if (not originals.intersection(observed_ids)
-                or current_observation_id not in observed_ids
-                or current_observation_id not in observed):
-            return dict(status='INSUFFICIENT_EVIDENCE',
-                reason='review_requires_original_and_current_real_RGBD')
-        previous_ids=[i for i in record['observation_ids'] if i in observed]
-        baseline_step=max(observed[i]['step'] for i in previous_ids) if previous_ids else -1
-        if observed[current_observation_id]['step']<=baseline_step:
-            return dict(status='NO_NEW_INFORMATION',
-                reason='review_requires_newer_sensor_observation')
-        review=dict(subgoal_index=subgoal_index,verdict=verdict,
-            evidence=evidence,original_observation_ids=list(originals),
-            evidence_observation_ids=list(dict.fromkeys(observation_ids)),
-            current_observation_id=current_observation_id,
-            at_action_step=len(self.actions),
-            source='source_backed_VLM_review_not_simulator_ground_truth')
-        self.evidence.note_completion_review(review)
-        self.event('completed_subgoal_reviewed',**review)
-        if verdict!='REOPEN':
-            return dict(status='OK',review_outcome=verdict,
-                current_subgoal_index=task.current_subgoal_index,
-                review=review)
-        # A later dependent milestone cannot remain completed if its
-        # prerequisite completion was explicitly withdrawn.
-        affected=[i for i in task.completed_subgoals if i>=subgoal_index]
-        for item in task.completion_evidence:
-            if item['subgoal'] in affected and item.get('status','ACTIVE')=='ACTIVE':
-                item['status']='SUPERSEDED'
-                item['superseded_by_review']=len(self.evidence.completion_reviews)-1
-        task.completed_subgoals=[
-            i for i in task.completed_subgoals if i<subgoal_index]
-        task.current_subgoal_index=subgoal_index
-        for affected_index in range(subgoal_index,len(task.subgoals)):
-            key=str(affected_index)
-            task.subgoal_generations[key]=task.subgoal_generations.get(key,0)+1
-            # New task generation begins NOW for fresh completion progress.
-            # Old action history remains immutable in self.actions and
-            # route_progress_summary, but must not count as newly performed
-            # motion after reopening a previously verified milestone.
-            task.subgoal_start_steps[key]=len(self.actions)
-        for transition in task.provisional_transitions:
-            if transition.get('from_subgoal',-1)>=subgoal_index:
-                transition['status']='SUPERSEDED_BY_COMPLETION_REVIEW'
-        task.subgoal_started=len(self.actions)
-        self.progress_stage='IN_PROGRESS'
-        self.progress_feedback=None
-        self.event('subgoal_reopened_from_visual_review',
-            subgoal=subgoal_index,invalidated_dependents=affected,
-            preserves_action_history=True)
-        return dict(status='OK',review_outcome='REOPENED',
-            reopened_subgoal=subgoal_index,
-            superseded_subgoals=affected,
-            current_subgoal_index=subgoal_index,review=review)
 
     def stats(self):
         outcomes = {}
