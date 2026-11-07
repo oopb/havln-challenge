@@ -66,9 +66,9 @@ def load_config(path):
         raise ValueError('Missing configuration variables: ' + ', '.join(missing) +
                          '; use configs/agent.env.example and docker exec --env-file.')
     config = yaml.safe_load(os.path.expandvars(text))
-    roles = ('task_planner', 'navigation_agent', 'visual_perception')
+    roles = ('navigation_agent', 'visual_perception')
     if not isinstance(config, dict) or set(config) != set(roles) | {'runtime'}:
-        raise ValueError('Expected task_planner, navigation_agent, visual_perception and runtime sections')
+        raise ValueError('Expected navigation_agent, visual_perception and runtime sections')
     for role in roles:
         model_endpoints(config[role])
     limits = config['runtime']
@@ -579,7 +579,7 @@ def preflight(args):
         report['configuration'] = 'loaded'
         report['credentials_present'] = {role: all(bool(os.environ.get(endpoint['api_key_env']))
                     for endpoint in model_endpoints(config[role]))
-                    for role in ('task_planner','navigation_agent','visual_perception')}
+                    for role in ('navigation_agent','visual_perception')}
     except ValueError as error:
         report['configuration'] = str(error)
         report['credentials_present'] = {}
