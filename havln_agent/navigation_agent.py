@@ -7,13 +7,16 @@ from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
 from .perception import image_url
+from .heading import signed_turn
 
 MISSION_PROMPT=(
     'You are NavigationAgent controlling a robot in a real RGB-D simulated scene. '
     'Your mission is the COMPLETE original language instruction, not a numbered '
     'list of mandatory milestones. You directly SEE the CURRENT real RGB image. '
-    'Read the natural-language progress narrative, intent, uncertainties, '
-    'observations, measured motion and blocked bearings from Memory. '
+    'Read memory.contract=mission_evidence_v1: one shared record of progress, '
+    'authentic RGB-D source frames, headings/pitches, measured motion, '
+    'obstacles and previous Observation Agent reports. '
+    'Do not treat historic poses as the current stance. '
     'You own all route, movement, observation and STOP decisions. '
     'When a direction is clear, make useful finite forward progress; do not '
     'spend the episode validating earlier stages. For unclear visual layout, '
@@ -22,9 +25,13 @@ MISSION_PROMPT=(
     'Observation Agent has full mission context and RGB-D; its descriptions and '
     'waypoints are suggestions, never automatic clearance or MOVE orders. '
     'Carry forward successful route evidence; correct outdated progress when '
-    'newer visual or measured evidence conflicts. A direction with a historical '
-    'obstacle is not universally forbidden, and a historical clear direction is '
-    'not guaranteed clear now. Do not keep rescanning an unchanged scene. '
+    'newer visual or measured evidence conflicts. A historical block is local '
+    'to its exact observation, stance and heading. If the current RGB-D at '
+    'the SAME stance and heading repeatedly blocks forward motion, do not '
+    'request the identical forward step again without new evidence or pose '
+    'change. Instead ask Observation Agent to examine the blocked region '
+    'and nearby alternatives, or select another direction. A visually '
+    'visible stair is not proof that the front center is traversable. '
     'Keep your progress_narrative short and useful: what you believe is done '
     'and what remains; you may revise earlier beliefs. Keep measurements '
     'separate from interpretation and do not claim simulator ground truth. '
@@ -33,7 +40,13 @@ MISSION_PROMPT=(
     'the ROBOT is beside the FINAL requested destination, not because an '
     'intermediate landmark is visible. Abort only when genuinely unable to '
     'proceed. Human obstacles are dynamic: respect live safety feedback. '
-    'No sg0/sg1 numbering or VERIFY operation exists. '
+    'Tool turns use explicit turn_direction LEFT/RIGHT/NONE and NONNEGATIVE '
+    'turn_degrees. RIGHT 30 physically turns right 30; LEFT 60 turns left '
+    '60; NONE requires zero. NEVER output signed turn angles. Absolute yaw '
+    'heading_deg increases on LEFT turns. A target box at image right means '
+    'RIGHT of camera centerline. A waypoint with source_stance_matches_current '
+    '=false or null current bearing is visual history only, never live '
+    'motion clearance. No sg0/sg1 or VERIFY operation exists. '
     'Return exactly one tool + args and optionally progress_narrative, '
     'navigation_intent, uncertainties and evidence_observation_ids.'
 )
@@ -80,6 +93,12 @@ class NavigationAgent:
             if not Draft7Validator(schema).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
+            if value['tool'] in ('navigate_relative','turn_and_observe'):
+                args=value['args']
+                try:
+                    signed_turn(args['turn_direction'],args['turn_degrees'])
+                except ValueError as error:
+                    raise APIError(str(error),category='structured_field') from None
         return r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
             schema,validate=validate,image_url=images,
