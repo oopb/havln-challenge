@@ -26,5 +26,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
       - name: Verify canonical heading, session identity and cross-agent evidence consistency
         run: python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+      - name: Verify pre-decision Depth, camera alignment and repeated stall evidence
+        run: python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
       - name: Verify RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
