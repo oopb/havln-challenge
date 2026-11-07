@@ -64,6 +64,16 @@ class NavigationAgent:
         context=compact_navigation_context(navigation_context(r))
         if format_feedback:
             context['format_feedback']=format_feedback
+        evidence=context['memory']
+        r.event('mission_context_built',source='memory_projection',
+            memory_contract=evidence['contract'],
+            observation_task_ids=[v.get('observation_task_id')
+                                  for v in evidence['observation_tasks']],
+            historical_frame_ids=[v['observation_id']
+                                  for v in evidence['historical_frames']],
+            blocked_source_ids=[v['observation_id']
+                                for v in evidence['blocked_at_source_stances']],
+            model_progress_revisions=evidence['progress']['model_revision_count'])
         frame=getattr(r,'observation',None)
         view=r.memory.current
         images=None
