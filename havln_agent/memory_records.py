@@ -80,7 +80,9 @@ class MemoryRecords:
         self.evidence=EvidenceLedger()
 
     def event(self, kind, **data):
-        self.events.append(dict(event=kind, step=len(self.actions), **data))
+        entry=dict(event=kind,step=len(self.actions))
+        entry.update(data)
+        self.events.append(entry)
 
     def note_navigation_assessment(self, decision):
         """Save model interpretation as editable Memory, never as measurement truth.
