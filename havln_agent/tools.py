@@ -354,6 +354,16 @@ class ToolExecutor:
                 if alert_reason == 'no_observed_frame_change_after_forward':
                     alert['movement_evidence'] = 'identical_rgb_and_depth_hashes_after_executed_forward'
                     alert['collision_proven'] = False
+                    # The attempted atomic step returned with identical RGB
+                    # and Depth. Preserve it as a distinct failure modality,
+                    # separate from a measured pre-forward Depth veto.
+                    stall=self.memory.evidence.stalled_forward(
+                        before_record,before_record['pose'],
+                        action_step=alert['action_step'],
+                        after_observation_id=feedback['observation_after'])
+                    alert['repeat_count_same_RGBD_heading']=stall[
+                        'repeat_count_at_recording']
+                    alert['stalled_source_view']=stall
                     self.memory.event('no_observed_forward_motion',
                         action_step=alert['action_step'],
                         observation_before=feedback['observation_before'],
@@ -644,6 +654,17 @@ class ToolExecutor:
                 return self._navigation_feedback(
                     path,checked,'ACTIONS_COMPLETED',
                     'model_requested_forward_actions_executed')
+            if action=='MOVE_FORWARD':
+                # Real LOOK_UP/DOWN receipts, not a synthetic pose edit:
+                # recenter when starting a cruise segment after VLM inspection.
+                # Subsequent atomic forwards stay level and are zero-cost.
+                normalizer=getattr(self,'_center_camera_for_forward',None)
+                if normalizer is not None:
+                    centered=normalizer()
+                    if centered['status']!='OK':
+                        return self._navigation_feedback(
+                            path,checked,centered['status'],
+                            centered.get('reason'),camera_recenter=centered)
             validation=self._revalidate_path(path,resume=True)
             if validation['status']!='OK':
                 checked.update(validation)
