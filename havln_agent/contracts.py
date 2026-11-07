@@ -11,12 +11,30 @@ def _optional(properties, required=()):
     schema['required']=list(required)
     return schema
 
-def registry(camera, max_actions, pitch_deg=0.):
+# The model-facing tool shape MUST NOT change with camera pitch. A pitch
+# limit is a recoverable *execution condition*, not an invalid JSON tool
+# argument. Only sensor/actuator evidence determines whether a LOOK can run.
+CAMERA_PITCH_LIMIT_DEG = 60.0
+LOOK_ACTIONS = ('none', 'up', 'down')
+
+
+def camera_look_options(pitch_deg, tilt_step_deg):
+    """Return currently physically available LOOK actions, for model feedback.
+
+    The protocol itself always accepts all three LOOK values. Never mutate
+    that protocol based on current pitch.
+    """
     legal=['none']
-    if pitch_deg+camera.tilt_angle<=60:
+    if pitch_deg + tilt_step_deg <= CAMERA_PITCH_LIMIT_DEG + 1e-6:
         legal.append('up')
-    if pitch_deg-camera.tilt_angle>=-60:
+    if pitch_deg - tilt_step_deg >= -CAMERA_PITCH_LIMIT_DEG - 1e-6:
         legal.append('down')
+    return legal
+
+
+def registry(camera, max_actions, pitch_deg=0.):
+    # Retain the pitch_deg argument for existing callers, but DO NOT use it to
+    # shrink the tool enum: such schema drift triggered v9's api_error STOP.
     # Direction and magnitude are separate: no signed-angle ambiguity.
     direction=dict(enum=['LEFT','RIGHT','NONE'])
     turn=dict(type='number',minimum=0,maximum=180)
@@ -43,9 +61,13 @@ def registry(camera, max_actions, pitch_deg=0.):
             'safety/sensor interruption; no milestone authorization.',
             motion),
         'turn_and_observe':(
-            'Execute calibrated rotation/LOOK for a purposeful viewpoint, without a forced forward step.',
+            'Turn and optionally LOOK for a purposeful view. The LOOK enum is '
+            'always none/up/down. Camera limits (-60..60 degrees) are checked '
+            'at execution; out-of-range LOOK returns recoverable CAMERA_PITCH_LIMIT '
+            'with the current allowed_look choices and NO atomic actions. '
+            'Read camera_controls.allowed_look_now before choosing.',
             _optional(dict(turn_direction=direction,turn_degrees=turn,
-                look=dict(enum=legal),purpose=TEXT),
+                look=dict(enum=list(LOOK_ACTIONS)),purpose=TEXT),
                 ('turn_direction','turn_degrees','look'))),
         'navigate_local':(
             'Resume a previously selected, still-active local motion command.',
