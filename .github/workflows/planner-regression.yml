@@ -1,62 +1,16 @@
-name: HA-VLN planner contract regression
+name: HA-VLN mission navigation contract regression
 
 on:
   pull_request:
     paths:
       - "havln_agent/**"
-      - "tests/test_task_planner_contract.py"
-      - "tests/test_runtime_perf.py"
-      - "tests/test_navigation_loop.py"
-      - "tests/test_role_prompt_contracts.py"
-      - "tests/test_panorama_memory_images.py"
-      - "tests/test_api_embedded_json.py"
-      - "tests/test_smoke50012_feedback.py"
-      - "tests/test_terminal_progress.py"
-      - "tests/test_smoke50013_waypoints.py"
-      - "tests/test_active_observation.py"
-      - "tests/test_vlm_led_observation.py"
-      - "tests/test_rgbd_vlm_approach_search.py"
-      - "tests/test_observation_session_verification.py"
-      - "tests/test_agent_io_contracts.py"
-      - "tests/test_batch418_verification_feedback.py"
-      - "tests/test_batch419_subgoal_camera_contract.py"
-      - "tests/test_evidence_grounded_navigation.py"
-      - "tests/test_direct_vlm_evidence_relay.py"
-      - "tests/test_visual_endpoint_reference.py"
-      - "tests/test_batch412_progress_and_observation.py"
-      - "tests/test_optional_memory_and_vlm_targets.py"
-      - "tests/test_navigation_tool_menu.py"
-      - "tests/test_odometry_gap_navigation.py"
-      - "tests/test_motion_consensus.py"
-      - "tests/test_compact_diagnostics.py"
-      - "tests/test_observe_move_cycle.py"
-      - "tests/test_auto_archive.py"
-      - "tests/test_batch_evaluation.py"
-      - "tests/test_batch_worker_failure_diagnostics.py"
-      - "tests/test_on_demand_geometry.py"
-      - "tests/test_fast_probe_runtime.py"
-      - "tests/test_observation_efficiency.py"
-      - "tests/test_model_driven_direction.py"
-      - "tests/test_model_control_runtime.py"
-      - "tests/test_direct_motion_execution.py"
-      - "tests/test_forward_stall_geometry_feedback.py"
-      - "tests/test_pre_forward_obstacle_perception.py"
-      - "tests/test_progress_alternative_evidence.py"
-      - "tests/test_progress_full_transition.py"
-      - "tests/test_cross_epoch_landmark_proof.py"
-      - "tests/test_cross_epoch_evidence_and_task_control.py"
-      - "tests/test_turn_verification_without_visual_scene.py"
-      - "tests/test_direct_navigation_failure_memory.py"
-      - "havln_agent/export.py"
-      - "tests/test_local_exploration.py"
-      - "tests/test_scheduler_liveness.py"
-      - "tests/test_runtime_config_liveness.py"
-      - "scripts/pack_agent_diagnostics.py"
+      - "configs/agent.yaml"
+      - "tests/test_mission_navigation_architecture.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
 jobs:
-  planner-contract:
+  mission-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,97 +19,9 @@ jobs:
           python-version: "3.10"
       - name: Install lightweight runtime dependencies
         run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
-      - name: Compile runtime modules
+      - name: Compile all agent modules
         run: python -m compileall -q havln_agent
-      - name: Run planner contract regression
-        run: python -m unittest discover -s tests -p 'test_task_planner_contract.py' -v
-      - name: Run runtime performance regression
-        run: python -m unittest discover -s tests -p 'test_runtime_perf.py' -v
-      - name: Run navigation loop regression
-        run: python -m unittest discover -s tests -p 'test_navigation_loop.py' -v
-      - name: Check role prompt contracts
-        run: python -m unittest discover -s tests -p 'test_role_prompt_contracts.py' -v
-      - name: Check authentic panorama RGB frames and relative yaw binding
-        run: python -m unittest discover -s tests -p 'test_panorama_memory_images.py' -v
-      - name: Check strict unambiguous JSON output normalization
-        run: python -m unittest discover -s tests -p 'test_api_embedded_json.py' -v
-      - name: Check measured collision and repeated-view regressions
-        run: python -m unittest discover -s tests -p 'test_smoke50012_feedback.py' -v
-      - name: Check live terminal monitor
-        run: python -m unittest discover -s tests -p 'test_terminal_progress.py' -v
-      - name: Check smoke-500-13 view-only waypoint guard
-        run: python -m unittest discover -s tests -p 'test_smoke50013_waypoints.py' -v
-      - name: Check active observation subtasks
-        run: python -m unittest discover -s tests -p 'test_active_observation.py' -v
-      - name: Check seven-capability navigation menu and gated historical completion review
-        run: python -m unittest discover -s tests -p 'test_navigation_tool_menu.py' -v
-      - name: Check malformed optional memory never vetoes navigation and visual targets persist
-        run: python -m unittest discover -s tests -p 'test_optional_memory_and_vlm_targets.py' -v
-      - name: Check Batch 4-12 progression and VLM candidate refinement
-        run: python -m unittest discover -s tests -p 'test_batch412_progress_and_observation.py' -v
-      - name: Check direct unfiltered VLM evidence and open-vocabulary candidates
-        run: python -m unittest discover -s tests -p 'test_direct_vlm_evidence_relay.py' -v
-      - name: Check visual endpoint references do not become completion verdicts
-        run: python -m unittest discover -s tests -p 'test_visual_endpoint_reference.py' -v
-      - name: Check RGB-D VLM local approach search and blocked bearing retry
-        run: python -m unittest discover -s tests -p 'test_rgbd_vlm_approach_search.py' -v
-      - name: Check complete RGB-D observation sessions, progress memory and VLM verification
-        run: python -m unittest discover -s tests -p 'test_observation_session_verification.py' -v
-      - name: Check optimized agent input/output protocols and historical RGB-D sources
-        run: python -m unittest discover -s tests -p 'test_agent_io_contracts.py' -v
-      - name: Check Batch 4-18 VERIFY validation and grounded navigation feedback
-        run: python -m unittest discover -s tests -p 'test_batch418_verification_feedback.py' -v
-      - name: Check Batch 4-19 active task isolation and calibrated camera arguments
-        run: python -m unittest discover -s tests -p 'test_batch419_subgoal_camera_contract.py' -v
-      - name: Check evidence-grounded multimodal route and completion review contracts
-        run: python -m unittest discover -s tests -p 'test_evidence_grounded_navigation.py' -v
-      - name: Check VLM-owned full observation and compact navigation contracts
-        run: python -m unittest discover -s tests -p 'test_vlm_led_observation.py' -v
-      - name: Check bounded navigation after uncertain RGB-D motion
-        run: python -m unittest discover -s tests -p 'test_odometry_gap_navigation.py' -v
-      - name: Check distributed static RGB-D motion consensus
+      - name: Verify whole-instruction navigation, evidence Memory and RGB-D observation contracts
+        run: python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+      - name: Verify RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
-      - name: Check compact diagnostic packaging
-        run: python -m unittest discover -s tests -p 'test_compact_diagnostics.py' -v
-      - name: Check OBSERVE/MOVE cycle and memory
-        run: python -m unittest discover -s tests -p 'test_observe_move_cycle.py' -v
-      - name: Check automatic diagnostic archive
-        run: python -m unittest discover -s tests -p 'test_auto_archive.py' -v
-      - name: Check multi-process batch scheduling and terminal-log toggle
-        run: python -m unittest discover -s tests -p 'test_batch_evaluation.py' -v
-      - name: Check saved-run version isolation and failed worker reporting
-        run: python -m unittest discover -s tests -p 'test_batch_worker_failure_diagnostics.py' -v
-      - name: Check on-demand geometry and fast depth movement
-        run: python -m unittest discover -s tests -p 'test_on_demand_geometry.py' -v
-      - name: Check real geometry and one-shot forward probe
-        run: python -m unittest discover -s tests -p 'test_fast_probe_runtime.py' -v
-      - name: Check observe efficiency and target-aware candidate ranking
-        run: python -m unittest discover -s tests -p 'test_observation_efficiency.py' -v
-      - name: Check model-directed motion with partial landmark evidence
-        run: python -m unittest discover -s tests -p 'test_model_driven_direction.py' -v
-      - name: Check model-control runtime, pixel directions, and calibration
-        run: python -m unittest discover -s tests -p 'test_model_control_runtime.py' -v
-      - name: Check preventive near-field Depth then single-frame VLM obstacle handoff
-        run: python -m unittest discover -s tests -p 'test_pre_forward_obstacle_perception.py' -v
-      - name: Check stalled-forward history and explicit depth report compaction
-        run: python -m unittest discover -s tests -p 'test_forward_stall_geometry_feedback.py' -v
-      - name: Check end-to-end direct route, pause and resume execution
-        run: python -m unittest discover -s tests -p 'test_direct_motion_execution.py' -v
-      - name: Check independent stair transition proof alternatives
-        run: python -m unittest discover -s tests -p 'test_progress_alternative_evidence.py' -v
-      - name: Check full registered-motion transition with partial entry
-        run: python -m unittest discover -s tests -p 'test_progress_full_transition.py' -v
-      - name: Check landmark crossing cannot leak pose across epochs
-        run: python -m unittest discover -s tests -p 'test_cross_epoch_landmark_proof.py' -v
-      - name: Check cross-epoch motion proof and model-owned semantic progression
-        run: python -m unittest discover -s tests -p 'test_cross_epoch_evidence_and_task_control.py' -v
-      - name: Check turn-only evidence and final arrival safeguards
-        run: python -m unittest discover -s tests -p 'test_turn_verification_without_visual_scene.py' -v
-      - name: Check direct navigation failures persist in task memory
-        run: python -m unittest discover -s tests -p 'test_direct_navigation_failure_memory.py' -v
-      - name: Check post-block local exploration and scan deduplication
-        run: python -m unittest discover -s tests -p 'test_local_exploration.py' -v
-      - name: Check evidence-state liveness and bounded API decisions
-        run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
-      - name: Check shipped agent.yaml liveness configuration compatibility
-        run: python -m unittest discover -s tests -p 'test_runtime_config_liveness.py' -v
