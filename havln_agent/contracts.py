@@ -17,9 +17,11 @@ def registry(camera, max_actions, pitch_deg=0.):
         legal.append('up')
     if pitch_deg-camera.tilt_angle>=-60:
         legal.append('down')
-    motion=_optional(dict(
-        turn_deg=dict(type='number',minimum=-180,maximum=180),
-        distance_m=dict(type='number',minimum=0.25,maximum=3.0)),('turn_deg','distance_m'))
+    # Direction and magnitude are separate: no signed-angle ambiguity.
+    direction=dict(enum=['LEFT','RIGHT','NONE'])
+    turn=dict(type='number',minimum=0,maximum=180)
+    motion=object_schema(dict(turn_direction=direction,
+        turn_degrees=turn,distance_m=dict(type='number',minimum=0.25,maximum=3.0)))
     observe=_optional(dict(
         objective=dict(TEXT,minLength=1,maxLength=1500),
         sweep_degrees=dict(type='integer',enum=[30,60,90,120,180,270,360])),
@@ -33,13 +35,18 @@ def registry(camera, max_actions, pitch_deg=0.):
             observe),
         'navigate_relative':(
             'Move along one model-chosen finite relative segment (up to 3m). '
-            'TURN and forward steps continue until the segment finishes or a real safety/sensor '
-            'interruption; no independent semantic/waypoint approval or per-call atomic-step limit.',
+            'Explicit turn_direction LEFT or RIGHT with nonnegative turn_degrees; '
+            'NONE requires 0 degrees; LEFT/RIGHT require >0. Robot heading increases '
+            'when turning LEFT, decreases when turning RIGHT. E.g. turn right 30 '
+            '=> RIGHT,30; turn left 60 => LEFT,60. No signed angles. '
+            'Then execute forward steps until the command finishes or actual '
+            'safety/sensor interruption; no milestone authorization.',
             motion),
         'turn_and_observe':(
             'Execute calibrated rotation/LOOK for a purposeful viewpoint, without a forced forward step.',
-            _optional(dict(relative_turn_deg=dict(type='number',minimum=-180,maximum=180),
-                look=dict(enum=legal),purpose=TEXT),('relative_turn_deg','look'))),
+            _optional(dict(turn_direction=direction,turn_degrees=turn,
+                look=dict(enum=legal),purpose=TEXT),
+                ('turn_direction','turn_degrees','look'))),
         'navigate_local':(
             'Resume a previously selected, still-active local motion command.',
             object_schema(dict(waypoint_id=TEXT))),
@@ -100,7 +107,10 @@ def compact_navigation_protocol(tools):
         req=set(spec['parameters'].get('required',[]))
         result.append(name+'('+', '.join(k+('' if k in req else '?')+':'+signature(v)
             for k,v in args.items())+')')
-    return ('Return exactly one JSON object with tool and args; optionally include '
+    return ('For turn_direction choose LEFT, RIGHT or NONE and specify '
+        'turn_degrees as a NONNEGATIVE magnitude. NONE means 0; LEFT/RIGHT '
+        'means positive. Never encode left/right using a signed angle. '
+        'Return exactly one JSON object with tool and args; optionally include '
         'progress_narrative, navigation_intent, uncertainties, evidence_observation_ids. '
         'These optional fields are model assessments saved in Memory, not sensor proof. '
         'No numbered subgoals or VERIFY calls. Tools: '+'; '.join(result))
