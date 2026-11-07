@@ -25,6 +25,7 @@ class EvidenceLedger:
     def __init__(self):
         self.obstacle_blocks=[]
         self.motion_stalls=[]
+        self.predecision_front_obstacles=[]
         self.surface_measurements=[]
 
     @staticmethod
@@ -74,6 +75,40 @@ class EvidenceLedger:
         self.motion_stalls.append(item)
         return copy.deepcopy(item)
 
+    def note_predecision_obstacle(self, result):
+        """Index live Depth BLOCKED at a model observation, no attempted MOVE.
+
+        A model may turn away without ever trying forward; that measured
+        direction must still be available as historical visual evidence.
+        This is NOT an atomic-action veto and does not mark a route forbidden.
+        """
+        if result.get('status')!='BLOCKED':
+            return None
+        item=dict(
+            observation_id=result.get('source_observation_id'),
+            rgb_hash=result.get('rgb_hash'),
+            depth_hash=result.get('depth_hash'),
+            heading_deg=result.get('heading_deg'),
+            pitch_deg=result.get('pitch_deg'),
+            motion_epoch=result.get('motion_epoch'),
+            viewpoint_generation=result.get('viewpoint_generation'),
+            local_position_xz_m_est=result.get('local_position_xz_m_est'),
+            blocker=copy.deepcopy(result.get('blocker')),
+            stage=result.get('stage'),
+            forward_atomic_action_executed=False,
+            attempted_forward=False,
+            seen_count=1)
+        key=physical_view_key(item)
+        for old in reversed(self.predecision_front_obstacles):
+            if physical_view_key(old)==key:
+                old['seen_count']+=1
+                old['last_observation_id']=item['observation_id']
+                return copy.deepcopy(old)
+        self.predecision_front_obstacles.append(item)
+        if len(self.predecision_front_obstacles)>128:
+            self.predecision_front_obstacles.pop(0)
+        return copy.deepcopy(item)
+
     def note_surface(self, measurement):
         if measurement.get('status') not in ('MEASURED','INSUFFICIENT_DEPTH'):
             raise ValueError('invalid_surface_evidence')
@@ -84,4 +119,6 @@ class EvidenceLedger:
         return dict(
             latest_obstacle_blocks=copy.deepcopy(self.obstacle_blocks[-4:]),
             latest_motion_stalls=copy.deepcopy(self.motion_stalls[-4:]),
+            latest_predecision_front_obstacles=copy.deepcopy(
+                self.predecision_front_obstacles[-4:]),
             latest_surface_measurements=copy.deepcopy(self.surface_measurements[-3:]))
