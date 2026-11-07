@@ -13,7 +13,12 @@ def fields(value,names):
             if isinstance(value,dict) and k in value}
 
 def navigation_context(runtime):
-    evidence=mission_evidence(runtime.memory,runtime.motion_controller.pose(),
+    # The controller pose is the canonical source for pitch and heading.
+    # Read it once so camera_controls and mission_evidence cannot disagree,
+    # and so lightweight/mock controllers need not expose duplicate fields.
+    pose=runtime.motion_controller.pose()
+    pitch_deg=pose.get('pitch_deg',0.0)
+    evidence=mission_evidence(runtime.memory,pose,
                               max_observation_tasks=3)
     return dict(
         memory=evidence,
@@ -22,11 +27,11 @@ def navigation_context(runtime):
             turn_step_deg=runtime.camera.turn_angle,
             max_direct_segment_m=3.0),
         camera_controls=dict(
-            current_pitch_deg=runtime.motion_controller.pitch_deg,
+            current_pitch_deg=pitch_deg,
             pitch_limits_deg=[-CAMERA_PITCH_LIMIT_DEG,CAMERA_PITCH_LIMIT_DEG],
             tilt_step_deg=runtime.camera.tilt_angle,
             allowed_look_now=camera_look_options(
-                runtime.motion_controller.pitch_deg,runtime.camera.tilt_angle),
+                pitch_deg,runtime.camera.tilt_angle),
             tool_look_enum_stable=['none','up','down'],
             pitch_limit_is_recoverable_tool_feedback=True),
         actions_remaining=max(0,runtime.config['max_steps']-
