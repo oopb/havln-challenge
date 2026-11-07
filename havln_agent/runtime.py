@@ -261,6 +261,13 @@ class AgentRuntime(ToolExecutor):
         result=sense_forward(self.geometry(),source)
         result['stage']=stage
         result['camera_pitch_deg']=self.pitch_deg
+        # Keep measured pre-decision obstacles even when the model chooses
+        # TURN/OBSERVE and no forward was ever requested. This is not a
+        # physical collision receipt or a globally forbidden bearing.
+        if stage in ('navigation_decision','observation_view'):
+            note=self.memory.evidence.note_predecision_obstacle(result)
+            if note:
+                result['repeat_count_same_predecision_view']=note['seen_count']
         view_key=physical_view_key(dict(
             observation_id=source['observation_id'],
             rgb_hash=source['rgb_hash'],
