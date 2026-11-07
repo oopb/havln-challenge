@@ -76,10 +76,19 @@ class AgentRuntime(ToolExecutor):
 
     def event(self, event_type, source='runtime', **data):
         self.assert_owner()
+        # The runtime owns canonical trace fields. Callers may annotate an
+        # observation identity, but must never supply a second keyword with
+        # the same name to dict(), nor overwrite the current-frame identity.
         record = dict(event=event_type, episode_id=self.memory.episode_id,
             step_index=len(self.memory.actions), event_seq=self.event_seq,
             observation_id=(self.memory.current or {}).get('observation_id'),
-            timestamp=time.time(), run_status=self.phase, source=source, **data)
+            timestamp=time.time(), run_status=self.phase, source=source)
+        for key, value in data.items():
+            if key in record:
+                if value != record[key]:
+                    record['reported_' + key] = value
+            else:
+                record[key] = value
         self.event_seq += 1
         if event_type=='forward_side_depth_ambiguity':
             k='forward_side_depth_ambiguity'

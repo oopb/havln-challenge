@@ -4,6 +4,7 @@ Run: python -m unittest discover -s tests -p 'test_mission_navigation_architectu
 No Habitat, API keys, or remote inference required.
 """
 import math
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,6 +16,7 @@ from havln_agent.memory_records import MemoryRecords
 from havln_agent.navigation_agent import NavigationAgent
 from havln_agent.active_observation import ObservationController
 from havln_agent.scheduler import run
+from havln_agent.runtime import AgentRuntime
 
 
 def camera():
@@ -27,6 +29,29 @@ def pose():
 
 
 class MissionContracts(unittest.TestCase):
+    def test_runtime_event_accepts_explicit_observation_id_without_collision(self):
+        # Reproduces worker-0-b0 episode-1 crash on first NavigationAgent RGB.
+        runtime=AgentRuntime.__new__(AgentRuntime)
+        runtime.owner=threading.get_ident()
+        runtime.memory=SimpleNamespace(episode_id='episode-1',actions=[],
+            current={'observation_id':'obs_0000'})
+        runtime.phase='NAVIGATING'
+        runtime.event_seq=0
+        runtime.runtime_event_counts={}
+        receipts=[]
+        runtime.event_callback=receipts.append
+        runtime.event('navigation_current_rgb_attached',
+            source='navigation_agent',observation_id='obs_0000',
+            rgb_hash='rgb-hash')
+        self.assertEqual(receipts[-1]['observation_id'],'obs_0000')
+        self.assertNotIn('reported_observation_id',receipts[-1])
+        self.assertEqual(receipts[-1]['rgb_hash'],'rgb-hash')
+        runtime.event('historical_frame_consulted',
+            source='observation_agent',observation_id='obs_older')
+        self.assertEqual(receipts[-1]['observation_id'],'obs_0000')
+        self.assertEqual(receipts[-1]['reported_observation_id'],'obs_older')
+        self.assertEqual(runtime.event_seq,2)
+
     def test_worker_registry_initializes_without_required_argument_crash(self):
         commands=registry(camera(),3,pitch_deg=0)
         self.assertEqual(set(commands),{
@@ -139,7 +164,8 @@ class MissionContracts(unittest.TestCase):
                     evidence='Piano nearby in current view.'),
                 progress_narrative='At the piano.',
                 navigation_intent='Stop.')),
-            decisions=0,done=False,refresh=Mock(),decision_id=Mock(),
+            decisions=0,done=False,current_decision_id='navigation_agent_0000',
+            refresh=Mock(),decision_id=Mock(),
             event=Mock(),start_mission=Mock(),assess=Mock())
         r.execute=Mock(side_effect=lambda command,binding:(
             setattr(r,'done',True) or dict(tool_call_id='tool_0000',
