@@ -166,7 +166,7 @@ class ToolExecutor:
         requested=len(actions) if call.get('tool') in (
             'navigate_relative','navigate_to_pixel','navigate_local') else 0
         if call.get('tool')=='turn_and_observe':
-            requested=round(abs(args.get('relative_turn_deg',0))/self.camera.turn_angle)+int(args.get('look','none')!='none')
+            requested=round(args.get('turn_degrees',0)/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='observe_for_goal':
             # Declared scope only; VLM controls camera headings and real
             # executed camera actions are counted separately.
@@ -222,6 +222,12 @@ class ToolExecutor:
                 remaining_commanded_forward_actions=result.get(
                     'remaining_commanded_forward_actions'),
                 movement_feedback_is_evidence_not_completion=True,
+                model_turn_direction=(
+                    (result.get('requested_motion') or {}).get('turn_direction')
+                    or args.get('turn_direction')),
+                model_turn_degrees=(
+                    (result.get('requested_motion') or {}).get('turn_degrees')
+                    or args.get('turn_degrees')),
                 interpretation=(
                     'only_turns_executed_forward_not_attempted'
                     if turns and not forwards else
