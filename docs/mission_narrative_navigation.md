@@ -1,3 +1,61 @@
+# v10: recoverable camera pitch limits (eval-batch4-24)
+
+**Root cause:** At -60° pitch the v9 navigator twice emitted a structurally
+valid `turn_and_observe(...,look="down")`. The dynamically generated
+`look` enum had removed `down`, so the response was incorrectly treated
+as an API/schema failure; the scheduler exhausted its single format retry
+and terminated with `api_error` after only 22 atomic actions.
+
+**Fix:** `turn_and_observe` now always exposes `look=none|up|down`, regardless
+of pitch. `navigation_context().camera_controls` independently reports
+the **current** allowed LOOK directions, pitch (-60..+60), and calibrated
+tilt step. Tool execution checks the requested pitch **before any model-
+requested TURN** or LOOK. An out-of-range LOOK returns:
+
+```json
+{
+  "status": "CAMERA_PITCH_LIMIT",
+  "recoverable": true,
+  "reason": "requested_look_exceeds_camera_limits",
+  "requested_look": "down",
+  "current_pitch_deg": -60,
+  "requested_pitch_deg": -90,
+  "pitch_limits_deg": [-60, 60],
+  "allowed_look": ["none", "up"],
+  "executed_camera_actions": []
+}
+```
+
+The requested pitch in this example assumes a 30° tilt step. No physical
+action is executed, and the simulator pose and action budget remain
+unchanged. The scheduler sees a **normal tool receipt**, not an API error,
+and calls NavigationAgent again for a model-owned decision. Identical
+pitch-limit errors are counted in bounded `recent_camera_pitch_limits` and
+also visible in `recent_tool_receipts.camera_pitch_limit`; no Python
+steering or automatic camera commands are introduced.
+
+Truly malformed JSON, missing fields, and illegal enum values remain
+schema errors, now with more specific field details when available.
+Observation Agent's independent camera scan schema is unchanged.
+
+**Regression:**
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_recoverable_camera_pitch.py' -v
+```
+
+Tests cover both pitch bounds, unchanging schema, **zero action** on
+`RIGHT 30 + down` at -60°, valid LOOK at bounds, source-backed error
+memory, and navigation-scheduler continuation past a rejected command.
+
+**Run ID:** use `eval-batch4-25` or a fresh directory for a comparison.
+The v10 prompt protocol is
+`havln-agent-v10-recoverable-camera-pitch`.
+This is a focused robustness change; it does not alter v9 Depth or
+forward-motion heuristics.
+
+---
+
 # v9: pre-decision Depth, motion camera alignment and physical failures
 
 This update addresses the `eval-batch4-23` failure mode: multiple accepted
