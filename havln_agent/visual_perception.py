@@ -94,8 +94,15 @@ SCAN_GUIDANCE_PROMPT=(
     '15..90 degree multiples of actuator step, LOOK/finish uses 0 degrees. '
     'Identify stairs, rooms, crowds and landmarks from actual pixels '
     'without using hardcoded stair-specific completion rules. '
+    'Use mission_memory as the shared evidence index: previous observation '
+    'task IDs, real viewpoint headings, and blocked source frames. '
+    'For a recent central-depth block, read the blocker ROI normalized box '
+    'and estimate whether the region visually corresponds to a wall, rail, '
+    'human or uncertain surface. Suggest DIFFERENT visible approach bearings '
+    'when the same source frame and heading were already blocked repeatedly. '
+    'Do not relabel a measured wall as passable solely to satisfy the task. '
     'Keep uncertainty explicit, and distinguish sensed obstacles from '
-    'historical model guesses. NavigationAgent owns all movement and final '
+    'historical model guesses. NavigationAgent owns all movement and final 
     'mission completion.'
 )
 
