@@ -339,7 +339,11 @@ class VisualPerception:
             if int(i*turn)<=90]
         pitch=pose.get('pitch_deg',0)
         tilt=self.runtime.camera.tilt_angle
-        allowed_actions=['turn_left','turn_right','finish']
+        # A scan with no remaining yaw budget must not advertise a TURN
+        # that can only have turn_deg=0 (an impossible controller command).
+        # This removes a dead schema branch, not a model-selected route.
+        allowed_actions=(['turn_left','turn_right','finish']
+                         if len(allowed_turns)>1 else ['finish'])
         if pitch+tilt<=60:allowed_actions.append('look_up')
         if pitch-tilt>=-60:allowed_actions.append('look_down')
         request=dict(
