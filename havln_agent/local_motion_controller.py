@@ -124,11 +124,9 @@ class LocalMotionController:
         return None
 
     def validate(self, runtime, path, resume=False, uncertain_straight=False):
-        """Validate goal identity and fresh observation, NOT metric odometry."""
+        """Validate current source stance and sensor evidence, NOT task milestones."""
         r = runtime
         source, pose = path['source'], self.pose()
-        if source['subgoal'] != r.memory.task.current_subgoal_index:
-            return dict(status='STALE_TARGET', reason='language_goal_changed')
         if not resume:
             # Saved candidate waypoints from a different visual stance should
             # not be silently reused. An active finite route is still resumable
