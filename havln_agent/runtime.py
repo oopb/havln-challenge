@@ -23,6 +23,7 @@ from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
+from .heading import signed_turn
 from .visual_perception import VisualPerception
 
 
@@ -322,14 +323,18 @@ class AgentRuntime(ToolExecutor):
         # a visual hypothesis cannot advance or roll back a numbered state.
         return result
 
-    def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
-        """Execute model-selected, mechanically calibrated camera movement."""
-        if (not math.isfinite(relative_turn_deg) or abs(relative_turn_deg)>180
-                or look not in ('none','up','down')):
-            return dict(status='INVALID_ARGUMENTS',reason='invalid_camera_command')
-        steps=round(abs(relative_turn_deg)/self.camera.turn_angle)
+    def _turn_and_observe(self, turn_direction, turn_degrees, look,
+                          purpose='explore'):
+        """Model-selected LEFT/RIGHT/NONE and nonnegative turn magnitude."""
+        try:
+            delta=signed_turn(turn_direction,turn_degrees)
+        except ValueError as error:
+            return dict(status='INVALID_ARGUMENTS',reason=str(error))
+        if look not in ('none','up','down'):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_camera_look')
+        steps=round(abs(delta)/self.camera.turn_angle)
         actual_turn=steps*self.camera.turn_angle
-        direction='TURN_LEFT' if relative_turn_deg>=0 else 'TURN_RIGHT'
+        direction='TURN_LEFT' if delta>=0 else 'TURN_RIGHT'
         actions=[direction]*steps
         if look!='none':
             tilt=self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle
@@ -343,30 +348,36 @@ class AgentRuntime(ToolExecutor):
                 return dict(status='PARTIAL' if executed else result.get('status'),
                     reason=result.get('reason'),executed_camera_actions=executed)
             executed.append(action)
-        return dict(status='ACTIONS_COMPLETED',
-            executed_camera_actions=executed,
-            actual_turn_deg=actual_turn if relative_turn_deg>=0 else -actual_turn,
+        return dict(status='ACTIONS_COMPLETED',executed_camera_actions=executed,
+            requested_turn_direction=turn_direction,
+            actual_turn_degrees=actual_turn,actual_turn_direction=turn_direction,
             observation_id=self.memory.current['observation_id'])
 
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
 
-    def _navigate_relative(self, turn_deg, distance_m, _source=None):
+    def _navigate_relative(self, turn_direction, turn_degrees,
+                           distance_m, _source=None):
         """Direct model intent, without a preselected semantic candidate.
 
         The bearing is relative to the current heading, not a global pose or
         semantic permission. A TURN is always legal as a physical rotation;
         each subsequent MOVE independently validates fresh RGB-D.
         """
-        if (not math.isfinite(turn_deg) or not math.isfinite(distance_m)
-                or abs(turn_deg) > 180 or not 0.25 <= distance_m <= 3.0):
+        try:
+            requested_turn=signed_turn(turn_direction,turn_degrees)
+        except ValueError as error:
+            return dict(status='INVALID_ARGUMENTS',reason=str(error))
+        if (isinstance(distance_m,bool) or not isinstance(distance_m,(int,float))
+                or not math.isfinite(distance_m)
+                or not 0.25 <= distance_m <= 3.0):
             return dict(status='INVALID_ARGUMENTS', reason='relative_motion_out_of_bounds')
         stride = self.camera.turn_angle
         step = self.camera.forward_step
         # Models express motion intent in continuous units; the executor
         # quantizes to the supported Habitat actuator increments and reports
         # what was actually requested of the simulator.
-        actual_turn = round(turn_deg / stride) * stride
+        actual_turn = round(requested_turn / stride) * stride
         actual_distance = max(1, round(distance_m / step)) * step
         actual_distance = min(actual_distance, math.floor(3.0 / step) * step)
         if _source is None:
@@ -400,8 +411,13 @@ class AgentRuntime(ToolExecutor):
         self.memory.note_candidates([path])
         result = self._navigate_local(path_id)
         return dict(result, waypoint_id=path_id,
-                    requested_motion=dict(turn_deg=turn_deg,distance_m=distance_m,
-                        quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
+                    requested_motion=dict(
+                        turn_direction=turn_direction,turn_degrees=turn_degrees,
+                        distance_m=distance_m,quantized_turn_deg=actual_turn,
+                        actual_turn_direction=('LEFT' if actual_turn>0 else
+                            'RIGHT' if actual_turn<0 else 'NONE'),
+                        quantized_turn_degrees=abs(actual_turn),
+                        quantized_distance_m=actual_distance,
                         authorization='model_selected_atomic_actions_not_metric_arrival'))
 
     def _navigate_local(self, waypoint_id):
