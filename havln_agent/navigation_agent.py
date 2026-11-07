@@ -97,7 +97,11 @@ class NavigationAgent:
                                   for v in evidence['observation_tasks']],
             historical_frame_ids=[v['observation_id']
                                   for v in evidence['historical_frames']],
-            blocked_source_ids=[v['observation_id']
+            # Shared mission_evidence projections expose source-anchored
+            # obstacle facts as source_observation_id (not observation_id).
+            # Keep this diagnostic keyed to the public history contract:
+            # the event must never crash NavigationAgent before inference.
+            blocked_source_ids=[v['source_observation_id']
                                 for v in evidence['blocked_at_source_stances']],
             model_progress_revisions=evidence['progress']['model_revision_count'])
         frame=getattr(r,'observation',None)
