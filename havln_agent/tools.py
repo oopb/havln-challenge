@@ -13,7 +13,7 @@ from .memory_service import MemoryService
 from .local_motion_controller import LocalMotionController
 from .observation import array_hash, frame_info
 from .perception import Geometry, Observation
-from .progress import verify_progress, current_visual_evidence
+from .progress import current_visual_evidence
 from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
 from .motion import estimate_translation
@@ -52,10 +52,9 @@ class ToolExecutor:
         self.tool_id = None
         self.decisions = 0
         self.context_version = None
-        self.active_subgoal_id = None
-        self.motion_policy = 'LEVEL_ONLY'
+        self.motion_policy = 'LOCAL_TERRAIN'
         self.executable_segment = None
-        self.decision_counts = dict(task_planner=0, navigation_agent=0)
+        self.decision_counts = dict(navigation_agent=0)
         self.current_decision_id = None
 
     def make_registry(self):
@@ -65,7 +64,7 @@ class ToolExecutor:
         identifier = '%s_%04d' % (role, self.decision_counts[role])
         self.decision_counts[role] += 1
         self.current_decision_id = identifier
-        self.client.trace_context = dict(decision_id=identifier, subgoal_id=self.active_subgoal_id)
+        self.client.trace_context = dict(decision_id=identifier)
         return identifier
 
     def geometry(self):
@@ -115,7 +114,6 @@ class ToolExecutor:
             depth_hash=array_hash(self.observation.depth),
             captured_at=self.observation.captured_at,
             pose=self.motion_controller.pose(),
-            subgoal=self.memory.task.current_subgoal_index,
         )
 
     def refresh(self):
@@ -137,9 +135,9 @@ class ToolExecutor:
         before=len(self.memory.actions)
         observation_before=self.memory.current['observation_id']
         self.tool_id='tool_%04d' % len(self.memory.tool_ledger)
-        self.client.trace_context=dict(decision_id=self.current_decision_id,subgoal_id=self.active_subgoal_id,tool_call_id=self.tool_id)
+        self.client.trace_context=dict(decision_id=self.current_decision_id,tool_call_id=self.tool_id)
         context=dict(context_version=self.context_version,observation_id=observation_before,
-            pose=self.motion_controller.pose(),requested_at=started,subgoal_id=self.active_subgoal_id,
+            pose=self.motion_controller.pose(),requested_at=started,
             actor=(decision or {}).get('actor','navigation_agent'),decision_id=self.current_decision_id)
         try:
             self.registry=self.make_registry()
@@ -172,7 +170,7 @@ class ToolExecutor:
         elif call.get('tool')=='observe_for_goal':
             # Declared scope only; VLM controls camera headings and real
             # executed camera actions are counted separately.
-            requested=round(args.get('sweep_degrees',360)/self.camera.turn_angle)+int(args.get('look','none')!='none')
+            requested=round(args.get('sweep_degrees',180)/self.camera.turn_angle)+int(args.get('look','none')!='none')
         elif call.get('tool')=='request_finish':
             requested=1
         if type(requested) is not int or requested<0:requested=0
@@ -237,7 +235,7 @@ class ToolExecutor:
             result.update(status='TOOL_ERROR',reason='tool_output_schema_violation')
         record=self.memory.record_tool(call,result,context)
         if self.record_tool:self.record_tool(record)
-        self.client.trace_context=dict(decision_id=self.current_decision_id,subgoal_id=self.active_subgoal_id)
+        self.client.trace_context=dict(decision_id=self.current_decision_id,)
         return result
 
     def dispatch(self, call, decision):
@@ -360,7 +358,7 @@ class ToolExecutor:
         record = dict(
             step=len(self.memory.actions) - 1,
             tool_call_id=self.tool_id,
-            subgoal_id=self.active_subgoal_id,
+            
             action=action,
             executed_action=action,
             proposed_action=action,
@@ -438,7 +436,7 @@ class ToolExecutor:
             raise ValueError('unknown_saved_observation_id')
         observation = self.load_observation(record) if self.load_observation else self.frames[observation_id]
         source = {k: record[k] for k in ('observation_id', 'rgb_hash', 'depth_hash', 'captured_at', 'pose')}
-        source.update(subgoal=record.get('subgoal'), image_scope='historical_keyframe')
+        source.update(image_scope='historical_keyframe')
         return observation, source
 
     def _generate_waypoints(self, target=None):
@@ -447,10 +445,8 @@ class ToolExecutor:
         source = self.source()
         groundings, excluded = [], []
         for original in self.memory.groundings:
-            if original['source']['subgoal'] != self.memory.task.current_subgoal_index or not (
-                target is None or target == original['grounding_id'] or
-                task_tokens(target) & task_tokens(original['target'])
-            ):
+            if not (target is None or target == original['grounding_id'] or
+                    task_tokens(target) & task_tokens(original['target'])):
                 continue
             if original['source'].get('image_scope','current')!='current':
                 continue
@@ -480,8 +476,8 @@ class ToolExecutor:
         # Descriptive facts are returned in angular order; no weighted policy ranking or blacklist.
         for candidate in candidates:
             identifier = 'path_%04d_%02d' % (len(self.memory.tool_ledger), len(paths))
-            language_goal = (self.memory.task.subgoals[self.memory.task.current_subgoal_index]
-                             if self.memory.task.current_subgoal_index < len(self.memory.task.subgoals) else {})
+            language_goal = dict(action=self.memory.task.navigation_intent,
+                                 target=self.memory.task.instruction)
             relations = [goal_relation(candidate, g, g['current_estimate'], language_goal,
                                        self.camera.turn_angle) for g in groundings]
             # Include detours and uncertain bearings. These are factual
@@ -688,33 +684,10 @@ class ToolExecutor:
             remaining_episode_actions=max(
                 0,self.config['max_steps']-1-len(self.memory.actions)))
 
-    def _update_progress(self, claim, evidence, observation_ids):
-        self.refresh()
-        result = verify_progress(
-            self.memory,
-            claim,
-            evidence,
-            observation_ids,
-            self.config['max_scene_age_seconds'],
-            self.config['waypoint_distance'],
-            self.config.get('max_static_landmark_age_seconds', 300),
-            self.config.get('max_human_age_seconds', 2),
-        )
-        if result['completion_confirmed']:
-            self._cancel_local_navigation('verified_language_goal_completed')
-        return result
 
     def _finish_navigation(self, outcome, evidence):
-        """Only real Observation-Agent-confirmed milestones authorize success.
-
-        No second Python landmark/stair/floor verifier contradicts the VLM.
-        The simulator still owns atomic action legality and STOP.
-        """
-        if outcome=='success' and (not self.memory.task.subgoals or
-                set(self.memory.task.completed_subgoals)!=set(
-                    range(len(self.memory.task.subgoals)))):
-            return dict(status='INSUFFICIENT_EVIDENCE',
-                reason='not_all_subgoals_confirmed_by_observation_agent')
+        """Execute model-owned whole-mission STOP; official scoring is external."""
         self.terminate('goal_completed' if outcome=='success'
                        else 'model_aborted',model_requested=True)
-        return dict(status='FINISHED',outcome=outcome,evidence=evidence)
+        return dict(status='FINISHED',outcome=outcome,evidence=evidence,
+                    completion_assessment='navigation_agent_hypothesis_not_official_score')

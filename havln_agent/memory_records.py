@@ -47,20 +47,14 @@ def frame_change(first, second):
 
 @dataclass
 class TaskMemory:
+    """One user instruction and revisable narrative state, not a task DAG."""
     instruction: str = ''
-    subgoals: list = field(default_factory=list)
-    final_target: str = ''
-    constraints: list = field(default_factory=list)
-    current_subgoal_index: int = 0
-    completed_subgoals: list = field(default_factory=list)
+    progress_narrative: str = 'The mission has just begun; no destination is confirmed reached.'
+    navigation_intent: str = 'Observe the surroundings and make progress toward the complete instruction.'
+    uncertainties: list = field(default_factory=list)
+    progress_history: list = field(default_factory=list)
+    evidence_observation_ids: list = field(default_factory=list)
     observed_landmarks: list = field(default_factory=list)
-    completion_evidence: list = field(default_factory=list)
-    progress_claims: list = field(default_factory=list)
-    subgoal_started: int = 0
-    subgoal_start_steps: dict = field(default_factory=dict)
-    provisional_transitions: list = field(default_factory=list)
-    # Incremented on explicit review-driven reactivation; a prior
-    # CONFIRMED is archived, not an active result of the new attempt.
 
 
 class MemoryRecords:
@@ -82,17 +76,51 @@ class MemoryRecords:
         self._features = []
         self.queries = 0
         self.tool_ledger = []
-        self.progress_stage, self.progress_feedback = 'NOT_STARTED', None
         self.evidence=EvidenceLedger()
 
     def event(self, kind, **data):
-        self.events.append(dict(event=kind, step=len(self.actions), **data))
+        entry=dict(event=kind,step=len(self.actions))
+        entry.update(data)
+        self.events.append(entry)
 
-    def set_plan(self, plan):
-        self.task.subgoals = plan['subgoals']
-        self.task.subgoal_start_steps = {'0':len(self.actions)}
-        self.task.final_target = plan.get('final_target', '')
-        self.task.constraints = plan.get('constraints', [])
+    def note_navigation_assessment(self, decision):
+        """Save model interpretation as editable Memory, never as measurement truth.
+
+        Only real observation IDs can be cited; a hallucinated ID cannot become
+        sensor evidence or block model-selected movement.
+        """
+        task=self.task
+        allowed={o['observation_id'] for o in self.observations}
+        references=[o for o in decision.get('evidence_observation_ids',[])
+                    if isinstance(o,str) and o in allowed]
+        changed=False
+        previous=dict(progress_narrative=task.progress_narrative,
+                      navigation_intent=task.navigation_intent)
+        for key,maximum in [('progress_narrative',1200),('navigation_intent',700)]:
+            value=decision.get(key)
+            if isinstance(value,str) and value.strip() and value.strip()!=getattr(task,key):
+                setattr(task,key,value.strip()[:maximum])
+                changed=True
+        uncertainty=decision.get('uncertainties')
+        if isinstance(uncertainty,list):
+            task.uncertainties=[v.strip()[:220] for v in uncertainty[:8]
+                                if isinstance(v,str) and v.strip()]
+            changed=True
+        for identifier in references:
+            if identifier not in task.evidence_observation_ids:
+                task.evidence_observation_ids.append(identifier)
+        if changed or references:
+            entry=dict(step=len(self.actions),
+                source='navigation_agent_model_assessment_not_sensor_fact',
+                prior=previous,progress_narrative=task.progress_narrative,
+                navigation_intent=task.navigation_intent,
+                uncertainties=list(task.uncertainties),
+                evidence_observation_ids=references,
+                linked_observation_ids_verified=True)
+            task.progress_history.append(entry)
+            task.progress_history=task.progress_history[-60:]
+            self.event('mission_progress_updated',**entry)
+        return dict(changed=changed,evidence_observation_ids=references)
 
     def observe(self, observation, pose, diagnostics):
         info = frame_info(observation, self.camera)
@@ -128,8 +156,7 @@ class MemoryRecords:
         view_matches=[]
         for old, old_features in zip(self.observations, self._features):
             old_pose=old['pose']
-            if (old.get('subgoal') != self.task.current_subgoal_index
-                    or old_pose.get('motion_epoch') != pose.get('motion_epoch')
+            if (old_pose.get('motion_epoch') != pose.get('motion_epoch')
                     or old_pose.get('viewpoint_generation',0) != pose.get('viewpoint_generation',0)
                     or math.hypot(old_pose['x']-pose['x'],old_pose['z']-pose['z']) > .08
                     or abs(angle_error(old_pose['heading'],pose['heading'])) >
@@ -170,7 +197,6 @@ class MemoryRecords:
             info,
             observation_id='obs_%04d' % len(self.observations),
             step=len(self.actions),
-            subgoal=self.task.current_subgoal_index,
             pose=dict(pose),
             captured_at=observation.captured_at,
             last_read_at=observation.captured_at,
@@ -233,7 +259,7 @@ class MemoryRecords:
         successful=result['status'] in {'OK','EXECUTABLE','LOCALIZED','RECORDED','VERIFIED','FINISHED','CANCELLED','PARTIAL','TARGET_REACHED','ACTIONS_COMPLETED'}
         related=[r for r in self.tool_ledger if not r['resolved'] and r['call']==call]
         record=dict(call_id=result['tool_call_id'],actor=request_context['actor'],
-            subgoal_id=request_context['subgoal_id'],call=call,result=result,request_context=request_context,
+            call=call,result=result,request_context=request_context,
             resolved=successful,retry_of=[r['call_id'] for r in related],followups=[],recorded_at=time.monotonic())
         for previous in related:
             previous['followups'].append(record['call_id'])
@@ -247,7 +273,6 @@ class MemoryRecords:
             attempt_id='attempt_%03d' % len(self.experiences),
             target={k: v for k, v in target.items() if k not in ('execution_status', 'last_validation')},
             start_pose=dict(pose),
-            subgoal=self.task.current_subgoal_index,
             step_started=len(self.actions),
             actions=[],
             interruptions=[],
@@ -273,7 +298,6 @@ class MemoryRecords:
             action=action,
             pose=dict(pose),
             result=feedback,
-            subgoal=self.task.current_subgoal_index,
         )
         self.actions.append(entry)
         if self.active_attempt:
@@ -309,7 +333,6 @@ class MemoryRecords:
             previous=segments[-1] if segments else None
             consecutive=(previous and
                 a['step']==previous['last_step']+1 and
-                a.get('subgoal')==previous['subgoal'] and
                 epoch==previous['motion_epoch'] and
                 abs((yaw-previous['heading_deg']+180)%360-180)<=self.camera.turn_angle/2)
             if consecutive:
@@ -325,8 +348,7 @@ class MemoryRecords:
                     previous['uncertainty_m_est']=round(
                         previous['uncertainty_m_est']+uncertainty,3)
             else:
-                segments.append(dict(subgoal=a.get('subgoal'),
-                    motion_epoch=epoch,heading_deg=yaw,
+                segments.append(dict(motion_epoch=epoch,heading_deg=yaw,
                     first_step=a['step'],last_step=a['step'],
                     forward_steps=1,
                     observed_height_change_m_est=round(dy,3)
@@ -354,7 +376,6 @@ class MemoryRecords:
             if exact and exact.get('observation_id'):
                 blocked.append(dict(exact,
                     source_observation_id=exact['observation_id'],
-                    subgoal=entry.get('subgoal_id'),
                     evidence='measured_block_at_post_turn_stance'))
                 continue
             end_id=result.get('end_observation_id')
@@ -373,64 +394,12 @@ class MemoryRecords:
                 motion_epoch=pose.get('motion_epoch'),
                 viewpoint_generation=pose.get('viewpoint_generation'),
                 reason=result.get('reason'),
-                subgoal=entry.get('subgoal_id'),
                 evidence='observed_block_at_stance_not_historical_route_veto'))
         return dict(successful_segments=segments[-8:],
             blocked_at_prior_stances=blocked[-6:],
-            current_subgoal=self.task.current_subgoal_index,
             latest_exact_blocked_at=copy.deepcopy(
                 self.evidence.obstacle_blocks[-4:]),
             interpretation='past_success_is_progress_evidence_not_live_motion_clearance')
-
-    def confirm_subgoal_observation(self, verification, objective):
-        """Commit only a source-backed VLM confirmation, not Python semantics."""
-        task=self.task
-        index=task.current_subgoal_index
-        if index>=len(task.subgoals) or index in task.completed_subgoals:
-            return dict(status='NOT_APPLICABLE',reason='no_active_unconfirmed_subgoal')
-        if verification.get('status')!='CONFIRMED':
-            return dict(status='NOT_CONFIRMED',reason='vlm_did_not_confirm')
-        if (verification.get('subgoal_index')!=index
-                or verification.get('source')!='vlm_real_rgbd_history'):
-            return dict(status='INVALID_EVIDENCE',
-                reason='confirmation_session_does_not_match_active_subgoal')
-        observed={o['observation_id']:o for o in self.observations}
-        ids=list(dict.fromkeys(verification.get('observation_ids') or []))
-        live=verification.get('source_observation_id')
-        if (not ids or live not in ids or live not in observed
-                or not self.current or self.current['observation_id']!=live
-                or not isinstance(verification.get('evidence'),str)
-                or not verification['evidence'].strip()):
-            return dict(status='INVALID_EVIDENCE',
-                reason='confirmation_requires_real_current_subgoal_RGBD')
-        recorded=dict(subgoal=index,evidence=verification['evidence'],
-            objective=objective,observation_ids=ids,
-            executed_steps=[a['step'] for a in self.actions
-                if a.get('subgoal')==index and a.get('action')=='MOVE_FORWARD'],
-            verification=dict(status='VERIFIED',completion_confirmed=True,
-                supported=['vlm_observation_confirmed'],
-                evidence_origin='vlm_real_rgbd_history',
-                source_observation_id=live,
-                uncertainty=verification.get('uncertainty','')))
-        task.completed_subgoals.append(index)
-        task.completion_evidence.append(recorded)
-        next_index=index+1
-        while (next_index<len(task.subgoals) and
-                next_index in task.completed_subgoals):
-            next_index+=1
-        if next_index<len(task.subgoals):
-            task.current_subgoal_index=next_index
-            task.subgoal_start_steps.setdefault(str(next_index),len(self.actions))
-            task.subgoal_started=task.subgoal_start_steps[str(next_index)]
-        self.progress_stage=(
-            'COMPLETED' if next_index>=len(task.subgoals) else 'NOT_STARTED')
-        self.progress_feedback=(
-            recorded['verification'] if next_index>=len(task.subgoals)
-            else None)
-        self.event('subgoal_observation_confirmed',
-            subgoal=index,next_subgoal=next_index,observation_ids=ids)
-        return dict(status='CONFIRMED',subgoal=index,
-            next_subgoal=next_index,observation_ids=ids)
 
     def stats(self):
         outcomes = {}
@@ -462,5 +431,7 @@ class MemoryRecords:
             statistics=self.stats(),
             evidence_ledger=self.evidence.summary(),
             tool_ledger=self.tool_ledger,
-            progress_state=dict(stage=self.progress_stage, feedback=self.progress_feedback),
+            progress_state=dict(progress_narrative=self.task.progress_narrative,
+                navigation_intent=self.task.navigation_intent,
+                uncertainties=list(self.task.uncertainties)),
         )

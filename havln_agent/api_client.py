@@ -19,8 +19,8 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v6-observe-move'
-ROLES = ('task_planner', 'navigation_agent', 'visual_perception')
+PROMPT_VERSION = 'havln-agent-v7-mission-narrative'
+ROLES = ('navigation_agent', 'visual_perception')
 
 
 def object_schema(properties):

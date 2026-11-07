@@ -1,6 +1,6 @@
 """Local observation coverage; history is for exploration, never motion authorization.
 
-The key is an estimated physical stance (x/y/z, motion epoch, subgoal) plus
+The key is an estimated physical stance (x/y/z, motion epoch) plus
 ABSOLUTE camera heading and pitch. A relative +/-30-degree request cannot
 pretend to discover a new direction after the robot turns back.
 """
@@ -38,7 +38,6 @@ def recent_forward_stall_evidence(memory, pose, turn_degrees=15):
     No automatic geometry probe or movement restriction is performed here.
     """
     failures = []
-    subgoal = getattr(getattr(memory, 'task', None), 'current_subgoal_index', None)
     for action in reversed(getattr(memory, 'actions', ())):
         if action.get('action') != 'MOVE_FORWARD':
             continue
@@ -50,7 +49,7 @@ def recent_forward_stall_evidence(memory, pose, turn_degrees=15):
         if ((feedback.get('motion_alert') or {}).get('reason')
                 != 'no_observed_frame_change_after_forward'):
             break
-        if action.get('subgoal') != subgoal or not same_stance(action.get('pose'), pose):
+        if not same_stance(action.get('pose'), pose):
             break
         failures.append(action)
     if not failures:
@@ -87,11 +86,11 @@ def recent_forward_stall_evidence(memory, pose, turn_degrees=15):
             'do_not_confuse_visible_distant_floor_with_current_robot_body_clearance')
 
 
-def covered_view(records, pose, subgoal, bearing, pitch, turn_degrees=15):
+def covered_view(records, pose, bearing, pitch, turn_degrees=15):
     """Newest comparable exact camera direction; NEVER a live safety check."""
     for record in reversed(records):
         prior = record.get('pose') or {}
-        if (record.get('subgoal') != subgoal or not same_stance(prior, pose)
+        if (not same_stance(prior, pose)
                 or angular_separation(bearing_from_pose(prior), bearing) > turn_degrees / 3
                 or abs(prior.get('pitch_deg', 0)-pitch) > 1.0):
             continue
@@ -101,13 +100,12 @@ def covered_view(records, pose, subgoal, bearing, pitch, turn_degrees=15):
 
 def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
     """Describe search history near the current stance; never blacklist occupancy."""
-    subgoal = memory.task.current_subgoal_index
     heading = bearing_from_pose(pose)
     pitch = pose.get('pitch_deg', 0)
     visited = {}
     for record in getattr(memory,'observations',()):
         prior = record.get('pose') or {}
-        if record.get('subgoal') != subgoal or not same_stance(prior, pose):
+        if not same_stance(prior, pose):
             continue
         key = round(bearing_from_pose(prior) / turn_degrees) % max_headings
         if abs(prior.get('pitch_deg', 0)-pitch) <= 1:
@@ -169,8 +167,7 @@ def panorama_coverage(memory, pose, turn_degrees=15, hfov_degrees=90):
     samples = {}
     for record in getattr(memory, 'observations', ()):
         prior = record.get('pose') or {}
-        if (record.get('subgoal') != memory.task.current_subgoal_index
-                or not same_stance(prior, pose)):
+        if not same_stance(prior, pose):
             continue
         heading = bearing_from_pose(prior)
         key = round(heading / bin_width) % count
@@ -200,7 +197,7 @@ def panorama_coverage(memory, pose, turn_degrees=15, hfov_degrees=90):
             historical_front_reason=front.get('reason'),
             historical_front_clearance_m=front.get('clearance')))
     return dict(
-        reference='same_stance_same_motion_epoch_same_subgoal_RGBD_observations',
+        reference='same_stance_same_motion_epoch_RGBD_observations',
         visual_sector_width_used_deg=round(visual_width, 2),
         yaw_bin_width_deg=round(bin_width, 2),
         covered_yaw_bins=len(covered),
@@ -311,11 +308,6 @@ def observation_stagnation(memory, pose, window=24):
         if not final or not same_stance(final.get('pose'), pose):
             continue
         # Coverage remains useful across goals, but an observation-loop
-        # intervention belongs to the CURRENT semantic milestone only.
-        task = getattr(memory, 'task', None)
-        if (task is not None and final.get('subgoal') !=
-                getattr(task, 'current_subgoal_index', None)):
-            continue
         # Do not interpret previous physical locations as current stagnation.
         if final.get('step', -1) <= last_forward:
             continue
@@ -369,7 +361,7 @@ def predicted_scan(memory, pose, delta_degrees, look, turn_degrees=15, tilt_degr
     if look != 'none':
         target_views.append((final_heading,pitch+(tilt_degrees if look=='up' else -tilt_degrees)))
     prior = [covered_view(getattr(memory,'observations',()),pose,
-        memory.task.current_subgoal_index,h,p,turn_degrees) for h,p in target_views]
+        h,p,turn_degrees) for h,p in target_views]
     return dict(new_view_expected=any(record is None for record in prior),
         already_visited=[dict(heading_deg=h,pitch_deg=p,
             observation_id=record['observation_id']) for (h,p),record

@@ -1,281 +1,88 @@
-"""A short OBSERVE decision followed by a bounded MOVE and another OBSERVE."""
-from .contracts import navigation_schema, compact_navigation_protocol, navigation_envelope
+"""NavigationAgent: one whole instruction, local motion and memory updates."""
+import math
+from jsonschema import Draft7Validator
+from .contracts import (navigation_schema, compact_navigation_protocol,
+                        navigation_envelope)
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
 from .perception import image_url
-from jsonschema import Draft7Validator
 
-COMMON_PROMPT = (
-    'You are NavigationAgent. Own semantic subgoals, route decisions, motion and STOP. '
-    'You directly SEE the CURRENT real RGB image attached to this decision '
-    '(its observation ID and pose are in current_rgb). It is not an older '
-    'Observation Agent keyframe. Independently inspect walls, stair direction, '
-    'doors and visible topology; never infer traversability from RGB alone. '
-    'Observation Agent owns detailed RGB-D camera exploration, geometry evidence '
-    'interpretation and semantic milestone confirmation. '
-    'Output exactly one registered JSON tool+args object. '
-    'When evidence suggests the CURRENT subgoal may be complete, call '
-    'observe_for_goal with mode=VERIFY. VERIFY always checks the runtime '
-    'active milestone, not a former or future subgoal. For example, if '
-    'sg_0 descent is confirmed and sg_1 requires a right turn, VERIFY asks '
-    'whether the right turn was accomplished, NEVER whether stairs were '
-    'descended again. If previous completion appears doubtful, do not '
-    'quietly substitute a past milestone as the current VERIFY objective. '
-    'Only a source-backed CONFIRMED VLM observation advances the subgoal. '
-    'A partial descent is progress, not proof of arrival. '
-    'A VERIFY NOT_YET is a completed assessment of an unchanged scene: '
-    'do not immediately re-VERIFY by paraphrasing the same question. '
-    'Continue the CURRENT subgoal by useful movement or targeted '
-    'OBSTACLE_REVIEW/APPROACH when current movement is blocked. '
-    'On UNCERTAIN choose the specific missing evidence. Only a '
-    'CONFIRMED milestone may switch to NEXT subgoal; future subgoal '
-    'instructions must not drive the still-unfinished movement. '
-    'No independent Geometry or fixed Python stair verifier is offered. '
-    'For an orientation-only current milestone, use model-owned '
-    'turn_and_observe when offered, without unnecessarily coupling a turn '
-    'to a forward step. Compare actual executed signed turn receipts '
-    'and camera orientation, not a distant landmark from a future milestone. '
-    'Never request_finish success until ALL milestones are VLM confirmed.'
-)
-OBSERVE_PROMPT = (
-    'MODE: OBSERVE. Delegate one meaningful Observation Agent task: SEARCH '
-    '(find target), APPROACH (find local approach), OBSTACLE_REVIEW (detour after '
-    'blocked forward) or VERIFY (check semantic subgoal completion). '
-    'Observation Agent sees real current RGB, calibrated Depth, measured '
-    'geometry facts and successful/blocked motion history; it controls TURN/LOOK '
-    'and retains all prior RGB-D frames, replies and feedback in the same task. '
-    'Do not paraphrase the same unanswered question at unchanged pose/RGB-D. '
-    'Read latest_observation_task, route_progress and progress_review. '
-    'Compare the CURRENT RGB with Observation Agent hypotheses and the '
-    'existing registered-motion history. An actual upward displacement '
-    'can contradict a proposed descent, so reconsider the visual route. '
-    'Retain earlier successful movement as history, never permanent clearance. '
-    'The Observation Agent navigation_feedback carries a measured/visual '
-    'summary AND a separate advisory. Old subgoal observations are '
-    'historical and must not replace the CURRENT milestone. '
-    'Recommendations are proposals, '
-    'not verified collision clearance or orders. '
-    'When a registered forward step shows credible vertical progress '
-    'opposite the current task intent, reconsider heading before issuing '
-    'another long forward segment. After a new route change or when '
-    'direction is uncertain, prefer a short calibrated test step and '
-    'review measured RGB-D progress before committing multiple steps. '
-    'This is model advice, never a mandatory hard-coded action limit. '
-    'Successful registered movement remains historical progress evidence; '
-    'a later BLOCKED step only blocks the current stance/direction and does '
-    'not erase the route already traversed. Compare headings with observed '
-    'vertical movement: a view opposite the successful descent could be ascent. '
-    'On useful candidate choose navigate_relative with bearing and finite '
-    'distance; do not repeatedly re-scan between successful atomic steps. '
-    'Do not call independent Geometry. VLM combines depth measurements and '
-    'visual evidence, but neither an UNKNOWN depth nor a clear-looking image '
-    'certifies a free route. Only a fresh coherent central measured obstacle '
-    'halts an atomic forward; then ask OBSTACLE_REVIEW for another approach. '
-    'Never claim arrival from commanded actions alone or force movement through '
-    'a measured central barrier. Keep subgoal until VLM confirms its endpoint.'
-)
-# This is a model-visible *decision focus*, not a tool whitelist or a hidden
-# physical control action. The agent still owns the bearing and can explain
-# missing live safety rather than inventing a safe corridor.
-OBSERVATION_INTERVENTION_PROMPT = (
-    'OBSERVATION-LOOP DECISION CHECKPOINT (issued ONCE per task/stance): '
-    'Existing yaw/pitch views have produced little actionable information. '
-    'Historical views may suggest a plausible bearing, but this is '
-    'NOT lasting forward permission. Choose a task-relevant short movement '
-    'when evidence supports it, OR use a different purposeful action if '
-    'the available evidence is insufficient. YOU choose the direction, '
-    'route, target and whether new observations are genuinely needed. '
-    'Repeating the same absolute view without changed evidence is unlikely '
-    'to help. Ask Observation Agent for new RGB-D and measured geometry '
-    'only when a specific unanswered obstacle question remains. '
-    'Safety depends on fresh measured central obstacles; an old view is '
-    'not enduring forward clearance. Do NOT fabricate a free corridor. '
-)
-BLOCKED_OBSERVATION_INTERVENTION_PROMPT = (
-    'OBSERVATION-LOOP / NO CONFIRMED SAMPLED BEARING (issued ONCE per task/stance): '
-    'Repeated same-stance observations have not established a currently '
-    'executable direction AMONG MEASURED bearings; other headings are UNMEASURED '
-    'and not known to be blocked. Do NOT call a turning-only MOVE a successful forward '
-    'attempt, and do NOT invent clearance. Choose the next task-relevant '
-    'strategy yourself: a genuinely different local goal/detour, a specific '
-    'new VLM RGB-D observation that could change the decision, a semantic '
-    'task revision, or an explicitly evidence-backed movement direction '
-    'for the simulator to execute. Do not merely toggle between already '
-    'seen pitch levels or arbitrarily change relative headings. The model '
-    'retains full planning authority; geometry is a VLM evidence input only. '
-)
-PANORAMA_REVIEW_PROMPT = (
-    'ONE-TIME COMPLETE-VIEW REVIEW: The robot has inspected directions around '
-    'its current stance. Compare earlier visual bearings, registered real '
-    'motion and blocked directions. Choose the most useful next action '
-    'from the entire available tool menu. A measured obstacle at one '
-    'bearing does not block other unmeasured bearings. Moving is an option, '
-    'NOT an obligation: you may VERIFY a subgoal, conduct a genuinely '
-    'different observation, choose a finite move, or revise the task. '
-    'Do not repeat the same unchanged scan or invent a collision-free route. '
-)
-MOVE_EXECUTION_RULES = (
-    'MODE: MOVE is executed without a new LLM request by navigate_local. '
-    'LocalMotionController uses post-action RGB-D odometry for each forward action, '
-    'continues until its finite forward count completes or a no-motion, '
-    'sensor or Episode interruption; metric arrival is never assumed. '
-    'The next NavigationAgent decision is always OBSERVE.'
+MISSION_PROMPT=(
+    'You are NavigationAgent controlling a robot in a real RGB-D simulated scene. '
+    'Your mission is the COMPLETE original language instruction, not a numbered '
+    'list of mandatory milestones. You directly SEE the CURRENT real RGB image. '
+    'Read the natural-language progress narrative, intent, uncertainties, '
+    'observations, measured motion and blocked bearings from Memory. '
+    'You own all route, movement, observation and STOP decisions. '
+    'When a direction is clear, make useful finite forward progress; do not '
+    'spend the episode validating earlier stages. For unclear visual layout, '
+    'call observe_for_goal using a natural-language request that includes the '
+    'relevant completed progress and asks what route advances the overall goal. '
+    'Observation Agent has full mission context and RGB-D; its descriptions and '
+    'waypoints are suggestions, never automatic clearance or MOVE orders. '
+    'Carry forward successful route evidence; correct outdated progress when '
+    'newer visual or measured evidence conflicts. A direction with a historical '
+    'obstacle is not universally forbidden, and a historical clear direction is '
+    'not guaranteed clear now. Do not keep rescanning an unchanged scene. '
+    'Keep your progress_narrative short and useful: what you believe is done '
+    'and what remains; you may revise earlier beliefs. Keep measurements '
+    'separate from interpretation and do not claim simulator ground truth. '
+    'If no route is certain, choose an informed short exploratory action rather '
+    'than indefinite validation. Only request_finish success on evidence that '
+    'the ROBOT is beside the FINAL requested destination, not because an '
+    'intermediate landmark is visible. Abort only when genuinely unable to '
+    'proceed. Human obstacles are dynamic: respect live safety feedback. '
+    'No sg0/sg1 numbering or VERIFY operation exists. '
+    'Return exactly one tool + args and optionally progress_narrative, '
+    'navigation_intent, uncertainties and evidence_observation_ids.'
 )
 
 class NavigationAgent:
-    def __init__(self, runtime):
-        self.runtime = runtime
+    def __init__(self,runtime):
+        self.runtime=runtime
 
-    def decide(self, format_feedback=None):
-        runtime = self.runtime
-        if getattr(runtime, 'navigation_mode', 'OBSERVE') != 'OBSERVE':
+    def decide(self,format_feedback=None):
+        r=self.runtime
+        if r.navigation_mode!='OBSERVE':
             raise RuntimeError('navigation_decision_requires_observe_mode')
-        runtime.registry = runtime.make_registry()
-        def validate(value):
-            # A LOOK at the mechanical pitch limit is an impossible optional
-            # pre-scan setting, not an intention to change the route. Normalize
-            # it to "VLM chooses its next legal view" before tool-schema
-            # validation, rather than paying for repeated INVALID_ARGUMENTS.
-            if isinstance(value,dict) and value.get('tool')=='observe_for_goal':
-                args=value.get('args')
-                if isinstance(args,dict) and args.get('look') in ('up','down'):
-                    # The actual model-facing per-decision schema is the
-                    # single source of truth. Normal navigation removes
-                    # "look" entirely; orientation-mode retains only
-                    # dynamically calibrated directions.
-                    params=(offered_tools.get('observe_for_goal') or {}).get(
-                        'parameters') or {}
-                    look_schema=(params.get('properties') or {}).get('look') or {}
-                    allowed=set(look_schema.get('enum') or ())
-                    if args['look'] not in allowed:
-                        requested=args.pop('look')
-                        if hasattr(runtime,'event'):
-                            runtime.event('navigation_invalid_initial_look_removed',
-                                source='navigation_agent',
-                                requested_look=requested,
-                                current_pitch_deg=getattr(runtime,'pitch_deg',
-                                    (context.get('pose') or {}).get('pitch_deg')),
-                                subgoal_id=getattr(runtime,'active_subgoal_id',None),
-                                recovery='observation_agent_chooses_legal_view')
-            # Other malformed arguments are rejected before dispatch; they
-            # cannot consume a full NavigationAgent decision in ToolExecutor.
-            if not Draft7Validator(navigation_schema(offered_tools)).is_valid(value):
-                raise APIError('navigation_tool_arguments_violate_registered_schema',
-                               category='structured_field')
-            # Optional metadata is outside the navigation command contract.
-            # It may be malformed; only tool+args can authorize a motion.
-        context = dict(navigation_context(runtime),
-                       **({'format_feedback': format_feedback} if format_feedback else {}))
-        stagnation=context.get('observation_stagnation') or {}
-        advisory=stagnation.get('intervention')
-        panorama=context.get('panoramic_observation') or {}
-        # Do not force translational movement for an orientation-only
-        # instruction whose completion should be independently verified.
-        orientation=(context.get('orientation') or {}).get('requirement')
-        pose=context.get('pose') or {}
-        task=context.get('task_selection') or {}
-        xy=pose.get('position_xz_m_est') or ()
-        signature=(getattr(runtime.memory,'episode_id',None),
-                   getattr(runtime,'plan_revision',None),
-                   task.get('current_subgoal_index'),
-                   pose.get('motion_epoch'),pose.get('place_id'),
-                   tuple(round(float(v),1) for v in xy))
-        if (panorama.get('all_azimuths_observed')
-                and getattr(self,'_panorama_committed_signature',None)==signature):
-            # One model-authored route attempt has already been issued at
-            # this stance: don't issue a second, conflicting stall advisory.
-            advisory=None
-        # A full VLM-owned sweep is precisely when this advice is useful:
-        # do not suppress the review just because observation was the last tool.
-        panorama_review=(
-            bool(panorama.get('all_azimuths_observed')) and not orientation
-            and getattr(self,'_panorama_committed_signature',None)!=signature)
-        # A completed panorama changes the ADVICE, never the tool whitelist.
-        offered_tools=navigation_tool_menu(runtime.registry,context,
-            orientation=bool(orientation))
-
-        # A one-shot strategic checkpoint must not be repeated every turn
-        # while the physical stance is unchanged. A later new subgoal/stance
-        # can legitimately receive a new checkpoint.
-        first_checkpoint=(
-            not panorama_review
-            and advisory in ('DIRECTIONAL_ACTION_DECISION_REQUIRED',
-                             'BLOCKED_ACTIONABILITY_REASSESSMENT')
-            and getattr(self,'_intervention_signature',None)!=signature)
-        advisory_prompt=(
-            OBSERVATION_INTERVENTION_PROMPT
-                if first_checkpoint and advisory=='DIRECTIONAL_ACTION_DECISION_REQUIRED'
-            else BLOCKED_OBSERVATION_INTERVENTION_PROMPT
-                if first_checkpoint and advisory=='BLOCKED_ACTIONABILITY_REASSESSMENT'
-            else '')
-        if advisory and not first_checkpoint:
-            stagnation['intervention_delivery']='previously_issued_or_pending_route'
-        # A camera RGB and the JSON pose must originate from the SAME
-        # accepted observation. No second simulator refresh here: the
-        # scheduler owns refresh, and refreshing twice could mix frame/pose.
-        frame=getattr(runtime,'observation',None)
-        record=getattr(runtime.memory,'current',None)
-        rgb_data=None
-        context_for_model=compact_navigation_context(dict(
-            context,instruction=getattr(
-                getattr(runtime.memory,'task',None),'instruction',
-                context.get('instruction'))))
-        if frame is not None and record is not None:
-            source=runtime.source()
-            pose_now=source['pose']
-            if (record['observation_id']!=source['observation_id']
-                    or record['rgb_hash']!=source['rgb_hash']
-                    or record['depth_hash']!=source['depth_hash']
-                    or record.get('pose')!=pose_now):
+        r.registry=r.make_registry()
+        tools=navigation_tool_menu(r.registry)
+        context=compact_navigation_context(navigation_context(r))
+        if format_feedback:
+            context['format_feedback']=format_feedback
+        frame=getattr(r,'observation',None)
+        view=r.memory.current
+        images=None
+        if frame is not None and view is not None:
+            source=r.source()
+            pose=source['pose']
+            if (source['observation_id']!=view['observation_id']
+                or source['rgb_hash']!=view['rgb_hash']
+                or source['depth_hash']!=view['depth_hash']
+                or pose!=view['pose']):
                 raise APIError('navigation_current_RGBD_pose_identity_mismatch',
                                category='structured_field')
-            rgb_data=image_url(frame,max_edge=640)
-            context_for_model['current_rgb']=dict(
-                observation_id=source['observation_id'],
-                rgb_hash=source['rgb_hash'],
-                heading_deg=round(__import__('math').degrees(pose_now['heading'])%360,2),
-                pitch_deg=pose_now.get('pitch_deg'),
-                image_attached=True,
-                scope='current_real_sensor_RGB',
-                depth_scope='structured_measurement_only')
-            if hasattr(runtime,'event'):
-                runtime.event('navigation_current_rgb_attached',
-                    source='navigation_agent',
+            images=image_url(frame,max_edge=640)
+            context['current_rgb']=dict(
+                image_attached=True,observation_id=source['observation_id'],
+                heading_deg=round(math.degrees(pose['heading'])%360,2),
+                pitch_deg=pose.get('pitch_deg'),rgb_hash=source['rgb_hash'],
+                scope='current_public_RGB_not_historical')
+            r.event('navigation_current_rgb_attached',source='navigation_agent',
                     observation_id=source['observation_id'],
                     rgb_hash=source['rgb_hash'])
         else:
-            context_for_model['current_rgb']=dict(
-                image_attached=False,reason='no_accepted_frame_in_fixture_or_runtime',
-                scope='NO_VISUAL_EVIDENCE')
-        result=runtime.client.complete(
-            'navigation_agent', 'navigation_decision',
-            COMMON_PROMPT + OBSERVE_PROMPT +
-            (PANORAMA_REVIEW_PROMPT if panorama_review else advisory_prompt),
-            context_for_model,
-            navigation_schema(offered_tools), validate=validate,
-            image_url=rgb_data,
-            format_retry=int(bool(format_feedback)), retry_safe=True,
-            protocol=compact_navigation_protocol(offered_tools),
-            validation_schema=navigation_envelope(offered_tools))
-        # Always discard any model-authored side-channel memory before tool
-        # dispatch. VLM and executor persist grounded facts independently.
-        # Invalid tool/args remain fatal through the strict model validator.
-        result={'tool':result['tool'],'args':result['args']}
-        if panorama_review:
-            self._panorama_committed_signature=signature
-            if hasattr(runtime,'event'):
-                runtime.event('panorama_review_prompt_issued',
-                    source='navigation_agent',physically_forced=False,
-                    offered_tools=list(offered_tools),
-                    selected_tool=result['tool'])
-        if first_checkpoint:
-            self._intervention_signature=signature
-            if hasattr(runtime,'event'):
-                runtime.event('model_direction_intervention_requested',
-                    source='navigation_agent',
-                    intervention=advisory,
-                    observed_calls=stagnation['same_stance_observation_calls'],
-                    low_information_calls=stagnation['low_information_calls'],
-                    physically_forced=False)
-        return result
+            context['current_rgb']=dict(image_attached=False,
+                                        scope='no_live_image_available')
+        schema=navigation_schema(tools)
+        def validate(value):
+            if not Draft7Validator(schema).is_valid(value):
+                raise APIError('navigation_tool_arguments_violate_registered_schema',
+                               category='structured_field')
+        return r.client.complete(
+            'navigation_agent','navigation_decision',MISSION_PROMPT,context,
+            schema,validate=validate,image_url=images,
+            format_retry=int(bool(format_feedback)),retry_safe=True,
+            protocol=compact_navigation_protocol(tools),
+            validation_schema=navigation_envelope(tools))

@@ -1,14 +1,13 @@
 """Observed short corridors; no task policy or failure blacklist."""
 
 import math
-from .progress import stair_motion_direction
 
 
 def goal_relation(candidate, grounding, estimate, language_goal, turn_angle):
     """Describe goal relevance without choosing a route or certifying terrain."""
     reasons = []
     stairs = grounding['semantic']['stair_direction'] != 'not_stairs'
-    wanted = stair_motion_direction(language_goal)
+    wanted = None  # Full-mission direction is model-owned, not a stair-specific rule.
     direction = grounding.get('stair_direction', 'UNKNOWN')
     # Direction compatibility is descriptive evidence, not a movement veto.
     error = abs(math.degrees(candidate['angle']) - estimate['bearing_deg'])

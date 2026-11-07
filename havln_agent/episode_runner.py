@@ -11,7 +11,6 @@ from .habitat_adapter import read_current_observation
 from .perception import Observation, adapt_observation
 from .runtime import AgentRuntime
 from .scheduler import request, run
-from .task_planner import TaskPlanner
 from scripts.export_cma_submission import atomic_json, check_rows
 
 
@@ -32,7 +31,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
         raise ValueError('Episode trace directory already contains files; use a fresh output directory')
-    for name in ('api', 'task_planner', 'navigation_agent', 'visual_perception',
+    for name in ('api', 'navigation_agent', 'visual_perception',
                  'steps', 'tools',
                  'safety', 'progress', 'state', 'events'):
         (directory / (name+'.jsonl')).write_text('')
@@ -79,7 +78,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         append('tools', record)
         if record['call']['tool'] in ('analyze_scene', 'compare_views', 'ground_landmark', 'assess_entry'):
             append('visual_perception', dict(tool_call_id=record['call_id'],
-                requester=record['actor'], subgoal_id=record['subgoal_id'],
+                requester=record['actor'],
                 tool=record['call']['tool'], args=record['call']['args'], result=record['result']))
 
     runtime = AgentRuntime(client, camera, config, step, refresh, record_step, record_tool,
@@ -92,39 +91,17 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             append('state', runtime.state_view())
     runtime.event_callback = record_event
     try:
-        startup_error, plan = None, None
-        # Plan before reset when possible, so slow model work cannot age the initial frame.
-        if instruction is not None:
-            runtime.memory.reset(episode_id, instruction)
-            try:
-                plan = request(runtime, 'task_planner',
-                    lambda feedback: TaskPlanner.parse(client, instruction, feedback), append)
-            except (APIError, BudgetExceeded) as error:
-                startup_error = error
-        observation = adapt_observation(env.reset(), camera)
-        if str(env.current_episode.episode_id) != episode_id:
+        observation=adapt_observation(env.reset(),camera)
+        if str(env.current_episode.episode_id)!=episode_id:
             raise ValueError('Reset resolved the wrong episode')
-        if instruction is not None and observation.instruction != instruction:
-            raise ValueError('Instruction sensor differs from the planned episode text')
-        if instruction is None:
-            runtime.memory.reset(episode_id, observation.instruction)
-            try:
-                plan = request(runtime, 'task_planner',
-                    lambda feedback: TaskPlanner.parse(client, observation.instruction, feedback), append)
-            except (APIError, BudgetExceeded) as error:
-                startup_error = error
-        if plan:
-            runtime.memory.set_plan(plan)
-            append('task_planner', dict(event='instruction_plan', plan=plan))
+        if instruction is not None and observation.instruction!=instruction:
+            raise ValueError('Instruction sensor differs from the episode text')
+        runtime.memory.reset(episode_id,observation.instruction)
         runtime.accept_observation(observation)
-        atomic_json(directory / 'episode.json', dict(episode_id=episode_id,
-            instruction=observation.instruction, plan=plan))
-        if startup_error:
-            runtime.api_failure = getattr(startup_error, 'request_context',
-                dict(error=str(startup_error), category=getattr(startup_error, 'category', 'budget_exhausted')))
-            runtime.terminate('api_budget_exhausted' if isinstance(startup_error, BudgetExceeded) else 'api_error')
-        else:
-            run(runtime, append)
+        atomic_json(directory/'episode.json',
+            dict(episode_id=episode_id,instruction=observation.instruction,
+                 architecture='mission_narrative_v2'))
+        run(runtime,append)
         if not environment_done:
             raise ValueError('Environment did not terminate after the executed STOP/budget')
         actions = [a['action'] for a in runtime.memory.actions]
@@ -141,13 +118,14 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             r['call'].get('tool')=='observe_for_goal' and
             r['result'].get('outcome')=='VISION_UNAVAILABLE'
             for r in runtime.memory.tool_ledger)
-        summary = dict(episode_id=episode_id, architecture='observe_move_v1', steps=len(actions),
+        summary = dict(episode_id=episode_id, architecture='mission_narrative_v2', steps=len(actions),
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
             api_failure=runtime.api_failure, navigation_liveness=runtime.navigation_liveness,
             seconds=time.monotonic()-started,
             api=api_stats, pose=pose, decisions=runtime.decisions,
-            decisions_by_role=runtime.decision_counts, task_reviews=max(0,runtime.plan_revision-1),
-            completed_subgoals=len(runtime.memory.task.completed_subgoals),
+            decisions_by_role=runtime.decision_counts,
+            mission_progress_narrative=runtime.memory.task.progress_narrative,
+            mission_navigation_intent=runtime.memory.task.navigation_intent,
             move_forward_steps=actions.count('MOVE_FORWARD'),
             turn_steps=actions.count('TURN_LEFT')+actions.count('TURN_RIGHT'),
             look_steps=actions.count('LOOK_UP')+actions.count('LOOK_DOWN'),

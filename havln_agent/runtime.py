@@ -12,7 +12,7 @@ import time
 from .observation import array_hash
 from .api_client import APIError, BudgetExceeded
 from .grounding import project_grounding
-from .progress import current_visual_evidence, stair_motion_direction
+from .progress import current_visual_evidence
 from .motion import registered_action, landing_support
 from .tools import ToolExecutor
 from .safety import forward_probe
@@ -23,7 +23,6 @@ from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
-from .task_planner import TaskPlanner, validate_conditions
 from .visual_perception import VisualPerception
 
 
@@ -35,10 +34,8 @@ class AgentRuntime(ToolExecutor):
         self.owner = threading.get_ident()
         self.started = time.monotonic()
         self.phase, self.finish_reason = 'INITIALIZE', None
-        self.plan_revision, self.active_subgoal_id, self.active_subgoal = 0, None, None
         self.active_waypoint_id = None
         self.navigation_mode = 'OBSERVE'
-        self.task_review_requested, self.review_reason = True, 'initial_task'
         self.api_failure = None
         self.navigation_liveness = None
         self.event_callback, self.event_seq = None, 0
@@ -46,7 +43,7 @@ class AgentRuntime(ToolExecutor):
         # separate semantic-memory events list. Count physical event facts
         # here so summary.json matches the exported runtime event trace.
         self.runtime_event_counts={}
-        self.task_planner = TaskPlanner(self)
+        self.semantic_motion_policy = 'LOCAL_TERRAIN'
         self.navigation_agent = NavigationAgent(self)
         self.visual_perception = VisualPerception(self)
         self.observation_controller = ObservationController(self)
@@ -82,7 +79,7 @@ class AgentRuntime(ToolExecutor):
         record = dict(event=event_type, episode_id=self.memory.episode_id,
             step_index=len(self.memory.actions), event_seq=self.event_seq,
             observation_id=(self.memory.current or {}).get('observation_id'),
-            plan_revision=self.plan_revision, timestamp=time.time(), run_status=self.phase, source=source, **data)
+            timestamp=time.time(), run_status=self.phase, source=source, **data)
         self.event_seq += 1
         if event_type=='forward_side_depth_ambiguity':
             k='forward_side_depth_ambiguity'
@@ -127,59 +124,31 @@ class AgentRuntime(ToolExecutor):
 
     def state_view(self):
         self.assert_owner()
-        scene = self.memory.scene_memory
-        return dict(architecture='observe_move_v1', navigation_mode=self.navigation_mode,
+        task=self.memory.task
+        return dict(architecture='mission_narrative_v2',
+            navigation_mode=self.navigation_mode,
             episode_id=self.memory.episode_id,
-            observation_id=(self.memory.current or {}).get('observation_id'), plan_revision=self.plan_revision,
-            active_subgoal=self.active_subgoal, pose=self.motion_controller.pose(), action_budget=self.config['max_steps'],
+            observation_id=(self.memory.current or {}).get('observation_id'),
+            pose=self.motion_controller.pose(),action_budget=self.config['max_steps'],
             actions_remaining=self.config['max_steps']-len(self.memory.actions),
-            run_status=self.phase, finish_reason=self.finish_reason,
-            progress_state=dict(stage=self.memory.progress_stage,
-                completed_subgoals=list(self.memory.task.completed_subgoals)),
-            scene_state=dict(validity=validity(scene['source'] if scene else None, self.memory.current,
-                time.monotonic(), self.config['max_scene_age_seconds'])))
+            run_status=self.phase,finish_reason=self.finish_reason,
+            mission=dict(instruction=task.instruction,
+                progress_narrative=task.progress_narrative,
+                navigation_intent=task.navigation_intent,
+                uncertainties=list(task.uncertainties)))
 
     def context(self):
-        # Full local audit only. Role models use contexts directly.
-        return dict(self.state_view(), memory=self.memory.snapshot())
+        return dict(self.state_view(),memory=self.memory.snapshot())
 
-    def set_semantic_goal(self, value=None):
-        task = self.memory.task
-        i = task.current_subgoal_index
-        if value is not None and value.get('intent') == 'continue' and self.active_subgoal_id == 'sg_%d' % i:
-            self.task_review_requested = False
-            self.event('task_review_continue', source='task_planner', subgoal_id=self.active_subgoal_id)
-            return
-        if i >= len(task.subgoals):
-            self.task_review_requested = False
-            return
-        goal = task.subgoals[i]
-        criteria = list(value['success_criteria'] if value else goal['success_criteria'])
-        validate_conditions(goal, criteria, i == len(task.subgoals)-1)
-        self.plan_revision += 1
-        self.active_subgoal_id = 'sg_%d' % i
-        description = value['subgoal'] if value else goal['action']+' '+goal['target']
-        if value is not None and value.get('intent')=='revise':
-            goal['completion_description']=description
-        goal.update(success_criteria=criteria, semantic_description=description)
-        self.active_subgoal = dict(id=self.active_subgoal_id, description=description,
-            landmark=goal['landmark'],target=goal['target'],
-            completion_description=goal.get('completion_description',description))
-        action = goal['action']
-        stair_direction = stair_motion_direction(goal)
-        self.motion_policy = ('DESCEND_STAIRS' if stair_direction == 'DOWN' else
-            'ASCEND_STAIRS' if stair_direction == 'UP' else 'LEVEL_ONLY')
-        self.semantic_motion_policy = self.motion_policy
-        self._cancel_local_navigation('semantic_task_revision')
-        self.active_waypoint_id = None
-        self.set_navigation_mode('OBSERVE', 'semantic_subgoal_changed')
-        self.task_review_requested = False
-        self.phase = 'NAVIGATING'
-        self.event('task_plan', source='task_planner', goal=self.active_subgoal)
+    def start_mission(self):
+        self.phase='NAVIGATING'
+        self.set_navigation_mode('OBSERVE','mission_started')
+        self.event('mission_started',source='runtime',
+                   instruction=self.memory.task.instruction)
 
     def execute(self, call, decision=None):
         self.assert_owner()
-        self.context_version = 'observe_move_v1:%d:%s:%d' % (self.plan_revision,
+        self.context_version = 'mission_v2:%s:%d' % (
             self.memory.current['observation_id'], len(self.memory.actions))
         self.event('tool_call', source='registry', tool=call.get('tool'), args=call.get('args'))
         value = super().execute(call, decision)
@@ -189,9 +158,8 @@ class AgentRuntime(ToolExecutor):
     def dispatch(self, call, decision):
         if self.done:
             return dict(status='STOPPED', reason=self.stop_reason)
-        if not decision or (decision.get('plan_revision'), decision.get('subgoal_id')) != (
-                self.plan_revision, self.active_subgoal_id):
-            return dict(status='STALE_TARGET', reason='task_revision_mismatch')
+        if not decision:
+            return dict(status='STALE_TARGET',reason='missing_navigation_decision')
         if decision.get('observation_id') != self.memory.current['observation_id']:
             return dict(status='STALE_OBSERVATION', reason='decision_observation_mismatch')
         if self.registry[call['tool']]['permission'] == 'NAVIGATION':
@@ -337,381 +305,39 @@ class AgentRuntime(ToolExecutor):
             safety=safety,obstacle_observation=combined,
             information_options=['observe_for_goal','navigate_relative'])
 
-    def _observe_for_goal(self, objective, target_types, direction=None,
-                          sweep_degrees=360, checkpoint_degrees=30,
-                          look='none', force_recheck=False, mode='APPROACH'):
-        """One camera task; VERIFY always binds to the runtime ACTIVE milestone.
-
-        The model may propose a question, but it cannot relabel an already
-        verified sg_0 as the completion condition of sg_1. This is a
-        task-identity contract, not a Python semantic completion heuristic.
-        """
-        if direction is not None:
-            if mode!='APPROACH':
-                return dict(status='INVALID_ARGUMENTS',
-                    reason='verification_requires_vlm_owned_camera')
-            return self.observation_controller.scan(
-                objective,target_types,direction,sweep_degrees,
-                checkpoint_degrees,look,force_recheck=force_recheck)
-        original_objective=objective
-        active_index=self.memory.task.current_subgoal_index
-        active_id='sg_%d'%active_index
-        if mode=='VERIFY':
-            if active_id!=self.active_subgoal_id:
-                return dict(status='STALE_TARGET',
-                    reason='active_subgoal_not_synchronized_with_task_state')
-            if active_index>=len(self.memory.task.subgoals):
-                return dict(status='INVALID_ARGUMENTS',
-                    reason='no_active_subgoal_to_verify')
-            goal=self.memory.task.subgoals[active_index]
-            condition=goal.get('completion_description') or (
-                str(goal.get('action',''))+' '+str(goal.get('target','')))
-            objective=(
-                'Assess ONLY the current milestone '+active_id+
-                ', action: '+str(goal.get('action',''))+
-                ', target: '+str(goal.get('target',''))+
-                '. Completion criterion: '+condition+
-                '. Earlier milestones are already recorded as confirmed; '
-                'do not re-evaluate their completion here. '
-                'Use real visual evidence and actual action/heading history. '
-                'For an orientation milestone, compare the executed turn '
-                'against the requested orientation; merely seeing or not '
-                'seeing a previous/future landmark is not this criterion.')
-            # The VLM must not be steered by sg_0 stair labels while sg_1
-            # asks for a right turn. Keep only labels from the active goal.
-            labels=[str(goal.get(k,''))[:80] for k in ('action','target')]
-            target_types=list(dict.fromkeys(v for v in labels if v.strip()))
-            if not target_types:
-                target_types=['current semantic milestone']
-        # Execution-side fallback protects legacy/manual tool calls; the
-        # dynamic model-facing schema prevents this invalid proposal earlier.
-        requested_look=look
-        if look in ('up','down'):
-            delta=self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle
-            if abs(self.pitch_deg+delta)>60:
-                look='none'
-                self.event('observation_initial_pitch_clamped',
-                    source='runtime',requested_look=requested_look,
-                    selected_look='none',current_pitch_deg=self.pitch_deg,
-                    subgoal_id=self.active_subgoal_id)
-        result=self.observation_controller.scan_vlm(
-            objective,target_types,sweep_degrees=sweep_degrees,
-            look=look,force_recheck=force_recheck,mode=mode)
-        if mode=='VERIFY':
-            result['verification_goal']=dict(
-                subgoal_id=active_id,completion_description=condition,
-                objective_bound_to_runtime=True,
-                model_objective_overridden=(original_objective!=objective))
-            if result.get('outcome')=='SUBGOAL_CONFIRMED':
-                confirmation=self.memory.confirm_subgoal_observation(
-                    result.get('verification') or {},objective)
-                result['subgoal_transition']=confirmation
-                if confirmation['status']=='CONFIRMED':
-                    self._cancel_local_navigation(
-                        'vlm_observed_subgoal_completed')
-                    if confirmation['next_subgoal']<len(
-                            self.memory.task.subgoals):
-                        self.set_semantic_goal()
+    def _observe_for_goal(self, objective, sweep_degrees=180):
+        """Delegate a natural-language request to full-session RGB-D observation."""
+        result=self.observation_controller.scan_mission(
+            objective,sweep_degrees=sweep_degrees)
+        # Observations and propositions are saved as evidence inside Memory;
+        # a visual hypothesis cannot advance or roll back a numbered state.
         return result
 
     def _turn_and_observe(self, relative_turn_deg, look, purpose='explore'):
-        count = round(abs(relative_turn_deg)/self.camera.turn_angle)
-        actions = ['TURN_LEFT' if relative_turn_deg > 0 else 'TURN_RIGHT']*count
-        if look != 'none':
-            actions.append('LOOK_UP' if look == 'up' else 'LOOK_DOWN')
-        if not actions:
-            return dict(status='INVALID_ARGUMENTS', reason='choose_a_turn_or_look_runtime_already_refreshes')
-        # Reserve room for the requested pitch action so LOOK is never silently dropped.
-        if len(actions) > self.config['tool_max_actions']:
-            return dict(status='INVALID_ARGUMENTS', reason='choose_1_to_3_actions_then_reconsider_new_views')
-        final_pitch=self.pitch_deg+(self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle if look=='down' else 0)
-        if abs(final_pitch)>60:
-            return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_outside_calibrated_projection')
-        if len(actions)>self.config['max_steps']-1-len(self.memory.actions):
-            return dict(status='BUDGET_LIMIT',reason='whole_batch_exceeds_remaining_action_budget')
-        # Post-collision, do not spend action budget replaying the same
-        # absolute camera orientations with no new RGB-D evidence.
-        if last_block(self.memory,self.motion_controller.pose()):
-            planned=predicted_scan(self.memory,self.motion_controller.pose(),
-                relative_turn_deg,look,self.camera.turn_angle,self.camera.tilt_angle)
-            if not planned['new_view_expected']:
-                exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                    self.camera.turn_angle,round(360/self.camera.turn_angle))
-                # Turning to a formerly executable heading can still be useful
-                # for a NEW live revalidation, even if that view is old.
-                endpoint=planned['already_visited'][-1] if planned['already_visited'] else {}
-                previous=covered_view(self.memory.observations,self.motion_controller.pose(),
-                    self.memory.task.current_subgoal_index,
-                    endpoint.get('heading_deg',0),endpoint.get('pitch_deg',0),
-                    self.camera.turn_angle)
-                previously_free=any(d.get('angle_degrees')==0 and
-                    d.get('motion_state')=='EXECUTABLE'
-                    for d in (previous or {}).get('directions',[]))
-                dynamic_allowed=False
-                if purpose=='dynamic_recheck':
-                    # Explicit model-directed dynamic rechecks should not be
-                    # blocked by a fixed wall-clock timer.
-                    target_heading=endpoint.get('heading_deg',0)
-                    target_pitch=endpoint.get('pitch_deg',self.pitch_deg)
-                    now=time.monotonic()
-                    previous_checks=[
-                        e for e in self.memory.events if e.get('event')=='dynamic_sector_rechecked'
-                        and abs((e.get('target_heading_deg',0)-target_heading+180)%360-180)<1
-                        and abs(e.get('target_pitch_deg',0)-target_pitch)<1
-                        and same_stance(e.get('pose'),self.motion_controller.pose())]
-                    dynamic_allowed=True
-                if not previously_free and not dynamic_allowed and purpose != 'intentional_recheck':
-                    return dict(status='NO_NEW_INFORMATION',
-                        reason='repeated_camera_sector_after_measured_block',
-                        no_new_information_reason='all_requested_absolute_views_already_recorded',
-                        scan=dict(frames=[],new_information_ids=[],revisited_view_ids=[
-                            v['observation_id'] for v in planned['already_visited']]),
-                        exploration=exploration,
-                        suggestion='choose_unseen_absolute_heading_or_wait_for_dynamic_change_or_route_review')
-        frames = []
-        novel, revisited = [], []
+        """Execute model-selected, mechanically calibrated camera movement."""
+        if (not math.isfinite(relative_turn_deg) or abs(relative_turn_deg)>180
+                or look not in ('none','up','down')):
+            return dict(status='INVALID_ARGUMENTS',reason='invalid_camera_command')
+        steps=round(abs(relative_turn_deg)/self.camera.turn_angle)
+        actual_turn=steps*self.camera.turn_angle
+        direction='TURN_LEFT' if relative_turn_deg>=0 else 'TURN_RIGHT'
+        actions=[direction]*steps
+        if look!='none':
+            tilt=self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle
+            if abs(self.pitch_deg+tilt)>60:
+                return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_limit')
+            actions.append('LOOK_UP' if look=='up' else 'LOOK_DOWN')
+        executed=[]
         for action in actions:
-            result = self._step(action)
-            if result['status'] != 'EXECUTED':
-                return dict(result,status='PARTIAL' if frames else result['status'],
-                    interrupted_status=result['status'],scan=dict(frames=frames))
-            current=self.memory.current
-            frames.append(dict(observation_id=current['observation_id'],
-                heading_deg=math.degrees(self.motion_controller.heading), pitch_deg=self.pitch_deg,
-                new_static_information=bool(current.get('new_visual_information',True))))
-            (novel if current.get('new_visual_information',True) else revisited).append(
-                current['observation_id'])
-            if self.done:
-                return dict(status='PARTIAL',reason='environment_done',scan=dict(frames=frames))
-        if purpose=='dynamic_recheck':
-            pose=self.motion_controller.pose()
-            self.memory.event('dynamic_sector_rechecked',
-                target_heading_deg=bearing_from_pose(pose),target_pitch_deg=self.pitch_deg,
-                pose=pose,time_monotonic=time.monotonic(),
-                new_static_information=bool(novel))
-        return dict(status=('OK' if novel else 'NO_NEW_INFORMATION'),
-            reason=None if novel else 'scan_completed_without_new_static_view',
-            source=self.source(), scan=dict(frames=frames,
-            new_information_ids=novel, revisited_view_ids=revisited),
-            exploration=local_coverage(self.memory,self.motion_controller.pose(),
-                self.camera.turn_angle,round(360/self.camera.turn_angle)) if not novel else None)
-
-    def _inspect_geometry(self):
-        self.refresh()
-        geometry=self.geometry()
-        check=geometry.assess_step()
-        directions=[]
-        for degrees in range(-45,46,int(self.camera.turn_angle)):
-            item=geometry.assess_step(math.radians(degrees))
-            directions.append(dict(bearing_deg=degrees,status=item['state'],reason=item['reason'],
-                clearance_m=item['depth']['clearance'],support=item['support']['status']))
-        alternatives=[d for d in directions if d['status']=='EXECUTABLE']
-        # Model-requested geometry: keep measurements only for this frame.
-        self.memory.current['directions']=[dict(angle_degrees=d['bearing_deg'],
-            motion_state=d['status'],reason=d['reason'],clearance=d['clearance_m'])
-            for d in directions]
-        # Landing analysis is now opt-in, not an automatic MOVE side effect.
-        latest=self.memory.actions[-1] if self.memory.actions else None
-        landing=None
-        if (latest and latest.get('action')=='MOVE_FORWARD'
-                and (latest.get('result') or {}).get('observation_after')==self.memory.current['observation_id']
-                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('status')=='ESTIMATED'
-                and ((latest.get('result') or {}).get('rgbd_motion') or {}).get('vertical_motion')=='LEVEL'
-                and getattr(self,'semantic_motion_policy',self.motion_policy)
-                    in ('ASCEND_STAIRS','DESCEND_STAIRS')):
-            landing=landing_support(geometry)
-            latest['result']['landing_support']=dict(landing,
-                evidence_source='model_requested_inspect_geometry',
-                inspection_observation_id=self.memory.current['observation_id'])
-        front=dict(check['depth']);front['depth_state']=front.pop('path_state')
-        value=dict(status=check['state'],reason=check['reason'],
-            geometry=dict(geometry.metadata(),front=dict(front,motion_state=check['state'],
-                terrain_support=check['support'],human_evidence=geometry.human_status)),directions=directions,
-            alternatives=alternatives,landing_support=landing,
-            geometry_invocation='explicit_model_requested_inspect_geometry',
-            information_options=['get_waypoint_candidates','turn_and_observe'])
-        value['exploration']=local_coverage(self.memory,self.motion_controller.pose(),
-            self.camera.turn_angle,round(360/self.camera.turn_angle))
-        if alternatives:
-            value['suggestion']='request_waypoints_then_choose_a_measured_clear_approach_direction'
-        elif value['exploration']['unexplored_directions']:
-            value['suggestion']='inspect_a_new_absolute_heading_from_exploration; do_not_revisit_blocked_views'
-        else:
-            value['suggestion']='local_coverage_exhausted_request_route_or_semantic_review'
-        return value
-
-    def _compare_views(self, observation_ids, question):
-        compared, frames = self.visual_perception.compare(
-            [self._vision_frame(i) for i in observation_ids], question)
-        sources = {source['observation_id']:source for _, source in frames}
-        scenes = []
-        for view in compared['views']:
-            source = sources[view['observation_id']]
-            self.memory.record_historical_scene(view['scene'], source)
-            self.memory.note_semantics(source, [l['name'] for l in view['scene'].get('landmarks', [])])
-            scenes.append(dict(view, source=source))
-        self.memory.visual_changes.extend(compared['changes'])
-        return dict(status='OK', scenes=scenes, changes=compared['changes'],
-            image_scope='historical_keyframes', usable_for_live_safety=False)
-
-    def _analyze_scene(self, scope='current', observation_ids=None, question=None):
-        question = question or 'Which openings, stair entries, goal landmarks and nearby people are visible?'
-        if scope == 'historical' and len(observation_ids) > 1:
-            return self._compare_views(observation_ids, question)
-        observation, source = self._vision_frame(observation_ids[0] if scope == 'historical' else None)
-        scene = self.visual_perception.scene(observation, source, question)
-        live = scope == 'current' and self._same_live_view(source)
-        if live:
-            self.memory.record_scene(scene, source)
-            self.memory.note_scene(scene, source)
-        else:
-            self.memory.record_historical_scene(scene, source)
-            self.memory.note_semantics(source, [l['name'] for l in scene.get('landmarks', [])])
-        return dict(status='OK' if live or scope == 'historical' else 'STALE_OBSERVATION', scene=scene,
-            source=source, image_scope='current' if live else 'historical_keyframe', usable_for_live_safety=live)
-
-    def _same_live_view(self, source):
-        self.refresh()
-        current = self.source()
-        if any(source[k] != current[k] for k in ('rgb_hash', 'pose')):
-            return False
-        source['semantic_source_observation_id'] = source['observation_id']
-        source.update(current, image_scope='current', revalidated_at=current['captured_at'])
-        return True
-
-    def _ground_landmark(self, target, scope='current', observation_id=None):
-        observation, source = self._vision_frame(observation_id if scope == 'historical' else None)
-        value = self.visual_perception.grounding(observation, source, target)
-        live = scope == 'current' and self._same_live_view(source)
-        source['image_scope'] = 'current' if live else 'historical_keyframe'
-        if live:
-            value = project_grounding(value['semantic'], self.geometry(), target, source)
-        value['source'] = dict(source)
-        value['grounding_id'] = 'ground_%04d' % len(self.memory.groundings)
-        self.memory.groundings.append(copy.deepcopy(value))
-        self.memory.note_semantics(source, [target+': '+value['semantic']['evidence']])
-        if scope == 'current' and not live:
-            return dict(status='STALE_OBSERVATION', reason='view_changed_during_grounding', source=source)
-        return value
-
-    def _assess_entry(self, question):
-        self.refresh()
-        source = self.source()
-        value = self.visual_perception.entry(question)
-        live = self._same_live_view(source)
-        self.memory.note_semantics(source, ['entry: '+str(value)])
-        return dict(status='OK' if live else 'STALE_OBSERVATION', assessment=value, source=source)
-
-    def _get_waypoint_candidates(self, target=None, purpose='approach_landmark'):
-        original_policy = self.motion_policy
-        if purpose == 'explore':
-            self.motion_policy = 'LOCAL_TERRAIN'
-        try:
-            self.refresh()
-            value = self._generate_waypoints(target)
-            paths = value['paths']
-            generated = list(paths)
-            if purpose == 'explore':
-                for path in paths:
-                    distance=min(path['distance'],2*self.camera.forward_step)
-                    heading=path['source']['pose']['heading']+path['angle']
-                    path.update(type='EXPLORATION_WAYPOINT',distance=distance,
-                        endpoint_xz_m=[path['source']['pose']['x']-math.sin(heading)*distance,
-                            path['source']['pose']['z']+math.cos(heading)*distance],
-                        goal_status='EXPLORATION_ONLY',
-                        objective=dict(purpose='explore',goal='obtain a better view for the current subgoal',
-                            completes_language_goal=False),
-                        execution_requirements=['model_selected_motion','RGBD_odometry_feedback'])
-            else:
-                # Missing / partial grounding does not forbid short motion.
-                # Include both known-clear and unconfirmed, nonblocked hypotheses.
-                for path in paths:
-                    path.update(
-                        type=('GOAL_WAYPOINT' if path.get('goal_association')
-                              else 'EXPLORATION_WAYPOINT'),
-                        objective=dict(purpose='approach_landmark',target=target,
-                            estimated_goal_association=bool(path.get('goal_association')),
-                            completes_language_goal=False,
-                            decision_authority='navigation_agent'))
-            # Preserve genuine semantic goal progress in the shortlist. The
-            # model still chooses one candidate; no autonomous route policy.
-            paths = rank_candidates(paths, purpose)
-            # Show distinct candidate bearings without claiming unknown is safe;
-            # the model still chooses its own detour.
-            offered=paths[:12]
-            # Do not replace a model-visible candidate with a fixed straight
-            # choice. If useful, straight remains in the ranked options.
-            geometry = self.geometry()
-            for path in offered:
-                path.update(bearing_deg=math.degrees(path['angle']), range_m=path['distance'],
-                    source_observation_id=path['source']['observation_id'],
-                    first_step=forward_probe(geometry, path['angle'])['state'])
-                self.paths[path['id']].update(path)
-            offered_ids = {p['id'] for p in offered}
-            for path in generated:
-                if path['id'] not in offered_ids:
-                    self.paths.pop(path['id'], None)
-            pose=self.motion_controller.pose()
-            coverage=local_coverage(self.memory,pose,self.camera.turn_angle,
-                round(360/self.camera.turn_angle))
-            view_directions=[]
-            revisited_view_directions=[]
-            for d in value['inspected_directions']:
-                if d.get('motion_state')!='NEEDS_VIEW' or (
-                        'outside_observed_fov' not in d.get('rejection_reasons',[])):
-                    continue
-                absolute=wrap_heading(bearing_from_pose(pose)+d['angle_degrees'])
-                previous=covered_view(self.memory.observations,pose,
-                    self.memory.task.current_subgoal_index,
-                    absolute,pose.get('pitch_deg',0),self.camera.turn_angle)
-                entry=dict(bearing_deg=round(d['angle_degrees'],2),
-                    absolute_heading_deg=absolute,
-                    reason=d.get('reason'),
-                    rejection_reasons=d.get('rejection_reasons',[]),
-                    required_next='turn_and_observe_then_retry_live_depth_probe',
-                    route_authorized=False)
-                if previous:
-                    entry.update(previous_observation_id=previous['observation_id'],
-                        explored_before=True)
-                    revisited_view_directions.append(entry)
-                else:
-                    view_directions.append(entry)
-            value.update(paths=offered,purpose=purpose,
-                view_directions=view_directions,
-                revisited_view_directions=revisited_view_directions[:5],
-                exploration=coverage)
-            if not offered:
-                relevant = [d for d in value['inspected_directions']
-                            if 'outside_observed_fov' not in d['rejection_reasons']]
-                unknown = not relevant or any(d['path_state'] == 'UNKNOWN' for d in relevant)
-                if generated:
-                    value.update(status='NEEDS_VIEW',reason='goal_grounding_unavailable',
-                        suggestion='choose_get_waypoint_candidates_with_purpose_explore_for_geometric_exploration',
-                        information_options=['get_waypoint_candidates','ground_landmark','analyze_scene'])
-                elif view_directions:
-                    value.update(self.motion_controller.needs_view('unknown_depth_or_fov'))
-                    value.update(reason='alternate_directions_need_new_camera_view',
-                        suggestion='turn_toward_one_unexplored_absolute_heading_then_recheck_live_geometry',
-                        information_options=['turn_and_observe','inspect_geometry'])
-                elif coverage['unexplored_directions']:
-                    value.update(status='NEEDS_VIEW',reason='no_new_relative_view_candidates',
-                        suggestion='use_exploration_unexplored_directions_absolute_heading_not_old_relative_bearings',
-                        information_options=['turn_and_observe','inspect_geometry'])
-                elif unknown:
-                    value.update(status='NO_NEW_INFORMATION',
-                        reason='local_view_coverage_exhausted_with_unknown_geometry',
-                        suggestion='request_task_review_or_change_observation_pitch_not_repeat_same_scan',
-                        information_options=['request_task_review','assess_entry'])
-                else:
-                    value.update(status='BLOCKED', reason='occupied_local_directions',
-                        suggestion='no_new_executable_local_path; explore_distinct_heading_or_request_task_review',
-                        information_options=['request_task_review','inspect_geometry'])
-            elif not any(p['first_step'] != 'BLOCKED' for p in offered):
-                value.update(status='BLOCKED',reason='all_offered_bearings_measured_blocked')
-            self.memory.note_candidates(offered)
-            return value
-        finally:
-            self.motion_policy = original_policy
+            result=self._step(action)
+            if result.get('status')!='EXECUTED':
+                return dict(status='PARTIAL' if executed else result.get('status'),
+                    reason=result.get('reason'),executed_camera_actions=executed)
+            executed.append(action)
+        return dict(status='ACTIONS_COMPLETED',
+            executed_camera_actions=executed,
+            actual_turn_deg=actual_turn if relative_turn_deg>=0 else -actual_turn,
+            observation_id=self.memory.current['observation_id'])
 
     def _revalidate_path(self, path, resume=False):
         return self.motion_controller.validate(self, path, resume)
@@ -769,48 +395,10 @@ class AgentRuntime(ToolExecutor):
                         quantized_turn_deg=actual_turn,quantized_distance_m=actual_distance,
                         authorization='model_selected_atomic_actions_not_metric_arrival'))
 
-    def _navigate_to_pixel(self, u, v, distance_m):
-        """Turn toward a live measured RGB-D pixel; do not navigate to its surface."""
-        if not (math.isfinite(u) and math.isfinite(v) and
-                0 <= u <= 1 and 0 <= v <= 1):
-            return dict(status='INVALID_ARGUMENTS',reason='invalid_normalized_pixel')
-        self.refresh()
-        geometry = self.geometry()
-        x = min(self.camera.width-1, max(0, round(u*(self.camera.width-1))))
-        y = min(self.camera.height-1, max(0, round(v*(self.camera.height-1))))
-        import numpy as np
-        y0,y1=max(0,y-2),min(self.camera.height,y+3)
-        x0,x1=max(0,x-2),min(self.camera.width,x+3)
-        valid = geometry.valid[y0:y1,x0:x1]
-        if int(valid.sum()) < 5:
-            return dict(status='NEEDS_VIEW',reason='pixel_target_depth_unmeasured',
-                        pixel=dict(u=u,v=v),missing_evidence=['valid_local_depth'])
-        xs = geometry.x[y0:y1,x0:x1][valid]
-        zs = geometry.z[y0:y1,x0:x1][valid]
-        x_m,z_m=float(np.median(xs)),float(np.median(zs))
-        if z_m <= 0:
-            return dict(status='NEEDS_VIEW',reason='pixel_target_not_forward_projectable',
-                        pixel=dict(u=u,v=v))
-        measured_bearing = math.degrees(math.atan2(-x_m,z_m))
-        turn_deg = round(measured_bearing/self.camera.turn_angle)*self.camera.turn_angle
-        if abs(turn_deg) > 180:
-            return dict(status='INVALID_ARGUMENTS',reason='pixel_bearing_out_of_range')
-        pixel_source = self.source()
-        result = self._navigate_relative(turn_deg,distance_m,
-                                         _source=pixel_source)
-        return dict(result, pixel_target=dict(u=u,v=v,
-            source_observation_id=pixel_source['observation_id'],
-            measured_depth_m=round(float(np.median(geometry.depth[y0:y1,x0:x1][valid])),3),
-            measured_bearing_deg=round(measured_bearing,2),
-            selected_turn_deg=turn_deg,
-            interpretation='direction_hint_only_pixel_not_walkability_certificate'))
-
     def _navigate_local(self, waypoint_id):
         path = self.paths.get(waypoint_id)
         if path is None:
             return dict(status='INVALID_TARGET', reason='unknown_waypoint_id')
-        if path['source']['subgoal'] != self.memory.task.current_subgoal_index:
-            return dict(status='STALE_TARGET', reason='language_goal_changed')
         # Target localization is a hint, not an independent motion veto.
         continuing_uncertain = (self.active_waypoint_id == waypoint_id
             and self.motion_controller.target is not None
@@ -833,86 +421,13 @@ class AgentRuntime(ToolExecutor):
         finally:
             self.motion_policy = original
 
-    def _recall_observation(self, **args):
-        return dict(status='OK', memory=self.memory.recall_observation(**args))
-
-    def _query_spatial_memory(self, **args):
-        return dict(status='OK', memory=self.memory.query_spatial_memory(**args))
-
     def _read_memory_record(self, record_id):
         return dict(status='OK', memory=self.memory.read_memory_record(record_id))
 
     def _query_task_memory(self, **args):
         return dict(status='OK', memory=self.memory.query_task_memory(**args))
 
-    def _verify_subgoal(self, claim, evidence, observation_ids):
-        value = self._update_progress(claim, evidence, observation_ids)
-        if value['completion_confirmed']:
-            self.active_waypoint_id = None
-            self.task_review_requested = self.memory.task.current_subgoal_index < len(self.memory.task.subgoals)
-            self.review_reason = 'verified_milestone'
-        return value
-
-    def _select_subgoal(self, subgoal_index, reason, observation_ids):
-        """Model-owned task navigation; proofs and semantic intent are separate.
-
-        Selecting a new task does not modify completion_evidence. All earlier
-        motion and observations remain available for later retrospective proof.
-        """
-        task = self.memory.task
-        previous = task.current_subgoal_index
-        count = len(task.subgoals)
-        if not 0 <= subgoal_index < count:
-            return dict(status='INVALID_ARGUMENTS',reason='unknown_subgoal_index')
-        if subgoal_index == previous:
-            return dict(status='INVALID_ARGUMENTS',reason='already_active_subgoal')
-        if subgoal_index in task.completed_subgoals:
-            return dict(status='INVALID_ARGUMENTS',reason='cannot_revisit_verified_subgoal')
-        prior_seen = {int(k) for k in task.subgoal_start_steps}
-        if subgoal_index not in prior_seen and subgoal_index != previous + 1:
-            return dict(status='INVALID_ARGUMENTS',
-                        reason='cannot_skip_unvisited_ordered_milestones')
-        known = {o['observation_id'] for o in self.memory.observations}
-        if not set(observation_ids) <= known:
-            return dict(status='INVALID_ARGUMENTS',reason='unknown_observation_citation')
-        if not reason.strip():
-            return dict(status='INVALID_ARGUMENTS',reason='missing_model_reason')
-        # A model decision can change the active navigation objective, never
-        # fabricate a VERIFIED status or erase an unverified earlier task.
-        self._cancel_local_navigation('model_changed_active_semantic_subgoal')
-        task.provisional_transitions.append(dict(from_subgoal=previous,
-            to_subgoal=subgoal_index,reason=reason,observation_ids=observation_ids,
-            step=len(self.memory.actions),verified=False,
-            evidence_scope='navigation_strategy_not_completion_certification'))
-        task.current_subgoal_index = subgoal_index
-        task.subgoal_start_steps.setdefault(str(subgoal_index),len(self.memory.actions))
-        task.subgoal_started = task.subgoal_start_steps[str(subgoal_index)]
-        self.memory.progress_stage = 'PROVISIONAL_UNVERIFIED'
-        # Preserve older verifier feedback in history; do not mislabel its
-        # result as proof about the newly selected task.
-        self.task_review_requested = False
-        self.review_reason = 'model_selected_semantic_milestone'
-        self.set_semantic_goal()
-        self.event('model_selected_subgoal',source='navigation_agent',
-            from_subgoal=previous,to_subgoal=subgoal_index,
-            observation_ids=observation_ids,
-            completion_verified=False)
-        return dict(status='OK',current_subgoal_index=subgoal_index,
-            previous_subgoal_index=previous,
-            selection='PROVISIONAL_UNVERIFIED',
-            unverified_subgoals=[i for i in range(count)
-                if i not in task.completed_subgoals],
-            reason=reason,
-            final_success_requires_all_verified=True)
-
-    def _request_task_review(self, reason):
-        if self.memory.task.current_subgoal_index >= len(self.memory.task.subgoals):
-            return dict(status='REJECTED', reason='all_subgoals_verified_request_finish')
-        self.task_review_requested, self.review_reason = True, reason
-        return dict(status='OK', reason=reason, control_event='task_review_requested')
-
     def _request_finish(self, outcome, evidence):
-        # No independent semantic verifier: all milestones came from VLM VERIFY.
         return self._finish_navigation(outcome, evidence)
 
     def assess(self, value):
