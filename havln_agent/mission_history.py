@@ -5,6 +5,7 @@ source-linked views; it never interprets successful task completion, steers
 the robot or treats a historical Depth frame as current clearance.
 """
 import copy
+import json
 import math
 from .heading import same_local_stance, relative_bearing
 
@@ -117,11 +118,16 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             selected_views=actual[-3:],
             waypoints=waypoints))
     blocked=[]
-    for block in memory.evidence.obstacle_blocks[-8:]:
+    seen_block_keys=set()
+    # One fact per distinct source-frame / stance / bearing, with a count;
+    # don't flood both models with three copies of the same unchanged wall.
+    for block in reversed(memory.evidence.obstacle_blocks):
+        key=(block.get('observation_id'),block.get('heading_deg'),
+             block.get('motion_epoch'),block.get('viewpoint_generation'))
+        if key in seen_block_keys:continue
+        seen_block_keys.add(key)
         source=by_id.get(block.get('observation_id'))
         if not source:continue
-        key=(block['observation_id'],block.get('heading_deg'),
-             block.get('motion_epoch'),block.get('viewpoint_generation'))
         repeat=sum(
             (v.get('observation_id'),v.get('heading_deg'),
              v.get('motion_epoch'),v.get('viewpoint_generation'))==key
@@ -137,21 +143,31 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             nearest_along_m=block.get('nearest_along_m'),
             reason=block.get('reason'),
             obstacle_is_live_only_at_source_stance=True))
+        if len(blocked)>=5:break
     tool_feedback=[]
-    for receipt in memory.tool_ledger[-4:]:
+    receipt_keys=set()
+    for receipt in reversed(memory.tool_ledger[-12:]):
         result=receipt.get('result') or {}
         call=receipt.get('call') or {}
+        status=result.get('interrupted_status') or result.get('status')
+        args=call.get('args') or {}
+        key=(call.get('tool'),json.dumps(args,sort_keys=True),
+             result.get('end_observation_id'),status)
+        if result.get('executed_actions')==0 and status in ('BLOCKED','PARTIAL'):
+            if key in receipt_keys:continue
+            receipt_keys.add(key)
         obstacle=result.get('obstacle_observation') or {}
         depth=obstacle.get('depth') or {}
         center=depth.get('center') or {}
         tool_feedback.append(dict(
             tool_call_id=receipt.get('call_id'),tool=call.get('tool'),
-            args=copy.deepcopy(call.get('args') or {}),
-            status=result.get('interrupted_status') or result.get('status'),
-            reason=result.get('reason'),
+            args=copy.deepcopy(args),
+            status=status,reason=result.get('reason'),
             executed_actions=result.get('executed_actions'),
             start_observation_id=result.get('start_observation_id'),
             end_observation_id=result.get('end_observation_id'),
+            repeated_same_RGBD_stance_heading=result.get(
+                'repeated_same_RGBD_stance_heading'),
             blocked_at=copy.deepcopy(result.get('blocked_at')),
             blocker=dict(source_observation_id=obstacle.get('source_observation_id'),
                 central_support_pixels=center.get('central_support_pixels'),
@@ -160,6 +176,8 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
                 nearest_along_m=center.get('nearest_along_m'),
                 nearest_height_m=center.get('nearest_height_m'))
                     if center else None))
+        if len(tool_feedback)>=4:break
+    tool_feedback.reverse()
     route=memory.route_progress_summary()
     return dict(
         contract='mission_evidence_v1',
@@ -180,7 +198,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             position_coordinates_valid=pose.get('position_coordinates_valid',True)),
         observation_tasks=searches,
         historical_frames=selected_history_frames(memory,current_id),
-        blocked_at_source_stances=blocked[-5:],
+        blocked_at_source_stances=blocked,
         recent_tool_receipts=tool_feedback,
         successful_motion_segments=(route.get('successful_segments') or [])[-5:],
         bearing_convention=dict(
