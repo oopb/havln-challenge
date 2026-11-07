@@ -15,6 +15,7 @@ from havln_agent.heading import (
 from havln_agent.contracts import registry,navigation_schema
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.mission_history import mission_evidence,selected_history_frames
+from havln_agent.contexts import navigation_context
 from havln_agent.visual_perception import session_frame_ids
 from havln_agent.runtime import AgentRuntime
 
@@ -160,6 +161,23 @@ class SharedMissionHistory(unittest.TestCase):
         frames=selected_history_frames(m,'obs_0003')
         self.assertEqual({v['observation_id'] for v in frames},
                          {'obs_0001','obs_0002'})
+
+    def test_navigation_and_visual_agents_share_the_same_evidence_source(self):
+        m=self.make_memory()
+        state=pose(heading=60)
+        fake=SimpleNamespace(memory=m,
+            motion_controller=SimpleNamespace(pose=lambda:state),
+            camera=cam(),config=dict(max_steps=88),
+            navigation_mode='OBSERVE',navigation_liveness=None)
+        navigation=navigation_context(fake)['memory']
+        observation=mission_evidence(m,state,max_observation_tasks=4)
+        self.assertEqual(navigation['contract'],observation['contract'])
+        self.assertEqual(navigation['current'],observation['current'])
+        self.assertEqual(navigation['blocked_at_source_stances'],
+                         observation['blocked_at_source_stances'])
+        self.assertEqual(navigation['observation_tasks'],
+                         observation['observation_tasks'])
+        self.assertEqual(len(navigation['blocked_at_source_stances']),1)
 
     def test_old_stance_removes_executable_relative_bearing(self):
         m=self.make_memory()
