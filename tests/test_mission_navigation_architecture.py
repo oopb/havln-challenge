@@ -164,7 +164,8 @@ class MissionContracts(unittest.TestCase):
                     evidence='Piano nearby in current view.'),
                 progress_narrative='At the piano.',
                 navigation_intent='Stop.')),
-            decisions=0,done=False,refresh=Mock(),decision_id=Mock(),
+            decisions=0,done=False,current_decision_id='navigation_agent_0000',
+            refresh=Mock(),decision_id=Mock(),
             event=Mock(),start_mission=Mock(),assess=Mock())
         r.execute=Mock(side_effect=lambda command,binding:(
             setattr(r,'done',True) or dict(tool_call_id='tool_0000',
