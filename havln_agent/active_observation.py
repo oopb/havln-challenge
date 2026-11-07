@@ -63,6 +63,26 @@ class ObservationController:
             seen.add(key)
             current=dict(observation_id=source['observation_id'],
                 heading_deg=round(heading,2),pitch_deg=r.pitch_deg)
+            turn_directions=[
+                a for a in record['actions']
+                if a in ('TURN_LEFT','TURN_RIGHT')]
+            turn_reversals=sum(
+                previous!=current for previous,current in
+                zip(turn_directions,turn_directions[1:]))
+            # An advisory measurement, not a Python observation veto.
+            # NavigationAgent/VLM retain control over when to observe/finish.
+            coverage=dict(
+                session_observed_views=len(viewed),
+                session_turn_degrees=turned,
+                requested_sweep_degrees=sweep_degrees,
+                remaining_sweep_degrees=max(0,sweep_degrees-turned),
+                turn_direction_reversals=turn_reversals,
+                inspected_viewpoints=[dict(
+                    source_observation_id=v['observation_id'],
+                    heading_deg=v['heading_deg'],pitch_deg=v['pitch_deg'])
+                    for v in viewed[-8:]],
+                next_camera_action_model_decides=True,
+                prior_views_are_information_not_route_clearance=True)
             try:
                 visual=r.visual_perception.guide_scan_view(
                     r.observation,source,objective,['complete mission route'],
@@ -74,7 +94,8 @@ class ObservationController:
                                         for p in viewed[-12:]],
                     # Both agents receive the same mission_evidence view
                     # inside guide_scan_view; no duplicate stale route digest.
-                    route_history=None,geometry_evidence=None)
+                    route_history=None,geometry_evidence=None,
+                    view_coverage=coverage)
             except (APIError,BudgetExceeded) as error:
                 last_failure=str(error)[:220]
                 break

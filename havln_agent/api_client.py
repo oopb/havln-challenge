@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v10-recoverable-camera-pitch'
+PROMPT_VERSION = 'havln-agent-v11-observation-json-and-view-coverage'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
@@ -127,8 +127,16 @@ def reject_json_constant(value):
     raise json.JSONDecodeError('Non-finite values are not valid JSON', value, 0)
 
 
-def decode_response(content):
+def decode_response(content, allow_identical_duplicates=False):
+    """Decode one JSON response without silently resolving conflicts.
+
+    Only explicitly opted-in, read-only VLM observation responses may
+    normalize duplicate keys with EXACTLY identical JSON values. Navigation
+    tool decisions, conflicting duplicates and malformed structures remain
+    strict errors. All normalized results still undergo schema validation.
+    """
     normalization = None
+    identical_duplicate_keys = []
     if isinstance(content, str):
         blocks = list(re.finditer(r'^\s*```([^\n]*)\n(.*?)^\s*```\s*$', content,
                                   re.MULTILINE | re.DOTALL))
@@ -150,13 +158,30 @@ def decode_response(content):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise json.JSONDecodeError('Duplicate JSON key: ' + key, '', 0)
+                # bool and int compare equal in Python but are different JSON
+                # values; use both type identity and canonical serialization.
+                if (not allow_identical_duplicates
+                        or type(result[key]) is not type(value)
+                        or canonical(result[key]) != canonical(value)):
+                    label=('Conflicting duplicate JSON key: ' if
+                           allow_identical_duplicates else
+                           'Duplicate JSON key: ')
+                    raise json.JSONDecodeError(label + key, '', 0)
+                identical_duplicate_keys.append(key)
+                continue
             result[key] = value
         return result
     decoder = json.JSONDecoder(
         parse_constant=reject_json_constant, object_pairs_hook=unique_pairs)
+    def with_identical_duplicate_note(value, existing):
+        if identical_duplicate_keys:
+            names=','.join(sorted(set(identical_duplicate_keys)))
+            note='identical_duplicate_keys['+names+']'
+            return value, (existing+'+'+note if existing else note)
+        return value, existing
     try:
-        return decoder.decode(content), normalization
+        return with_identical_duplicate_note(decoder.decode(content),
+                                             normalization)
     except json.JSONDecodeError as original_error:
         # Some Chat Completions providers leak a plain-language preface even
         # with response_format=json_object. Only recover ONE complete,
@@ -165,6 +190,9 @@ def decode_response(content):
         if not isinstance(content, str):
             raise
         candidates = []
+        # A failed first parse must not contribute duplicate-key metadata to
+        # a later, independently decoded embedded JSON candidate.
+        identical_duplicate_keys.clear()
         consumed_until = 0
         for start, char in enumerate(content):
             if start < consumed_until or char not in '{[':
@@ -189,7 +217,8 @@ def decode_response(content):
             raise original_error
         if not (content[:start].strip() or content[end:].strip()):
             raise original_error
-        return value, 'unique_embedded_json_container'
+        return with_identical_duplicate_note(value,
+                                             'unique_embedded_json_container')
 
 
 def model_endpoints(settings):
@@ -303,10 +332,22 @@ class APIClient:
             messages=record.get('messages', [])
             record['input_text_chars']=sum(len(m['content']) if isinstance(m.get('content'),str) else
                 sum(len(c.get('text','')) for c in m.get('content',[])) for m in messages)
+            record['prior_conversation_text_chars']=(
+                messages[1].get('prior_conversation_text_chars',0)
+                if len(messages)>1 else 0)
+            record['prior_conversation_image_count']=(
+                messages[1].get('prior_conversation_image_count',0)
+                if len(messages)>1 else 0)
+            record['prior_conversation_turns']=(
+                messages[1].get('prior_conversation_turns',0)
+                if len(messages)>1 else 0)
+            record['input_text_chars']+=record['prior_conversation_text_chars']
             record['system_chars']=sum(len(m['content']) for m in messages if m['role']=='system')
             record['request_text_plus_schema_chars'] = record['input_text_chars'] + record.get('native_schema_chars', 0)
             picture_hashes=messages[1].get('image_sha256',[]) if len(messages)>1 else []
-            record['image_count']=len(picture_hashes) if isinstance(picture_hashes,list) else int(bool(picture_hashes))
+            record['image_count']=(len(picture_hashes) if isinstance(picture_hashes,list)
+                                   else int(bool(picture_hashes)))+record[
+                                       'prior_conversation_image_count']
             line = canonical(dict(episode_id=self.episode_id, **self.trace_context, **record))
             for key in self.keys.values():
                 line = line.replace(key, '[REDACTED]')
@@ -421,7 +462,29 @@ class APIClient:
                         for turn in conversation_messages)):
                 raise APIError('invalid_observation_conversation',category='structured_field')
             messages=[messages[0]]+copy.deepcopy(conversation_messages)+[messages[1]]
-            logged_messages[1]['prior_conversation_turns']=len(conversation_messages)
+            # The audit deliberately omits historical base64 image payloads.
+            # Still count the REAL earlier dialogue sent over the wire:
+            # the old input_text_chars/image_count silently excluded it.
+            history_text_chars=0
+            history_image_count=0
+            for turn in conversation_messages:
+                content=turn.get('content')
+                if isinstance(content,str):
+                    history_text_chars+=len(content)
+                elif isinstance(content,list):
+                    for part in content:
+                        if not isinstance(part,dict):
+                            continue
+                        if isinstance(part.get('text'),str):
+                            history_text_chars+=len(part['text'])
+                        if part.get('type')=='image_url':
+                            history_image_count+=1
+            logged_messages[1]['prior_conversation_turns']=len(
+                conversation_messages)
+            logged_messages[1]['prior_conversation_text_chars']=(
+                history_text_chars)
+            logged_messages[1]['prior_conversation_image_count']=(
+                history_image_count)
         response_format = {'type': config['response_format']}
         if config['response_format'] == 'json_schema':
             response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)
@@ -534,7 +597,11 @@ class APIClient:
                     # Repeating a refused/truncated request with the same limit won't repair it.
                     retryable = False
                     raise APIError('refusal_or_incomplete_response')
-                result, normalization = decode_response(message['content'])
+                result, normalization = decode_response(
+                    message['content'],
+                    allow_identical_duplicates=(
+                        role=='visual_perception' and
+                        purpose=='vlm_guided_observation'))
                 if normalization:
                     record['response_normalization'] = normalization
                 errors = list(validator.iter_errors(result))

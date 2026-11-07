@@ -10,6 +10,7 @@ on:
       - "tests/test_forward_preflight_v9.py"
       - "tests/test_recoverable_camera_pitch.py"
       - "tests/test_navigation_blocked_history_contract.py"
+      - "tests/test_v11_observation_review.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -35,5 +36,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_recoverable_camera_pitch.py' -v
       - name: Verify real navigation inference after measured Depth block (eval-batch4-25)
         run: python -m unittest discover -s tests -p 'test_navigation_blocked_history_contract.py' -v
+      - name: Verify v11 VLM JSON integrity, cross-session view memory and real RGB-D conversation input audit
+        run: python -m unittest discover -s tests -p 'test_v11_observation_review.py' -v
       - name: Verify RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v

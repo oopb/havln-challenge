@@ -78,6 +78,49 @@ def selected_history_frames(memory, current_id=None, max_frames=3):
     return selected
 
 
+def recent_views_at_stance(memory, pose, max_views=16, window=80):
+    """Bounded *observed* yaw/pitch coverage at the CURRENT local stance.
+
+    Older scans are not erased when a new Observation Agent session starts.
+    Pose/epoch validity is checked with the existing same_local_stance
+    contract. Coverage is information for the model, never a forbidden
+    direction, clearance certificate or forced-action condition.
+    """
+    camera=memory.camera
+    yaw_step=max(1,float(camera.turn_angle))
+    tilt_step=max(1,float(camera.tilt_angle))
+    unique={}
+    samples=0
+    for observation in reversed(memory.observations[-window:]):
+        measured_pose=observation.get('pose') or {}
+        if not same_local_stance(measured_pose,pose):
+            continue
+        samples+=1
+        yaw=math.degrees(measured_pose.get('heading',0))%360
+        pitch=measured_pose.get('pitch_deg',
+                                observation.get('pitch_deg',0))
+        quantized_yaw=(round(yaw/yaw_step)*yaw_step)%360
+        quantized_pitch=round(pitch/tilt_step)*tilt_step
+        key=(quantized_yaw,quantized_pitch)
+        if key in unique:
+            continue
+        unique[key]=dict(
+            source_observation_id=observation.get('observation_id'),
+            heading_deg=round(yaw,2),
+            pitch_deg=round(pitch,2),
+            relative_bearing_deg_from_current=relative_bearing(
+                yaw,math.degrees(pose.get('heading',0))%360),
+            observed_only=True)
+    return dict(
+        scope='current_local_stance_same_motion_epoch_and_viewpoint',
+        sampled_observations=samples,
+        distinct_heading_pitch_views=len(unique),
+        latest_distinct_views=list(unique.values())[:max_views],
+        older_views_may_be_omitted=len(unique)>max_views,
+        action_guidance_only_no_hard_view_ban=True,
+        historical_depth_does_not_authorize_move=True)
+
+
 def mission_evidence(memory, pose, max_observation_tasks=4):
     """The common structured truth base for NavigationAgent and VLM."""
     task=memory.task
@@ -299,6 +342,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         recent_forward_failures=(blocked[:3]+stalls[:3]),
         recent_tool_receipts=tool_feedback,
         recent_camera_pitch_limits=camera_limits,
+        recent_views_at_current_stance=recent_views_at_stance(memory,pose),
         successful_motion_segments=(route.get('successful_segments') or [])[-5:],
         bearing_convention=dict(
             absolute_heading_deg='0..360, increases on LEFT turn',

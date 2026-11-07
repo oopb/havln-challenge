@@ -1,3 +1,84 @@
+# v11 — observation reliability and model input/output review
+
+**Baseline preserved:** The 88-step `eval-batch4-25` episode was completed with
+20 MOVE_FORWARD actions, 63 turns (31 from VLM-guided scans, 22 from
+NavigationAgent's turn_and_observe, 10 as part of relative navigation),
+and no identical before/after RGB-D on executed forward actions. This
+version intentionally preserves Depth forward preflight, camera
+re-centering, and NavigationAgent's authority over movement and STOP.
+
+## VLM JSON output fix
+Six of 22 observation API attempts in this episode returned duplicate
+JSON keys. Five duplicated `target_visible` with the **same** value;
+one duplicated `uncertainty` with **different** text. Previous strict
+decoding rejected all six.
+
+The v11 parser continues to reject duplicate keys by default. Only
+`role=visual_perception` and
+`purpose=vlm_guided_observation` may normalize identical duplicate
+values. The values must have the same Python/JSON type *and* the same
+canonical JSON serialization. This prevents Python's `True == 1`
+comparison from admitting boolean/integer conflicts. Other roles,
+conflicting duplicates, malformed JSON, and any result failing the
+existing independent schema/coordinate/role validation are **rejected**.
+No rejected model action is dispatched. The audit logs each benign
+normalization as `response_normalization=identical_duplicate_keys[...]`.
+Existing one-shot VLM format repair remains for truly conflicting output,
+with a more precise correction instruction.
+
+## Observation input and turn-budget feedback
+Both agents receive a read-only
+`mission_memory.recent_views_at_current_stance`: latest distinct actual
+yaw/pitch observations at the same local estimated stance and motion
+epoch, with source observation IDs and relative bearing from the current
+heading. It is bounded to 16 distinct views in the latest 80 records.
+It is **not** a route ban, an automatic motion command, or a safety
+certificate. A pose change/uncertain odometry cannot be assumed to be the
+same stance.
+
+During a VLM observation session,
+`request.view_coverage` additionally reports number of inspected
+views, actual TURN degrees consumed, direction-reversal count and
+remaining sweep allowance. ObservationAgent's prompt is asked to
+reuse observed bearings and return `next_action=finish` when a concrete
+route hypothesis is available, rather than rescanning by default.
+NavigationAgent's prompt similarly treats scans as costly, asks for
+short, model-selected forward progress where supported by current
+evidence, and does **not** claim stair completion from height estimates.
+No hardcoded stairs, forced-forward quotas or Python steering added.
+
+A camera scan with no remaining yaw budget now offers `finish` and
+physically possible LOOK options, **not** `turn_left/right` with an
+impossible zero-degree turn.
+
+## Multimodal conversation and logging audit
+`VisualPerception.guide_scan_view` already supplies current RGB and
+Depth, optionally three source-backed historical RGB-D pairs on the
+first turn, and resends the full earlier task-local conversation on
+subsequent VLM requests. v11 preserves that behavior. It corrects
+`api.jsonl` input-size reporting to count *prior conversation* text
+and images, while continuing to store only safe metadata and hashes,
+never replayed image base64. Added
+`prior_conversation_turns`, `prior_conversation_text_chars` and
+`prior_conversation_image_count` metrics.
+
+## Regression checks
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v11_observation_review.py' -v
+python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_recoverable_camera_pitch.py' -v
+python -m unittest discover -s tests -p 'test_navigation_blocked_history_contract.py' -v
+```
+
+Use a new `eval-batch4-26` output directory to avoid mixing code
+fingerprints. v11 only claims *protocol/observation* repairs until the
+new simulator run verifies the effect on action mix, useful forward
+motion, observation calls, and official completion.
+
+---
+
 # v10: recoverable camera pitch limits (eval-batch4-24)
 
 **Root cause:** At -60° pitch the v9 navigator twice emitted a structurally
