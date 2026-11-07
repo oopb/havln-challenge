@@ -87,6 +87,19 @@ SCAN_GUIDANCE_PROMPT=(
     'bearing of an off-center object. A missing box gives no precise target '
     'bearing. Its metric distance is a hypothesis, not walkability '
     'certificates; walls, glass, rails, drop-offs and people may intervene. '
+    'Use view_coverage.session_turn_degrees, turn_direction_reversals '
+    'and inspected_viewpoints together with mission_memory.'
+    'recent_views_at_current_stance to avoid spending the observation budget '
+    'revisiting the same measured yaw/pitch at the same stance. '
+    'History from another stance or motion epoch is only a visual clue. '
+    'When a likely useful direction or localized approach is visible, '
+    'return its evidence and navigation_suggestion, then prefer '
+    'next_action=finish so NavigationAgent can decide whether to move. '
+    'Do not automatically scan the full requested sweep; the sweep is a '
+    'maximum allowance, not a required rotation. Conversely, inspect a '
+    'new bearing whenever actual route evidence is still missing. '
+    'If a turn simply reverses earlier observation with no new visual '
+    'question or obstruction evidence, prefer finish over oscillation. '
     'Avoid repeating unchanged views; when helpful choose the next camera '
     'TURN/LOOK, otherwise finish. You may control stationary TURN_LEFT, '
     'TURN_RIGHT, LOOK_UP, LOOK_DOWN or finish; NEVER MOVE or STOP. '
@@ -107,7 +120,10 @@ SCAN_GUIDANCE_PROMPT=(
     'Do not relabel a measured wall as passable solely to satisfy the task. '
     'Keep uncertainty explicit, and distinguish sensed obstacles from '
     'historical model guesses. NavigationAgent owns all movement and final '
-    'mission completion.'
+    'mission completion. '
+    'Return ONE JSON object with EACH field name occurring exactly once; '
+    'do not append a correction by repeating target_visible, uncertainty, '
+    'or any other field. Do not emit explanatory text outside JSON.'
 )
 
 def semantic_cache_context(value):
@@ -218,8 +234,18 @@ class VisualPerception:
                     raise
                 detail=getattr(error,'request_context',{}).get('error_detail',str(error))
                 retry=list(original)
-                retry[3]=dict(original[3],format_feedback=dict(error=detail[:350],
-                    instruction='Regenerate ONE complete schema-valid JSON object. Every key must occur once. No duplicate or conflicting fields.'))
+                retry[3]=dict(original[3],format_feedback=dict(
+                    error=detail[:350],
+                    instruction=(
+                        'Regenerate ONE complete schema-valid JSON object '
+                        'for the SAME visible RGB-D frame. Write each key '
+                        'EXACTLY ONCE. If the previous error names a '
+                        'duplicate field, include one intended value '
+                        'for that field and preserve all other required '
+                        'fields; never append corrections as repeated keys. '
+                        'Follow the current allowed_camera_actions and '
+                        'allowed_turn_deg. No additional simulator action '
+                        'is taken on this format retry.')))
                 args=tuple(retry)
 
     def panorama_direction_evidence(self, frames, task_context):
