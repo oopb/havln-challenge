@@ -363,6 +363,12 @@ class MemoryService(MemoryRecords):
             history_scope='all_episode_factual_memory_projected_to_bounded_model_context')
 
     def read_memory_record(self, record_id):
+        session=next((s for s in self.observation_searches
+            if s.get('observation_task_id')==record_id),None)
+        if session is not None:
+            return dict(detail_requested=True,
+                record=copy.deepcopy(session),
+                visual_hypotheses_are_not_live_clearance=True)
         if record_id in self.keyframes:
             return dict(detail_requested=True,record=copy.deepcopy(self.keyframes[record_id]),
                 sensor_record=copy.deepcopy(next(o for o in self.observations if o['observation_id']==record_id)),
