@@ -1,3 +1,85 @@
+# v8: explicit turn directions and canonical mission history
+
+This update fixes problems observed in `eval-batch4-22` after the v7
+whole-mission refactor. It does **not** introduce sg/VERIFY stages or
+automatic navigation steering. It changes the model/tool interface and the
+provenance of memory supplied to both agents.
+
+## Source of truth and what each model receives
+
+```text
+Habitat public RGB-D + atomic action receipts
+  -> MemoryRecords / MemoryService (observations, motions, blocks)
+  -> mission_history.mission_evidence() [one bounded evidence index]
+        |-> contexts.navigation_context() -> NavigationAgent + current RGB
+        |-> visual_perception.guide_scan_view() -> Observation Agent + RGB-D
+        |-> query_task_memory() -> on-demand expanded same index
+```
+
+- **Facts:** RGB-D observation IDs, source headings and pitch, current local
+  pose/motion epoch, actual accepted actions, registered motion estimates,
+  and measured near-field obstacle ROI. Historical Depth is not authorization
+  for current movement; registration is not Habitat ground truth.
+- **Visual hypotheses:** Observation Agent checkpoint summaries and box
+  proposals are linked to real source observation IDs and camera poses.
+  A waypoint's heading is computed from calibrated image-box center and
+  camera horizontal field of view, not merely the camera centerline.
+- **Navigation assessments:** `progress_narrative`, `navigation_intent`,
+  uncertainty and model-declared citations are *revisable*. The context
+  observation ID is recorded as the frame at which the model decided; it
+  is **not** automatically counted as verified task-completion evidence.
+- **Observation history:** A single observation task preserves the complete
+  turn-by-turn RGB-D conversation. New tasks use a diverse, bounded selection
+  of actual saved historical frames across previous observation tasks.
+  Historical frames appear with source ID, yaw/pitch, local motion epoch,
+  and summary; the selection never implies physical reachability.
+- **Deduplication:** Same-frame, same-stance blocked-forward receipts are
+  summarized once with a repeat count. Unchanged narrative revisions are
+  not added as new memory records. Every observation task gets a stable
+  `observation_XXX` memory ID for explicit retrieval and forensic replay.
+
+## Unambiguous model turn API
+
+NavigationAgent tools now use:
+
+```json
+{"tool":"navigate_relative","args":{
+  "turn_direction":"RIGHT","turn_degrees":30,"distance_m":0.5}}
+```
+
+and for camera-only turns:
+
+```json
+{"tool":"turn_and_observe","args":{
+  "turn_direction":"LEFT","turn_degrees":45,"look":"none"}}
+```
+
+`LEFT/RIGHT` require a positive, nonnegative magnitude;
+`NONE` requires exactly zero. The executor maps directions to internal
+signed yaw. These are **breaking tool-schema changes** from
+`navigate_relative(turn_deg=...)` and
+`turn_and_observe(relative_turn_deg=...)`; do not reuse old cached runs.
+
+The new pipeline identity is
+`havln-agent-v8-consistent-mission-evidence`. Use a fresh output directory
+and compare forward actions, blocker repetition, VLM calls and objective
+scoring across at least val_seen and val_unseen.
+
+## Local checks
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+```
+
+Observe `mission_context_built` events to confirm the exact evidence
+observation IDs and source task IDs included with each NavigationAgent
+decision. Each Observation Agent request separately logs its source
+observation ID and prior conversation-turn count in API diagnostics.
+
+---
+
 # HA-VLN: continuous natural-language mission navigation (v7)
 
 This is the active inference architecture after the complete task-control refactor.
