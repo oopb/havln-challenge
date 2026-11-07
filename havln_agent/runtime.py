@@ -267,6 +267,12 @@ class AgentRuntime(ToolExecutor):
             source,blocked_pose,reason='measured_centerline_obstacle',
             center=center,
             place_id=self.memory.current.get('place_id'))
+        repeated=sum(
+            b.get('observation_id')==source['observation_id']
+            and b.get('heading_deg')==blocked_at.get('heading_deg')
+            and b.get('motion_epoch')==blocked_at.get('motion_epoch')
+            for b in self.memory.evidence.obstacle_blocks)
+        blocked_at['repeated_same_RGBD_stance_heading']=repeated
         self._last_forward_depth_probe.update(
             status='BLOCKED',center_confirmed=True,
             blocked_at=blocked_at,
@@ -301,6 +307,9 @@ class AgentRuntime(ToolExecutor):
                 body_step_m=self.camera.forward_step),
             visual=visual,
             visual_reused_for_identical_frame=reused,
+            repeated_same_RGBD_stance_heading=repeated,
+            requested_followup='inspect_specific_blocker_ROI_and_alternative_bearings'
+                if repeated>=2 else None,
             identity_is_visual_hypothesis_only=True,
             next_action_selected_by='navigation_agent')
         self.event('pre_forward_obstacle_reported',
@@ -309,9 +318,13 @@ class AgentRuntime(ToolExecutor):
             central_support_pixels=center['central_support_pixels'],
             visual_status=visual['status'],visual_reused=reused,
             atomic_move_not_executed=True,
+            repeated_same_RGBD_stance_heading=repeated,
             navigation_choice_unchanged=True)
         return dict(status='BLOCKED',reason='measured_centerline_obstacle',
             blocked_at=blocked_at,
+            repeated_same_RGBD_stance_heading=repeated,
+            blockage_interpretation=('same_frame_and_heading_no_new_sensor_evidence'
+                if repeated>=2 else 'fresh_centerline_depth_occupancy'),
             safety=safety,obstacle_observation=combined,
             information_options=['observe_for_goal','navigate_relative'])
 
