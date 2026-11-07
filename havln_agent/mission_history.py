@@ -178,6 +178,23 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             displacement_verified=False,
             reason='executed_forward_same_RGBD_before_and_after'))
         if len(stalls)>=5:break
+    observed_front_blocks=[]
+    for item in reversed(memory.evidence.predecision_front_obstacles[-6:]):
+        source=by_id.get(item.get('observation_id'))
+        observed_front_blocks.append(dict(
+            kind='OBSERVED_FRONT_DEPTH_BLOCK_NO_MOVE_ATTEMPT',
+            source_observation_id=item.get('observation_id'),
+            last_observation_id=item.get('last_observation_id'),
+            heading_deg=item.get('heading_deg'),
+            pitch_deg=item.get('pitch_deg'),
+            motion_epoch=item.get('motion_epoch'),
+            source_stance_matches_current=(
+                same_local_stance(source.get('pose'),pose) if source else False),
+            repeat_observation_count=item.get('seen_count',1),
+            blocker=copy.deepcopy(item.get('blocker')),
+            attempted_forward=False,
+            historical_depth_does_not_certify_current_block=True))
+        if len(observed_front_blocks)>=4:break
     tool_feedback=[]
     receipt_keys=set()
     for receipt in reversed(memory.tool_ledger[-12:]):
@@ -236,6 +253,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         historical_frames=selected_history_frames(memory,current_id),
         blocked_at_source_stances=blocked,
         stalled_forward_at_source_stances=stalls,
+        observed_front_blocks=observed_front_blocks,
         # Preserve the two distinct evidence modalities. Never infer a
         # measured wall from an executed MOVE with unchanged RGB-D.
         recent_forward_failures=(blocked[:3]+stalls[:3]),
