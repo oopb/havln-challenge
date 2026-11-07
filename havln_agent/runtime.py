@@ -19,7 +19,8 @@ from .forward_preflight import sense_forward
 from .evidence_ledger import physical_view_key
 from .waypoint import rank_candidates
 from .spatial import validity
-from .contracts import registry
+from .contracts import (registry, camera_look_options,
+                        CAMERA_PITCH_LIMIT_DEG)
 from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
@@ -411,9 +412,32 @@ class AgentRuntime(ToolExecutor):
         direction='TURN_LEFT' if delta>=0 else 'TURN_RIGHT'
         actions=[direction]*steps
         if look!='none':
-            tilt=self.camera.tilt_angle if look=='up' else -self.camera.tilt_angle
-            if abs(self.pitch_deg+tilt)>60:
-                return dict(status='INVALID_ARGUMENTS',reason='camera_pitch_limit')
+            # Check the WHOLE command before any TURN: an impossible LOOK
+            # must not partially rotate the robot or trigger api_error STOP.
+            requested_delta=(self.camera.tilt_angle if look=='up'
+                             else -self.camera.tilt_angle)
+            pitch_after=self.pitch_deg+requested_delta
+            if not (-CAMERA_PITCH_LIMIT_DEG-1e-6 <= pitch_after <=
+                    CAMERA_PITCH_LIMIT_DEG+1e-6):
+                allowed=camera_look_options(self.pitch_deg,
+                                           self.camera.tilt_angle)
+                return dict(
+                    status='CAMERA_PITCH_LIMIT',recoverable=True,
+                    reason='requested_look_exceeds_camera_limits',
+                    requested_look=look,
+                    requested_turn_direction=turn_direction,
+                    requested_turn_degrees=turn_degrees,
+                    current_pitch_deg=self.pitch_deg,
+                    requested_pitch_deg=pitch_after,
+                    pitch_limits_deg=[-CAMERA_PITCH_LIMIT_DEG,
+                                      CAMERA_PITCH_LIMIT_DEG],
+                    tilt_step_deg=self.camera.tilt_angle,
+                    allowed_look=allowed,
+                    executed_camera_actions=[],
+                    next_decision_owner='navigation_agent',
+                    suggestion='Choose a valid LOOK, a different horizontal '
+                               'bearing, observation, or navigation; the '
+                               'rejected command did not execute.')
             actions.append('LOOK_UP' if look=='up' else 'LOOK_DOWN')
         executed=[]
         for action in actions:

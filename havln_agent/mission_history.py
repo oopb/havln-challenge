@@ -221,6 +221,17 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             end_observation_id=result.get('end_observation_id'),
             repeated_same_RGBD_stance_heading=result.get(
                 'repeated_same_RGBD_stance_heading'),
+            camera_pitch_limit=(
+                dict(requested_look=result.get('requested_look'),
+                     current_pitch_deg=result.get('current_pitch_deg'),
+                     requested_pitch_deg=result.get('requested_pitch_deg'),
+                     pitch_limits_deg=copy.deepcopy(result.get('pitch_limits_deg')),
+                     tilt_step_deg=result.get('tilt_step_deg'),
+                     allowed_look=copy.deepcopy(result.get('allowed_look')),
+                     recoverable=result.get('recoverable'),
+                     executed_camera_actions=copy.deepcopy(
+                         result.get('executed_camera_actions',[])))
+                if status=='CAMERA_PITCH_LIMIT' else None),
             blocked_at=copy.deepcopy(result.get('blocked_at')),
             blocker=dict(source_observation_id=obstacle.get('source_observation_id'),
                 central_support_pixels=center.get('central_support_pixels'),
@@ -231,6 +242,35 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
                     if center else None))
         if len(tool_feedback)>=4:break
     tool_feedback.reverse()
+    camera_limits=[]
+    seen_pitch_rejections=set()
+    # A non-executed camera-boundary error is valid navigation feedback.
+    # Collapse repetitions so the model sees what failed and what remains
+    # physically possible instead of a list of identical error messages.
+    for receipt in reversed(memory.tool_ledger[-24:]):
+        result=receipt.get('result') or {}
+        if (result.get('interrupted_status') or
+                result.get('status'))!='CAMERA_PITCH_LIMIT':
+            continue
+        key=(result.get('current_pitch_deg'),result.get('requested_look'))
+        if key in seen_pitch_rejections:
+            continue
+        seen_pitch_rejections.add(key)
+        count=sum(
+            (v.get('result') or {}).get('status')=='CAMERA_PITCH_LIMIT'
+            and (v.get('result') or {}).get('current_pitch_deg')==key[0]
+            and (v.get('result') or {}).get('requested_look')==key[1]
+            for v in memory.tool_ledger[-24:])
+        camera_limits.append(dict(
+            current_pitch_deg=key[0],
+            rejected_look=key[1],
+            allowed_look=copy.deepcopy(result.get('allowed_look',[])),
+            last_tool_call_id=receipt.get('call_id'),
+            repeated_same_invalid_look=count,
+            recovered_without_actions=True,
+            suggested_next_step='model_selects_another_valid_action'))
+        if len(camera_limits)>=3:
+            break
     route=memory.route_progress_summary()
     return dict(
         contract='mission_evidence_v1',
@@ -258,6 +298,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         # measured wall from an executed MOVE with unchanged RGB-D.
         recent_forward_failures=(blocked[:3]+stalls[:3]),
         recent_tool_receipts=tool_feedback,
+        recent_camera_pitch_limits=camera_limits,
         successful_motion_segments=(route.get('successful_segments') or [])[-5:],
         bearing_convention=dict(
             absolute_heading_deg='0..360, increases on LEFT turn',
