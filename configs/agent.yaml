@@ -1,16 +1,4 @@
 # Model IDs and endpoints must be supplied explicitly; no paid calls at import time.
-task_planner:
-  provider: openai_compatible
-  base_url: ${TASK_PLANNER_BASE_URL}
-  api_key_env: TASK_PLANNER_API_KEY
-  model: ${TASK_PLANNER_MODEL}
-  response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
-  thinking: disabled  # Optional DeepSeek extension; omit for other providers.
-  temperature: 0
-  timeout_seconds: 120
-  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
-  max_tokens: 12000
-  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
 # IMPORTANT: NAVIGATION_AGENT_MODEL and every configured fallback MUST
 # support image_url content in OpenAI-compatible Chat Completions. The agent
 # now attaches the current real RGB to every decision. Do not configure a
@@ -43,12 +31,12 @@ runtime:
   max_steps: 500
   api_budget: 2500  # Total physical HTTP attempts, including retries, per episode.
   # Separate inference safety guards: no cap on a continuous safe MOVE sequence.
-  # Changed RGB-D, executed actions, or verified subgoals reset evidence liveness.
-  max_unchanged_evidence_decisions: 8  # One explicit route review, then 8 more chances.
+  # Changed RGB-D or physically executed actions reset evidence liveness.
+  max_unchanged_evidence_decisions: 8  # Diagnostic only; it does not impose verification or steering.
   # Optional: max_model_decisions: 300. Default is 2 * effective max_steps.
   waypoint_distance: 1.25
   safety_margin: 0.05  # 5 cm beyond the actual 10 cm radius; saved smoke-8 sweep regression.
-  tool_max_actions: 3  # Camera-only TURN/LOOK observation bounds; NAVIGATION tools have no per-call atomic-action cap.
+  tool_max_actions: 3  # Legacy config compatibility; forward motion has no per-call atomic-action cap.
   max_scene_age_seconds: 20  # Current scene semantics, independent of visual_perception.timeout_seconds.
   max_static_landmark_age_seconds: 300  # Retain static spatial clues; revalidate geometry before movement.
   max_human_age_seconds: 2  # Old human boxes never authorize current safety.
