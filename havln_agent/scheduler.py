@@ -93,12 +93,14 @@ def run(runtime,append):
             append('navigation_agent',dict(
                 event='navigation_decision',
                 decision_id=runtime.current_decision_id,decision=proposal))
+            # Commit the model's proposed narrative before executing its
+            # delegated Observation task. Observation Agent must see the most
+            # recent natural-language progress from THIS decision, too.
+            # This updates hypotheses only; it does not write sensor facts.
+            memory_update=runtime.memory.note_navigation_assessment(proposal)
             # Only the registered executable command reaches ToolExecutor.
             command=dict(tool=proposal['tool'],args=proposal['args'])
             result=runtime.execute(command,binding)
-            # Memory saves interpretation separately from immutable RGB-D
-            # and atomic-motion facts. The model may revise it next turn.
-            memory_update=runtime.memory.note_navigation_assessment(proposal)
             append('navigation_agent',dict(event='tool_feedback',
                 tool_call_id=result['tool_call_id'],
                 decision_id=runtime.current_decision_id,
