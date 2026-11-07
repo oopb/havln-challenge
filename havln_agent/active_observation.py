@@ -72,11 +72,9 @@ class ObservationController:
                     observed_yaw_pitch=[dict(heading_deg=p['heading_deg'],
                                              pitch_deg=p['pitch_deg'])
                                         for p in viewed[-12:]],
-                    route_history=m.route_progress_summary(),
-                    geometry_evidence=dict(
-                        note='RGB and calibrated Depth images attached; '
-                             'physical safety is checked during movement, '
-                             'not certified from this visual hypothesis'))
+                    # Both agents receive the same mission_evidence view
+                    # inside guide_scan_view; no duplicate stale route digest.
+                    route_history=None,geometry_evidence=None)
             except (APIError,BudgetExceeded) as error:
                 last_failure=str(error)[:220]
                 break
