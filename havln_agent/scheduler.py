@@ -1,59 +1,44 @@
-"""Event schedule: semantic reviews are explicit; exploration never has a stall quota."""
+"""Synchronous mission scheduler: one navigation decision at a time.
+
+No TaskPlanner calls, indexed milestone review or automatic VERIFY loops.
+"""
 from .api_client import APIError,BudgetExceeded
 
-
 class EvidenceLivenessGuard:
-    """Prevent unbounded paid inference with no changed robot/evidence state.
-
-    This is NOT a quota on turning, exploration, or safe forward steps.
-    Every executed atomic action, changed RGB-D observation or verified
-    subgoal transition resets the guard. A Task Planner text revision alone
-    cannot masquerade as new physical evidence.
-    """
-
-    def __init__(self, runtime):
-        self.limit = max(2,int(runtime.config.get('max_unchanged_evidence_decisions',8)))
-        self.max_decisions = max(1,int(runtime.config.get(
+    """Resource diagnostic only. It never chooses headings or forces STOP."""
+    def __init__(self,runtime):
+        self.limit=max(2,int(runtime.config.get(
+            'max_unchanged_evidence_decisions',8)))
+        self.max_decisions=max(1,int(runtime.config.get(
             'max_model_decisions',2*runtime.config['max_steps'])))
-        self.reference = self.fingerprint(runtime)
-        self.actionless_decisions = 0
-        self.review_requested = False
+        self.reference=self.fingerprint(runtime)
+        self.actionless_decisions=0
 
     @staticmethod
     def fingerprint(runtime):
-        memory=runtime.memory
-        task=memory.task
-        return (len(memory.actions),
-            (memory.current or {}).get('observation_id'),
-            task.current_subgoal_index,
-            tuple(str(item) for item in task.completed_subgoals))
+        m=runtime.memory
+        return (len(m.actions),
+                (m.current or {}).get('observation_id'))
 
-    def feedback(self, runtime):
-        current = self.fingerprint(runtime)
-        if current != self.reference:
-            self.reference = current
-            self.actionless_decisions = 0
-            self.review_requested = False
-            return None
-        self.actionless_decisions += 1
-        # Repeated unproductive calls are observable diagnostic evidence,
-        # never a semantic failure or a reason to force STOP. Resource budgets
-        # (model calls / actions / API) remain independent hard limits.
-        if self.actionless_decisions >= self.limit and not self.review_requested:
-            self.review_requested = True
-            return 'REVIEW_NO_PROGRESS'
-        return None
+    def feedback(self,runtime):
+        current=self.fingerprint(runtime)
+        if current!=self.reference:
+            self.reference=current
+            self.actionless_decisions=0
+        else:
+            self.actionless_decisions+=1
+        return self.actionless_decisions>=self.limit
 
-    def diagnostic(self, runtime):
+    def diagnostic(self,runtime):
         return dict(consecutive_unchanged_decisions=self.actionless_decisions,
             max_unchanged_evidence_decisions=self.limit,
             max_model_decisions=self.max_decisions,
             model_decisions=runtime.decisions,
-            review_requested=self.review_requested,
             observation_id=(runtime.memory.current or {}).get('observation_id'),
             atomic_actions=len(runtime.memory.actions),
-            reason='no_new_rgbd_or_atomic_action_or_verified_subgoal')
-
+            reason='no_new_RGBD_or_atomic_action',
+            decision_owner='navigation_agent',
+            no_automatic_semantic_review=True)
 
 def request(runtime,role,operation,append):
     feedback=None
@@ -65,28 +50,27 @@ def request(runtime,role,operation,append):
         except BudgetExceeded:
             raise
         except APIError as error:
-            context=getattr(error,'request_context',dict(error=str(error),category=error.category))
-            runtime.event('api_error',source=role,error=str(error),category=error.category,request_context=context)
+            context=getattr(error,'request_context',
+                dict(error=str(error),category=error.category))
+            runtime.event('api_error',source=role,error=str(error),
+                          category=error.category,request_context=context)
             append(role,dict(event='api_error',request_context=context))
-            if attempt or error.category not in ('structured_field','json_syntax','json_schema'):
+            if attempt or error.category not in (
+                'structured_field','json_syntax','json_schema'):
                 runtime.api_failure=context
                 raise
-            # A completed malformed response may be followed by ONE new decision.
-            # It gets fresh state and a fresh request deadline, without replaying
-            # the malformed action list or changing any navigation facts.
             feedback=dict(error=str(error),category=error.category,
-                detail=context.get('error_detail','Return exactly one schema-valid JSON object.')[:400])
-
+                detail=context.get('error_detail',
+                    'Return a schema-valid tool+args JSON object.')[:400])
 
 def run(runtime,append):
-    runtime.set_semantic_goal()
+    runtime.start_mission()
     liveness=EvidenceLivenessGuard(runtime)
     while not runtime.done:
-        if runtime.decisions >= liveness.max_decisions:
-            diagnostic=liveness.diagnostic(runtime)
-            runtime.navigation_liveness=diagnostic
+        if runtime.decisions>=liveness.max_decisions:
+            runtime.navigation_liveness=liveness.diagnostic(runtime)
             runtime.event('navigation_inference_budget_exhausted',
-                source='scheduler',diagnostic=diagnostic)
+                source='scheduler',diagnostic=runtime.navigation_liveness)
             runtime.terminate('navigation_inference_budget_exhausted')
             break
         if len(runtime.memory.actions)>=runtime.config['max_steps']-1:
@@ -96,39 +80,41 @@ def run(runtime,append):
             runtime.terminate('api_budget_exhausted')
             break
         try:
-            if runtime.task_review_requested:
-                value=request(runtime,'task_planner',runtime.task_planner.review,append)
-                runtime.decisions+=1
-                runtime.set_semantic_goal(value)
-                append('task_planner',dict(event='task_review',decision=value))
             binding={}
             def decide(feedback):
-                binding.update(plan_revision=runtime.plan_revision,subgoal_id=runtime.active_subgoal_id,
-                    observation_id=runtime.memory.current['observation_id'],actor='navigation_agent')
+                binding.update(
+                    observation_id=runtime.memory.current['observation_id'],
+                    actor='navigation_agent')
                 return runtime.navigation_agent.decide(feedback)
             proposal=request(runtime,'navigation_agent',decide,append)
             runtime.decisions+=1
-            runtime.event('navigation_decision',source='navigation_agent',decision=proposal)
-            append('navigation_agent',dict(event='navigation_decision',decision_id=runtime.current_decision_id,
-                subgoal_id=runtime.active_subgoal_id,decision=proposal))
-            result=runtime.execute(dict(tool=proposal['tool'],args=proposal['args']),binding)
-            for note in proposal.get('memory_delta',[]):runtime.memory.write_hypothesis(**note)
-            append('navigation_agent',dict(event='tool_feedback',tool_call_id=result['tool_call_id'],
-                decision_id=runtime.current_decision_id,subgoal_id=binding['subgoal_id'],feedback=result))
+            runtime.event('navigation_decision',
+                source='navigation_agent',decision=proposal)
+            append('navigation_agent',dict(
+                event='navigation_decision',
+                decision_id=runtime.current_decision_id,decision=proposal))
+            # Only the registered executable command reaches ToolExecutor.
+            command=dict(tool=proposal['tool'],args=proposal['args'])
+            result=runtime.execute(command,binding)
+            # Memory saves interpretation separately from immutable RGB-D
+            # and atomic-motion facts. The model may revise it next turn.
+            memory_update=runtime.memory.note_navigation_assessment(proposal)
+            append('navigation_agent',dict(event='tool_feedback',
+                tool_call_id=result['tool_call_id'],
+                decision_id=runtime.current_decision_id,
+                feedback=result,memory_update=memory_update))
             runtime.assess(result)
             if runtime.done:
                 continue
-            outcome=liveness.feedback(runtime)
+            repeated=liveness.feedback(runtime)
             runtime.navigation_liveness=liveness.diagnostic(runtime)
-            if outcome=='REVIEW_NO_PROGRESS':
-                # Advisory, not a scheduler-owned task review or forced STOP.
-                # The model sees decision_liveness and can request a review
-                # itself, change its movement intent or keep investigating.
-                runtime.event('navigation_liveness_advisory',source='scheduler',
-                    diagnostic=runtime.navigation_liveness,
+            if repeated:
+                runtime.event('navigation_liveness_advisory',
+                    source='scheduler',diagnostic=runtime.navigation_liveness,
                     last_tool=result.get('tool'),last_status=result.get('status'))
         except BudgetExceeded:
             runtime.terminate('api_budget_exhausted')
         except APIError as error:
-            runtime.api_failure=getattr(error,'request_context',dict(error=str(error),category=error.category))
+            runtime.api_failure=getattr(error,'request_context',
+                dict(error=str(error),category=error.category))
             runtime.terminate('api_error')
