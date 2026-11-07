@@ -128,6 +128,11 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertEqual(result['source_observation_id'],
                          context['current_rgb']['observation_id'])
         self.assertEqual(len(r.memory.evidence.obstacle_blocks),0)
+        self.assertEqual(len(r.memory.evidence.predecision_front_obstacles),1)
+        indexed=mission_evidence(r.memory,r.motion_controller.pose())
+        self.assertEqual(indexed['observed_front_blocks'][0]['kind'],
+            'OBSERVED_FRONT_DEPTH_BLOCK_NO_MOVE_ATTEMPT')
+        self.assertFalse(indexed['observed_front_blocks'][0]['attempted_forward'])
 
     def test_camera_recenter_is_real_and_precedes_forward_after_turn(self):
         r,actions=test_runtime()
@@ -204,6 +209,20 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertEqual(shared['stalled_forward_at_source_stances'][0][
             'kind'],'STALLED_AFTER_FORWARD')
         self.assertEqual(r.runtime_event_counts['forward_motion_stalled'],1)
+
+    def test_predecision_same_view_repeat_does_not_fake_a_move_attempt(self):
+        r,_=test_runtime()
+        r.geometry=Mock(return_value=geometry('BLOCKED'))
+        r.forward_preflight(stage='navigation_decision')
+        r.forward_preflight(stage='observation_view')
+        r.forward_preflight(stage='navigation_decision')
+        indexed=mission_evidence(r.memory,r.motion_controller.pose())
+        observed=indexed['observed_front_blocks']
+        self.assertEqual(len(observed),1)
+        self.assertEqual(observed[0]['repeat_observation_count'],3)
+        self.assertFalse(observed[0]['attempted_forward'])
+        self.assertEqual(len(r.memory.evidence.obstacle_blocks),0)
+        self.assertEqual(len(r.memory.actions),0)
 
     def test_two_observation_ids_same_RGBD_heading_are_one_failed_view(self):
         r,_=test_runtime()
