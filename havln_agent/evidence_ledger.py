@@ -48,7 +48,7 @@ class EvidenceLedger:
             focus_region_xyxy_norm=center.get('focus_region_xyxy_norm'),
             source_pixel_xy=center.get('source_pixel_xy'),
             forward_atomic_action_executed=False,
-            evidence_scope='one_live_view_and_bearing_not_global_veto')
+            evidence_scope='one_current_stance_and_bearing_not_global_route_veto')
         key=physical_view_key(item)
         repeat=1+sum(physical_view_key(v)==key
                      for v in self.obstacle_blocks)
