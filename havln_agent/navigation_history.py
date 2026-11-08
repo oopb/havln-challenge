@@ -193,7 +193,12 @@ def navigation_episode_history(memory, pose):
         contract='navigation_episode_history_v2',
         chronology='ascending_action_step_with_decisions_before_execution',
         complete_action_history=True,
-        complete_navigation_turn_history=True,
+        complete_navigation_turn_history=(
+            len(getattr(memory,'navigation_turns',[]))>=
+            len(memory.tool_ledger)),
+        missing_archived_turns_recovered_as_tool_receipts=max(
+            0,len(memory.tool_ledger)-
+            len(getattr(memory,'navigation_turns',[]))),
         complete_observation_task_history=True,
         all_rgbd_frames_indexed=True,
         historical_depth_is_never_live_clearance=True,
