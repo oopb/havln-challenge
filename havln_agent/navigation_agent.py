@@ -116,12 +116,12 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
+        # Depth preflight may REFRESH the current camera frame. Build the
+        # entire source-indexed episode/history context only AFTER it so
+        # historical catalog, current observation ID and RGB-D hashes agree.
+        preflight=r.forward_preflight(stage='navigation_decision')
         context=compact_navigation_context(navigation_context(r))
-        # This scan must precede model reasoning, not only the attempted
-        # atomic MOVE. Runtime._prepare_forward reuses the SAME calibrated
-        # Depth policy on a fresh frame after any model-selected TURN.
-        context['front_depth_preflight']=r.forward_preflight(
-            stage='navigation_decision')
+        context['front_depth_preflight']=preflight
         # A text-complete episode history is present even when historical
         # RGB-D files are archived sparsely. Real image bytes are attached
         # below only after source-hash verification.
