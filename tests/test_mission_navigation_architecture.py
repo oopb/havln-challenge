@@ -107,20 +107,23 @@ class MissionContracts(unittest.TestCase):
     def test_route_history_stays_available_across_narrative_revisions(self):
         memory=MemoryRecords(camera())
         memory.reset('episode','Descend and find the piano.')
-        for i,dy in enumerate((-.4,.2)):
+        for i in range(2):
             before='obs_%04d'%i
             after='obs_%04d'%(i+1)
             memory.actions.append(dict(step=i,action='MOVE_FORWARD',
-                pose=pose(),result=dict(
-                    observation_before=before,observation_after=after,
-                    rgbd_motion=dict(status='ESTIMATED',
-                        observed_frame_change=True,
-                        translation_m=dict(y_up=dy),
-                        uncertainty_m=.03))))
+                pose=dict(pose(),viewpoint_generation=i+1),
+                result=dict(observation_before=before,
+                            observation_after=after,
+                            visual_change=True,
+                            displacement_verified=False,
+                            rgbd_motion=dict(status='NOT_ESTIMATED',
+                                observed_frame_change=True,
+                                translation_m=None))))
         values=memory.route_progress_summary()['successful_segments']
         self.assertEqual(len(values),1)
         self.assertEqual(values[0]['forward_steps'],2)
-        self.assertAlmostEqual(values[0]['observed_height_change_m_est'],-.2)
+        self.assertIsNone(values[0]['observed_height_change_m_est'])
+        self.assertFalse(values[0]['displacement_verified'])
 
     def test_observation_returns_narrative_and_optional_local_waypoint(self):
         m=MemoryRecords(camera())

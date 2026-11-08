@@ -155,12 +155,8 @@ class ForwardPreflightV9(unittest.TestCase):
     def test_no_unnecessary_look_steps_during_continuous_forward(self):
         r,actions=test_runtime(changed_forwards=True)
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
-        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
-            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
-            uncertainty_m=.01)
-        with patch('havln_agent.tools.estimate_translation',
-                   return_value=motion):
-            result=r._navigate_relative('NONE',0,.5)
+        # v12 online forward control uses action receipts, not VO fitting.
+        result=r._navigate_relative('NONE',0,.5)
         self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
 
@@ -168,12 +164,8 @@ class ForwardPreflightV9(unittest.TestCase):
         r,actions=test_runtime(changed_forwards=True)
         g=geometry('BLOCKED',False)
         r.geometry=Mock(return_value=g)
-        motion=dict(status='ESTIMATED',vertical_motion='LEVEL',
-            translation_m=dict(x_right=0.,y_up=0.,z_forward=.25),
-            uncertainty_m=.01)
-        with patch('havln_agent.tools.estimate_translation',
-                   return_value=motion):
-            result=r._navigate_relative('NONE',0,.5)
+        # v12 online forward control uses action receipts, not VO fitting.
+        result=r._navigate_relative('NONE',0,.5)
         self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
         self.assertEqual(len(r.memory.evidence.obstacle_blocks),0)
@@ -194,11 +186,8 @@ class ForwardPreflightV9(unittest.TestCase):
     def test_stall_is_not_silently_treated_as_collision(self):
         r,actions=test_runtime()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
-        motion=dict(status='UNKNOWN',
-            reason='no_static_matches',vertical_motion='UNKNOWN')
-        with patch('havln_agent.tools.estimate_translation',
-                   return_value=motion):
-            out=r._navigate_relative('NONE',0,.5)
+        # Unchanged public RGB-D, not failed VO, causes the stall signal.
+        out=r._navigate_relative('NONE',0,.5)
         self.assertEqual(out['status'],'REQUIRES_ATTENTION')
         self.assertEqual(actions,['MOVE_FORWARD'])
         self.assertEqual(len(r.memory.evidence.motion_stalls),1)

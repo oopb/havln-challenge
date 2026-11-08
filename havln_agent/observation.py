@@ -1,4 +1,4 @@
-"""Raw-array fingerprints and checks against the executed action estimate."""
+"""Raw public-frame fingerprints and action-receipt viewpoint diagnostics."""
 import hashlib
 import math
 
@@ -51,7 +51,13 @@ class ObservationAudit:
         unchanged_turn = turning and abs(delta) > 1e-6 and same_rgb and same_depth
         expected = math.radians(self.camera.turn_angle) * (1 if previous_action == 'TURN_LEFT' else -1)
         heading_matches = not turning or math.isclose(delta, expected, abs_tol=1e-6)
-        origin = (round(pose['x'], 6), round(pose['z'], 6))
+        # Never group different executed-forward stances using invalid,
+        # static x/z placeholders. TURN/LOOK preserve the same generation.
+        if pose.get('position_coordinates_valid') is False:
+            origin=(pose.get('motion_epoch'),
+                    pose.get('viewpoint_generation'))
+        else:
+            origin=(round(pose['x'],6),round(pose['z'],6))
         direction = origin + (round(heading / math.radians(self.camera.turn_angle)) % round(360 / self.camera.turn_angle),)
         view = direction + (info['rgb_hash'], info['depth_hash'])
         repeated_view = view in self.seen_views

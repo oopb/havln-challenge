@@ -204,23 +204,31 @@ class AgentRuntime(ToolExecutor):
                                          status=result.get('status') if result else 'INTERRUPTED')
 
     def finalize_result(self, value, before, observation_before, call):
-        moves = [a['result'].get('rgbd_motion') for a in self.memory.actions[before:]
-                 if a['action'] == 'MOVE_FORWARD']
-        known = bool(moves) and all(m and m['status'] == 'ESTIMATED' for m in moves)
-        value.update(translation_m=sum(math.hypot(m['translation_m']['x_right'],
-            m['translation_m']['z_forward']) for m in moves) if known else None,
-            translation_confidence='estimated' if known else 'unknown')
-        vertical=sum(m['translation_m']['y_up'] for m in moves) if known else None
-        error=sum(m['uncertainty_m'] for m in moves) if known else None
-        value.update(vertical_translation_m_est=vertical,vertical_motion=('DOWN' if vertical < -error else
-            'UP' if vertical > error else 'LEVEL') if known else 'UNKNOWN',
-            semantic_direction_mismatch=any(a['result'].get('semantic_direction_mismatch',False)
-                for a in self.memory.actions[before:]))
+        # Do not report nominal command lengths as measured translation.
+        # Route completion is execution of a finite action plan, not arrival.
+        executed_forwards=[a['result'] for a in self.memory.actions[before:]
+                           if a['action']=='MOVE_FORWARD']
+        value.update(
+            translation_m=None,
+            translation_confidence='not_estimated',
+            vertical_translation_m_est=None,
+            vertical_motion='UNKNOWN',
+            semantic_direction_mismatch=False,
+            metric_odometry_enabled=False,
+            forward_actions_executed=len(executed_forwards),
+            forward_actions_with_RGBD_change=sum(
+                bool(a.get('visual_change')) for a in executed_forwards),
+            forward_actions_with_unchanged_RGBD=sum(
+                not bool(a.get('visual_change')) for a in executed_forwards),
+            physical_displacement_verified=False)
         if value['status'] == 'BLOCKED' and value.get('reason') in (
-                'terrain_support_unverified', 'human_localization_unverified', 'unknown_depth'):
+                'terrain_support_unverified', 'human_localization_unverified',
+                'unknown_depth'):
             value.update(self.motion_controller.needs_view(value['reason']))
         if 'information_options' in value:
-            value['information_options'] = [name for name in value['information_options'] if name in self.registry]
+            value['information_options'] = [
+                name for name in value['information_options']
+                if name in self.registry]
         return value
 
     def _step(self, action):
@@ -232,7 +240,9 @@ class AgentRuntime(ToolExecutor):
             if action == 'MOVE_FORWARD':
                 action_record = self.memory.actions[-1]
                 valid = registered_action(action_record, {o['observation_id']:o for o in self.memory.observations})
-                action_record['evidence_state'] = 'motion_verified' if valid else 'sensor_recorded'
+                action_record['evidence_state'] = (
+                    'executed_forward_with_RGBD_change_not_displacement_proof'
+                    if valid else 'executed_forward_no_confirmed_displacement')
                 self.memory.note_motion()
                 alert=(value['feedback'].get('motion_alert') or {})
                 if alert.get('reason')=='no_observed_frame_change_after_forward':
@@ -498,8 +508,9 @@ class AgentRuntime(ToolExecutor):
             direction_source='navigation_agent',
             requires_post_turn_recheck=bool(actual_turn),
             geometric_status='NOT_YET_VALIDATED',
-            endpoint_xz_m=[source['pose']['x'] - math.sin(heading)*actual_distance,
-                           source['pose']['z'] + math.cos(heading)*actual_distance])
+            endpoint_xz_m=None,
+            endpoint_estimate_valid=False,
+            route_execution_basis='commanded_yaw_plus_finite_forward_receipts')
         # No automatic collision check: geometry is used only when the model
         # explicitly requests its inspection tool.
         self.paths[path_id] = path
@@ -522,15 +533,10 @@ class AgentRuntime(ToolExecutor):
         path = self.paths.get(waypoint_id)
         if path is None:
             return dict(status='INVALID_TARGET', reason='unknown_waypoint_id')
-        # Target localization is a hint, not an independent motion veto.
-        continuing_uncertain = (self.active_waypoint_id == waypoint_id
-            and self.motion_controller.target is not None
-            and self.memory.active_attempt is not None
-            and self.memory.active_attempt.get('unknown_motion_seen', False))
-        # The old global grounding loses localization after an uncertain
-        # translation, but the already chosen STRAIGHT relative segment can
-        # be finished within its original two-step command horizon. Never use
-        # stale grounding to start a new route or certify goal completion.
+        # A model-selected route may resume after a prior forward action:
+        # its identity and finite horizon remain independent of metric pose.
+        # Reusing an entirely new waypoint still requires its source stance
+        # to match the current executed-forward generation.
         if path['type'] not in ('GOAL_WAYPOINT','EXPLORATION_WAYPOINT'):
             return dict(status='INVALID_TARGET',reason='unknown_waypoint_type')
         target = 'current' if self.active_waypoint_id == waypoint_id and self.motion_controller.target is not None else waypoint_id

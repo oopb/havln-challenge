@@ -1,8 +1,10 @@
-"""Conservative translation evidence from public, consecutive RGB-D frames.
+"""OFFLINE RGB-D translation diagnostics; not used by the navigation runtime.
 
-Only MOVE_FORWARD has fixed camera orientation. Mutual textured patch matches
-must agree in measured 3D across the image; ambiguity returns UNKNOWN. This is
-an estimate, never simulator pose or a substitute for the live Safety Shield.
+The runtime no longer calls estimate_translation. Keeping the pure estimator
+as an opt-in research diagnostic preserves independent tests and allows offline
+analysis without its uncertainty contaminating agent state or route decisions.
+registered_action() now verifies a source-linked changed-frame ACTION receipt,
+not an odometry or physical-translation claim.
 """
 
 import numpy as np
@@ -11,13 +13,25 @@ from .observation import array_hash
 
 
 def registered_action(action, observations):
-    result = action['result']
-    measurement = result.get('rgbd_motion') or {}
-    pair = measurement.get('observation_pair', {})
-    before, after = observations.get(result.get('observation_before')), observations.get(result.get('observation_after'))
-    return bool(measurement.get('status') == 'ESTIMATED' and before and after and all(
-        pair.get(prefix + '_' + kind + '_hash') == record[kind + '_hash']
-        for prefix, record in (('before', before), ('after', after)) for kind in ('rgb', 'depth')))
+    """A public observation pair supports an action receipt, NOT translation.
+
+    This function used to require successful metric RGB-D registration.
+    In the new action/stance protocol it only checks that the executed
+    forward has two authentic, hash-linked frames with an observed change.
+    It NEVER certifies physical displacement or goal arrival.
+    """
+    if action.get('action') != 'MOVE_FORWARD':
+        return False
+    result=action.get('result') or {}
+    before=observations.get(result.get('observation_before'))
+    after=observations.get(result.get('observation_after'))
+    pair=(result.get('rgbd_motion') or {}).get('observation_pair') or {}
+    return bool(
+        before and after and result.get('visual_change') is True
+        and all(pair.get(prefix+'_'+kind+'_hash') ==
+                record.get(kind+'_hash')
+                for prefix,record in (('before',before),('after',after))
+                for kind in ('rgb','depth')))
 
 
 def _features(observation, camera, excluded=None):

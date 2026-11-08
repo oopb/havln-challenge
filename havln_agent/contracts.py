@@ -57,6 +57,9 @@ def registry(camera, max_actions, pitch_deg=0.):
             'NONE requires 0 degrees; LEFT/RIGHT require >0. Robot heading increases '
             'when turning LEFT, decreases when turning RIGHT. E.g. turn right 30 '
             '=> RIGHT,30; turn left 60 => LEFT,60. No signed angles. '
+            'distance_m is a NOMINAL command length quantized into a finite '
+            'number of forward action receipts, NOT measured robot displacement. '
+            'No metric robot position is available. '
             'Then execute forward steps until the command finishes or actual '
             'safety/sensor interruption; no milestone authorization.',
             motion),

@@ -39,7 +39,12 @@ def sense_forward(geometry, source):
         pitch_deg=pose.get('pitch_deg'),
         motion_epoch=pose.get('motion_epoch'),
         viewpoint_generation=pose.get('viewpoint_generation'),
-        local_position_xz_m_est=[pose.get('x'),pose.get('z')],
+        local_position_xz_m_est=(
+            [pose.get('x'),pose.get('z')]
+            if pose.get('position_coordinates_valid') is not False
+            else None),
+        stance_id=pose.get('stance_id'),
+        metric_pose_available=pose.get('position_coordinates_valid',True),
         raw_probe_state=probe['state'],
         raw_probe_reason=probe.get('reason'),
         center_confirmed=confirmed,

@@ -56,7 +56,8 @@ class ObservationController:
             heading=math.degrees(here['heading'])%360
             key=(source['rgb_hash'],source['depth_hash'],
                  round(heading,1),round(r.pitch_deg,1),
-                 here.get('motion_epoch',0))
+                 here.get('motion_epoch',0),
+                 here.get('viewpoint_generation',0))
             if key in seen:
                 last_failure='previously_inspected_identical_RGBD_view'
                 break

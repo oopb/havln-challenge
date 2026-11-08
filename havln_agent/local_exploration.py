@@ -1,6 +1,6 @@
 """Local observation coverage; history is for exploration, never motion authorization.
 
-The key is an estimated physical stance (x/y/z, motion epoch) plus
+The key is an executed-forward stance generation plus
 ABSOLUTE camera heading and pitch. A relative +/-30-degree request cannot
 pretend to discover a new direction after the robot turns back.
 """
@@ -16,13 +16,27 @@ def angular_separation(a, b):
 
 
 def same_stance(a, b, horizontal_tolerance=.12, height_tolerance=.12):
-    """A changed post-forward view is a new stance even without metric odometry."""
-    return (bool(a) and bool(b)
-            and a.get('motion_epoch', 0) == b.get('motion_epoch', 0)
-            and a.get('viewpoint_generation',0) == b.get('viewpoint_generation',0)
-            and math.hypot(a.get('x', 1e5)-b.get('x', -1e5),
-                           a.get('z', 1e5)-b.get('z', -1e5)) <= horizontal_tolerance
-            and abs(a.get('y', 1e5)-b.get('y', -1e5)) <= height_tolerance)
+    """Same executed-forward stance; never compare invalid VO coordinates.
+
+    A frame after MOVE_FORWARD is conservatively a *new* stance even if the
+    image happens to match. TURN/LOOK preserve generation, so previously
+    inspected headings remain reusable for an entire stationary scan.
+    """
+    if not isinstance(a,dict) or not isinstance(b,dict):
+        return False
+    if (a.get('motion_epoch') != b.get('motion_epoch')
+            or a.get('viewpoint_generation') != b.get('viewpoint_generation')):
+        return False
+    if (a.get('position_coordinates_valid') is False or
+            b.get('position_coordinates_valid') is False):
+        return all(k in a and k in b for k in
+                   ('motion_epoch','viewpoint_generation'))
+    try:
+        return (math.hypot(a['x']-b['x'],a['z']-b['z'])
+                <= horizontal_tolerance
+                and abs(a.get('y',0)-b.get('y',0))<=height_tolerance)
+    except (KeyError,TypeError,ValueError):
+        return False
 
 
 def bearing_from_pose(pose):
@@ -134,7 +148,7 @@ def local_coverage(memory, pose, turn_degrees=15, max_headings=24):
             turn_deg=round(delta, 2),
             pitch_deg=pitch, purpose='acquire_unseen_camera_heading',
             route_authorized=False))
-    return dict(reference='estimated_same_stance_and_motion_epoch',
+    return dict(reference='same_forward_receipt_stance_and_commanded_angles',
         current_absolute_heading_deg=round(heading, 2), pitch_deg=pitch,
         checked_absolute_headings_deg=sorted(
             wrap_heading(k*turn_degrees) for k in visited),
@@ -197,7 +211,7 @@ def panorama_coverage(memory, pose, turn_degrees=15, hfov_degrees=90):
             historical_front_reason=front.get('reason'),
             historical_front_clearance_m=front.get('clearance')))
     return dict(
-        reference='same_stance_same_motion_epoch_RGBD_observations',
+        reference='same_forward_receipt_stance_public_RGBD_observations',
         visual_sector_width_used_deg=round(visual_width, 2),
         yaw_bin_width_deg=round(bin_width, 2),
         covered_yaw_bins=len(covered),
@@ -218,7 +232,7 @@ def multi_pitch_coverage(memory, pose, turn_degrees=15, pitch_degrees=30):
     """Compact camera coverage from AUTHENTIC public observations at this stance.
 
     Stored observations are the source of truth: no second mutable heading map.
-    Spatial identity uses the measured x/y/z and motion_epoch, not a static
+    Spatial identity uses the executed-forward generation, not an invalid x/y/z or static
     room label. Every yaw/pitch is absolute in the current odometry frame.
     Historical visibility NEVER grants fresh collision or human clearance.
     """
@@ -266,7 +280,7 @@ def multi_pitch_coverage(memory, pose, turn_degrees=15, pitch_degrees=30):
     seen_current = {c['heading_deg']
                     for c in by_pitch.get(current_pitch, [])}
     return dict(
-        reference='estimated_same_stance_and_motion_epoch',
+        reference='same_forward_receipt_stance_and_commanded_angles',
         absolute_yaw_convention='degrees_0_to_360',
         pose_epoch=pose.get('motion_epoch', 0),
         current_absolute_heading_deg=bearing_from_pose(pose),

@@ -130,16 +130,23 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             turn_steps=actions.count('TURN_LEFT')+actions.count('TURN_RIGHT'),
             look_steps=actions.count('LOOK_UP')+actions.count('LOOK_DOWN'),
             first_forward_step=next((i for i,a in enumerate(actions) if a=='MOVE_FORWARD'),None),
-            net_displacement_m_est=((pose['x']**2+pose['z']**2)**.5
-                if pose.get('position_coordinates_valid',True) else None),
-            registered_pose_chain_continuous=pose.get('global_chain_continuous',True),
+            net_displacement_m_est=None,
+            metric_odometry_enabled=False,
+            metric_displacement_verified=False,
+            stance_identity_source='executed_forward_action_receipts',
+            final_stance_generation=pose.get('viewpoint_generation'),
+            registered_pose_chain_continuous=False,
             unknown_forward_actions=pose.get('unknown_forward_actions',0),
+            forward_actions_with_frame_change=pose.get(
+                'forward_actions_with_frame_change',0),
+            forward_actions_with_unchanged_frames=pose.get(
+                'forward_stall_actions',0),
             commanded_action_plans_completed=sum(
                 r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
                 and r['result']['status']=='ACTIONS_COMPLETED'
                 for r in runtime.memory.tool_ledger),
-            translation_m_est=sum(r['result'].get('translation_m') or 0 for r in runtime.memory.tool_ledger),
-            translation_source='rgbd_estimate_only_not_physical_ground_truth',
+            translation_m_est=None,
+            translation_source='not_computed_action_receipt_stance_navigation',
             waypoint_completed=sum(r['call']['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel') and r['result']['status']=='TARGET_REACHED'
                 for r in runtime.memory.tool_ledger),
             waypoint_candidate_queries=sum(r['call']['tool']=='get_waypoint_candidates'

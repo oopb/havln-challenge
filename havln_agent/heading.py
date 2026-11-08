@@ -49,17 +49,28 @@ def box_center_bearing(box, horizontal_fov_deg):
 
 
 def same_local_stance(source_pose, current_pose, tolerance_m=.08):
-    """Only spatially comparable historical headings may suggest a live turn."""
+    """Conservative stance identity, independent of metric VO when disabled.
+
+    When poses explicitly lack metric coordinates, an identical *executed
+    forward action generation* is the only same-stance evidence. A successful
+    TURN or LOOK does not advance that generation. Any executed forward
+    advances it, even if the RGB-D does not change; this errs toward not
+    reusing stale historical views. Legacy metric fixtures with valid
+    coordinates retain their old numeric distance comparison.
+    """
     if not isinstance(source_pose,dict) or not isinstance(current_pose,dict):
         return False
     for name in ('motion_epoch','viewpoint_generation'):
         if source_pose.get(name)!=current_pose.get(name):
             return False
-    if source_pose.get('position_coordinates_valid') is False or current_pose.get(
-            'position_coordinates_valid') is False:
-        return False
+    invalid=(source_pose.get('position_coordinates_valid') is False or
+             current_pose.get('position_coordinates_valid') is False)
+    if invalid:
+        # Never interpret two missing generations as the same location.
+        return all(name in source_pose and name in current_pose
+                   for name in ('motion_epoch','viewpoint_generation'))
     try:
         return math.hypot(source_pose['x']-current_pose['x'],
                           source_pose['z']-current_pose['z'])<=tolerance_m
-    except (KeyError,TypeError):
+    except (KeyError,TypeError,ValueError):
         return False
