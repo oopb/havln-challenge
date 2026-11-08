@@ -149,6 +149,13 @@ def navigation_episode_history(memory, pose):
                 and t.get('step_started',-1)<=step<=t.get('step_finished',-1)]
             if matches:
                 return matches[0]
+            # Legacy/imported traces may contain an observation session
+            # whose parent tool was not labeled observe_for_goal. Keep
+            # its original step in the correct causal action span rather
+            # than appending an early session after the whole episode.
+            return next((i for i,t in enumerate(turns)
+                if t.get('step_started',-1)<=step<=t.get('step_finished',-1)),
+                len(turns))
         if kind=='ATOMIC_ACTION':
             return next((i for i,t in enumerate(turns)
                 if t.get('step_started',-1)<=step<t.get('step_finished',-1)),
