@@ -339,10 +339,11 @@ class MemoryRecords:
         self.event('action_executed', action=action, result=feedback)
 
     def route_progress_summary(self):
-        """Reconstruct successful segments AND blocked endpoints from receipts.
+        """Reconstruct changed-RGBD action segments and historical blocks.
 
-        This is not a map, route permission, or inferred global odometry.
-        Failed probes never erase earlier registered movement.
+        Never label a changed image as verified displacement or a traversed
+        route. Consecutive executed-forward receipts are factual even when
+        there is no metric robot pose.
         """
         segments=[]
         # Successful image change after an executed MOVE is useful history,
@@ -423,7 +424,7 @@ class MemoryRecords:
             blocked_at_prior_stances=blocked[-6:],
             latest_exact_blocked_at=copy.deepcopy(
                 self.evidence.obstacle_blocks[-4:]),
-            interpretation='past_success_is_progress_evidence_not_live_motion_clearance')
+            interpretation='past_forward_actions_with_RGBD_change_not_verified_translation_or_live_clearance')
 
     def stats(self):
         outcomes = {}
