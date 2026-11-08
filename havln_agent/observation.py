@@ -1,4 +1,4 @@
-"""Raw-array fingerprints and checks against the executed action estimate."""
+"""Raw public-frame fingerprints and action-receipt viewpoint diagnostics."""
 import hashlib
 import math
 
