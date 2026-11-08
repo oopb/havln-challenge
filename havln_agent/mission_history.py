@@ -318,12 +318,31 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         if len(camera_limits)>=3:
             break
     route=memory.route_progress_summary()
+    anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})
+    anchored_source=by_id.get(anchor.get('source_observation_id'))
+    source_pose=(anchored_source or {}).get('pose') or {}
+    # SAME stance is not sufficient for camera-relative left/right:
+    # a successful TURN changes the relative bearing without moving.
+    source_yaw=anchor.get('source_heading_deg')
+    current_yaw=math.degrees(pose.get('heading',0))%360
+    intent_current=bool(
+        anchored_source and same_local_stance(source_pose,pose)
+        and isinstance(source_yaw,(int,float))
+        and abs(relative_bearing(source_yaw,current_y))<1.0)
+    prior_intent=dict(
+        text=task.navigation_intent,
+        source=anchor or None,
+        relative_direction_valid_for_current_camera=intent_current,
+        historical_only=bool(anchor and not intent_current),
+        recheck_against_current_RGBD_before_reusing_direction=True)
     return dict(
         contract='mission_evidence_v1',
         instruction=task.instruction,
         progress=dict(
             narrative=task.progress_narrative,
-            navigation_intent=task.navigation_intent,
+            navigation_intent=(task.navigation_intent
+                if not anchor or intent_current else None),
+            prior_navigation_intent=prior_intent,
             uncertainties=list(task.uncertainties[-6:]),
             model_revision_count=len(task.progress_history),
             source_observation_ids=list(task.evidence_observation_ids[-12:]),
