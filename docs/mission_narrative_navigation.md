@@ -1,3 +1,114 @@
+# v12 — action-receipt stance identity (no metric VO in navigation)
+
+**Problem addressed:** In `eval-batch4-26`, 14/33 executed forward
+actions lacked reliable RGB-D registration. The first failed registration
+marked `position_coordinates_valid=false` for the remainder of the
+episode. v11's same-stance view coverage then stayed empty for most
+NavigationAgent requests, encouraging redundant observation and turns.
+The navigation pipeline had kept integrating the 19 estimated moves,
+even though the coordinate chain was no longer valid.
+
+## New single source of truth
+
+Every public `pose()` includes:
+
+- `heading`: yaw updated only by executed TURN_LEFT/RIGHT receipts
+- `pitch_deg`: camera tilt updated by executed LOOK_UP/DOWN receipts
+- `motion_epoch`: episode-level local reference compatibility
+- `viewpoint_generation` / `stance_id`: **increments on every actually
+  executed MOVE_FORWARD**, regardless of whether RGB-D changed
+- `forward_actions_attempted`, `forward_actions_with_frame_change`,
+  `forward_stall_actions`: actual action/image observations
+- `x=null, y=null, z=null, position_uncertainty=null,
+  position_coordinates_valid=false, metric_position_valid=false`
+
+No default 0.25m motion or static x/z placeholder may be interpreted as
+the robot position. The original `estimate_translation` is retained
+**only as an offline research diagnostic** in `havln_agent/motion.py`;
+the online executor never calls it. All online `rgbd_motion` receipts
+have `status=NOT_ESTIMATED`, `observed_frame_change`, source-linked
+RGB/Depth hashes, and `translation_m=null`. There is no binary VO
+success/failure gate in the model's execution loop.
+
+## Physical action correctness (unchanged)
+
+A navigation tool still uses model-selected turn direction and finite
+nominal distance; distance is quantized into simulator action counts.
+`LocalMotionController.route_action` uses the command yaw and remaining
+forward receipts, not metric endpoint distances. A resumed ACTIVE command
+is not canceled by a new generation. Any newly proposed saved waypoint
+is rejected if its original generation differs from the current one.
+`target` is the active waypoint **ID**. `original_target`,
+`pending_target`, `endpoint_xz_m`, measured displacement and
+vertical-motion estimates are null. `ACTIONS_COMPLETED` means the
+intended commands executed, not that the metric target was reached.
+
+Every MOVE still uses fresh current Depth preflight, real camera
+recentering when needed, and calibrated legal Habitat actions. `BLOCKED`
+preflight produces zero MOVE and zero stance-generation changes.
+Byte-identical after-forward RGB-D triggers the existing
+`REQUIRES_ATTENTION` feedback, not a fabricated collision. Even for
+such a receipt, the stance generation advances conservatively because
+we cannot prove the robot did not physically move.
+
+## Entire memory and observation contract
+
+Both `heading.same_local_stance` and
+`local_exploration.same_stance` compare actual
+`motion_epoch+viewpoint_generation` when coordinates are invalid.
+TURN/LOOK remain the same stance; any executed MOVE isolates prior
+view coverage. Old history is still available as historical semantic
+evidence, but NOT as a current camera view or live path clearance.
+
+- Place memory groups real observations by stance generation, not
+  estimated x/y/z; `position` and `height_y_m_est` are null.
+- ObservationAudit and EvidenceLedger dedup by generation plus real
+  RGB/Depth hashes / heading, never by a zero-filled origin.
+- Source-linked route progress is a record of executed forwards whose
+  images changed, NOT a measured translation or successful descent.
+- Legacy `TRAVERSED/motion_verified` states are not emitted from an
+  unverified action. Route graph edges are marked
+  `ACTION_SEQUENCE_EXECUTED` with explicit unverified displacement.
+- A same-stance grounded point may still produce a new candidate
+  **bearing** by rotating source-local RGB-D geometry using commanded yaw.
+  An executed MOVE invalidates that bearing's source location, requiring
+  fresh visual grounding.
+- NavigationAgent and ObservationAgent prompts explicitly distinguish
+  nominal forward commands, image change and measured displacement.
+
+## Provenance, summaries and compatibility
+
+`summary.json` reports `net_displacement_m_est=null`,
+`translation_m_est=null`, `metric_odometry_enabled=false`,
+`final_stance_generation`, and actual forward frame-change/stall counts.
+`motion_registration_states` becomes `NOT_ESTIMATED` by design.
+The complete tool/Memory/observation histories remain source-linked,
+including Depth blocker ROI and recoverable camera pitch limits.
+`PROMPT_VERSION` changes to
+`havln-agent-v12-action-stance-no-metric-odometry` so old run outputs
+cannot be incorrectly combined. This is a protocol refactor, NOT a
+guarantee of improved route-finding or official navigation success.
+
+## Checks
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v12_action_stance.py' -v
+python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
+python -m unittest discover -s tests -p 'test_v11_observation_review.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_recoverable_camera_pitch.py' -v
+python -m unittest discover -s tests -p 'test_navigation_blocked_history_contract.py' -v
+```
+
+Start a NEW `eval-batch4-27` output directory. Do not overwrite v11
+diagnostic artifacts. Compare at the same 128-step budget, model IDs,
+initial episode and Depth policy. Key checks: now nonempty same-stance
+history after many forward actions, fewer redundant observation turns,
+unchanged robust Depth blocking, and unchanged action count semantics.
+
+---
+
 # v11 — observation reliability and model input/output review
 
 **Baseline preserved:** The 88-step `eval-batch4-25` episode was completed with
