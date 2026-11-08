@@ -25,52 +25,68 @@ class MemoryService(MemoryRecords):
         self.place_visit_step=0
 
     def note_observation(self, record):
+        """One evidence place per executed-forward stance (not an x/z guess).
+
+        TURN/LOOK preserve viewpoint_generation. Every actually executed
+        MOVE_FORWARD changes generation even when the post-frame is identical:
+        we never imply a collision or reuse an older stance incorrectly.
+        """
         pose=record['pose']
+        epoch=pose.get('motion_epoch',0)
+        generation=pose.get('viewpoint_generation',0)
         previous=self.current_place_id
         place=self.places.get(previous)
-        def separation(place):
-            return math.sqrt((pose['x']-place['position'][0])**2+(pose['z']-place['position'][1])**2
-                +(pose.get('y',0)-place['height_y_m_est'])**2)
-        # A failed RGB-D translation starts a new local reference epoch.
-        # Do not silently retain a place node from the previous odometry chain
-        # just because stale x/z estimates happen to be numerically nearby.
-        if (place is None or place.get('motion_epoch') != pose.get('motion_epoch',0)
-                or place.get('viewpoint_generation',0) != pose.get('viewpoint_generation',0)
-                or separation(place) >= .5):
-            near=[p for p in self.places.values() if p['motion_epoch']==pose.get('motion_epoch',0)
-                and p.get('viewpoint_generation',0)==pose.get('viewpoint_generation',0)
-                and separation(p) < .5]
-            self.current_place_id=near[0]['id'] if near else 'P%d' % len(self.places)
-            if self.current_place_id not in self.places:
-                self.places[self.current_place_id]=dict(id=self.current_place_id,
-                    position=[pose['x'],pose['z']],height_y_m_est=pose.get('y',0), confidence='rgbd_estimate_not_global_localization',
-                    position_uncertainty_m=(pose['position_uncertainty']
-                        if pose.get('position_coordinates_valid',True) else None),
-                    motion_epoch=pose.get('motion_epoch',0),
-                    viewpoint_generation=pose.get('viewpoint_generation',0),
-                    observation_ids=[], headings_deg=[])
-            place=self.places[self.current_place_id]
-            if (previous is not None and previous != self.current_place_id
-                    and self.places[previous]['motion_epoch'] == place['motion_epoch']):
-                moves=[a for a in self.actions[self.place_visit_step:] if a['action']=='MOVE_FORWARD']
-                key=previous+'->'+self.current_place_id
-                self.routes[key]=dict(id=key,from_place=previous,to_place=self.current_place_id,
-                    state='CANDIDATE',traversability='UNKNOWN',evidence_state='sensor_recorded',
-                    motion_steps=[a['step'] for a in moves], source_observation_ids=[record['observation_id']],
-                    confidence='rgbd_estimate_not_ground_truth')
-                self.place_visit_step=len(self.actions)
+        if (place is None or place.get('motion_epoch')!=epoch
+                or place.get('viewpoint_generation')!=generation):
+            place=next((p for p in self.places.values()
+                if p.get('motion_epoch')==epoch
+                and p.get('viewpoint_generation')==generation),None)
+            if place is None:
+                identifier='P%d' % len(self.places)
+                place=dict(
+                    id=identifier,
+                    position=None,height_y_m_est=None,
+                    confidence='action_receipt_stance_not_metric_localization',
+                    position_uncertainty_m=None,
+                    motion_epoch=epoch,
+                    viewpoint_generation=generation,
+                    stance_id='%d:%d' % (epoch,generation),
+                    observation_ids=[],headings_deg=[])
+                self.places[identifier]=place
+            self.current_place_id=place['id']
+            if (previous is not None
+                    and previous!=self.current_place_id
+                    and self.places[previous]['motion_epoch']==epoch):
+                moves=[a for a in self.actions[self.place_visit_step:]
+                       if a['action']=='MOVE_FORWARD']
+                if moves:
+                    key=previous+'->'+self.current_place_id
+                    self.routes[key]=dict(
+                        id=key,from_place=previous,
+                        to_place=self.current_place_id,
+                        state='ACTION_SEQUENCE_EXECUTED',
+                        traversability='UNKNOWN',
+                        evidence_state='forward_action_receipt_not_verified_displacement',
+                        motion_steps=[a['step'] for a in moves],
+                        source_observation_ids=[record['observation_id']],
+                        confidence='action_stance_transition_not_metric_path')
+            self.place_visit_step=len(self.actions)
         identifier=record['observation_id']
-        record.update(place_id=self.current_place_id,pitch_deg=self.runtime.pitch_deg,evidence_state='sensor_recorded')
+        record.update(place_id=self.current_place_id,
+                      pitch_deg=self.runtime.pitch_deg,
+                      evidence_state='sensor_recorded')
         if identifier not in place['observation_ids']:
             place['observation_ids'].append(identifier)
         heading=round(math.degrees(pose['heading']),4)
         if heading not in place['headings_deg']:
             place['headings_deg'].append(heading)
-        self.keyframes[identifier]=dict(fields(record,('observation_id','input_file','rgb_hash','depth_hash',
-            'captured_at','representative_keyframe','evidence_state','place_id','pitch_deg')),
-            heading_deg=heading,findings=[])
+        self.keyframes[identifier]=dict(fields(record,(
+            'observation_id','input_file','rgb_hash','depth_hash',
+            'captured_at','representative_keyframe','evidence_state',
+            'place_id','pitch_deg')),heading_deg=heading,findings=[])
         for route in self.routes.values():
-            if route['state']=='EXECUTABLE' and route['source_observation_ids'] != [identifier]:
+            if (route['state']=='EXECUTABLE' and
+                    route['source_observation_ids']!=[identifier]):
                 route.update(state='CANDIDATE',traversability='UNKNOWN')
 
     def note_semantics(self, source, findings):
@@ -246,12 +262,20 @@ class MemoryService(MemoryRecords):
                 validated_at=self.runtime.observation.captured_at)
 
     def note_motion(self):
+        # A changed frame after MOVE_FORWARD is NOT verified translation.
+        # Preserve actual action history without labeling any route as
+        # physically traversed or certifying an endpoint.
         observations={o['observation_id']:o for o in self.observations}
         for route in self.routes.values():
             steps=route.get('motion_steps',[])
-            if route['state']=='CANDIDATE' and route.get('to_place') and steps and all(
-                    registered_action(self.actions[i],observations) for i in steps):
-                route.update(state='TRAVERSED',evidence_state='motion_verified')
+            if (route['state']=='CANDIDATE' and route.get('to_place')
+                    and steps and all(
+                        registered_action(self.actions[i],observations)
+                        for i in steps)):
+                route.update(
+                    state='ACTION_SEQUENCE_EXECUTED',
+                    evidence_state='executed_forward_with_RGBD_change_not_arrival',
+                    traversability='UNKNOWN')
 
     def navigation_summary(self):
         """All-episode evidence, not measurements filtered to a subgoal."""
@@ -261,16 +285,19 @@ class MemoryService(MemoryRecords):
                 continue
             feedback=action.get('result') or {}
             m=feedback.get('rgbd_motion') or {}
-            registered=m.get('status')=='ESTIMATED'
-            d=m.get('translation_m') or {}
-            motions.append(dict(step=action.get('step'),
+            motions.append(dict(
+                step=action.get('step'),
                 observation_id=feedback.get('observation_after'),
                 heading_deg=round(math.degrees(
                     action.get('pose',{}).get('heading',0))%360,1),
-                vertical_motion=m.get('vertical_motion','UNKNOWN') if registered else 'UNKNOWN',
-                vertical_change_m_est=round(d.get('y_up',0),3) if registered else None,
-                uncertainty_m=round(m.get('uncertainty_m',0),3) if registered else None,
-                observed_frame_change=m.get('observed_frame_change')))
+                vertical_motion='UNKNOWN',
+                vertical_change_m_est=None,
+                uncertainty_m=None,
+                observed_frame_change=feedback.get('visual_change'),
+                metric_translation_computed=False,
+                stance_generation=action.get('pose',{}).get(
+                    'viewpoint_generation'),
+                displacement_verified=False))
         failures=[]
         for item in reversed(self.tool_ledger):
             call=item.get('call') or {}
@@ -305,8 +332,12 @@ class MemoryService(MemoryRecords):
         return values
 
     def traversed_routes(self):
-        return [fields(r,('id','from_place','to_place','state','evidence_state','source_observation_ids'))
-                for r in self._routes() if r['state']=='TRAVERSED']
+        # Compatibility query: list action-executed links, never verified
+        # physically traversed routes.
+        return [fields(r,('id','from_place','to_place','state',
+                         'evidence_state','source_observation_ids'))
+                for r in self._routes()
+                if r['state']=='ACTION_SEQUENCE_EXECUTED']
 
     def recall_observation(self, place_id, heading_deg=None, landmark=None, top_k=3):
         self.queries+=1
