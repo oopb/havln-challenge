@@ -140,6 +140,27 @@ class CompleteHistoryTests(unittest.TestCase):
             ('NAVIGATION_DECISION','navigation_2'),
             ('NAVIGATION_TOOL_RESULT','navigation_2')])
 
+    def test_current_yaw_provenance_when_navigation_intent_is_anchored(self):
+        # Regression for worker startup crash: mission_evidence used to
+        # reference undefined 'current_y' whenever an anchored intent was
+        # evaluated at a valid source stance.
+        m=MemoryRecords(camera())
+        m.reset('ep','Find the passage on the left')
+        m.observations=[observation('obs_0000',0,90,0)]
+        m.current=m.observations[0]
+        m.note_navigation_assessment(dict(
+            navigation_intent='Inspect the opening on the left.'))
+        same=mission_evidence(m,pose(90,0))['progress']
+        self.assertEqual(same['navigation_intent'],
+                         'Inspect the opening on the left.')
+        self.assertTrue(same['prior_navigation_intent'][
+            'relative_direction_valid_for_current_camera'])
+        turned=mission_evidence(m,pose(105,0))['progress']
+        self.assertIsNone(turned['navigation_intent'])
+        self.assertTrue(turned['prior_navigation_intent']['historical_only'])
+        forward=mission_evidence(m,pose(90,1))['progress']
+        self.assertIsNone(forward['navigation_intent'])
+
     def test_old_relative_intent_is_not_current_after_turn_or_forward(self):
         m=MemoryRecords(camera())
         m.reset('episode','Follow the arch')

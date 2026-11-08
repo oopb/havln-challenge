@@ -328,7 +328,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
     intent_current=bool(
         anchored_source and same_local_stance(source_pose,pose)
         and isinstance(source_yaw,(int,float))
-        and abs(relative_bearing(source_yaw,current_y))<1.0)
+        and abs(relative_bearing(source_yaw,current_yaw))<1.0)
     prior_intent=dict(
         text=task.navigation_intent,
         source=anchor or None,
