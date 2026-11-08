@@ -128,12 +128,18 @@ class NavigationAgent:
         if format_feedback:
             context['format_feedback']=format_feedback
         evidence=context['memory']
+        full_history=context['episode_history']
         r.event('mission_context_built',source='memory_projection',
             memory_contract=evidence['contract'],
-            observation_task_ids=[v.get('observation_task_id')
-                                  for v in evidence['observation_tasks']],
-            historical_frame_ids=[v['observation_id']
-                                  for v in evidence['historical_frames']],
+            episode_history_contract=full_history['contract'],
+            episode_history_counts=full_history['counts'],
+            observation_task_ids=[
+                v.get('observation_task_id')
+                for v in full_history['timeline']
+                if v.get('kind')=='OBSERVATION_TASK'],
+            historical_frame_ids=[
+                v['observation_id']
+                for v in full_history['rgbd_observation_catalog'][-4:]],
             # Shared mission_evidence projections expose source-anchored
             # obstacle facts as source_observation_id (not observation_id).
             # Keep this diagnostic keyed to the public history contract:
