@@ -36,7 +36,11 @@ class EvidenceLedger:
             depth_hash=source.get('depth_hash'),
             heading_deg=round(math.degrees(pose['heading'])%360,2),
             pitch_deg=pose.get('pitch_deg'),
-            local_position_xz_m_est=[pose.get('x'),pose.get('z')],
+            local_position_xz_m_est=(
+                [pose.get('x'),pose.get('z')]
+                if pose.get('position_coordinates_valid') is not False
+                else None),
+            stance_identity_source=pose.get('stance_identity_source'),
             motion_epoch=pose.get('motion_epoch'),
             viewpoint_generation=pose.get('viewpoint_generation'))
 
