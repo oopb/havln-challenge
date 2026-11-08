@@ -16,7 +16,6 @@ from .perception import Geometry, Observation
 from .progress import current_visual_evidence
 from .safety import forward_probe
 from .waypoint import generate_waypoints, goal_relation
-from .motion import estimate_translation
 from .spatial import goal_estimate, angle_delta
 
 
@@ -231,7 +230,7 @@ class ToolExecutor:
                 interpretation=(
                     'only_turns_executed_forward_not_attempted'
                     if turns and not forwards else
-                    'forward_was_attempted_registration_may_still_be_unknown'
+                    'forward_command_executed_displacement_unverified'
                     if forwards else 'no_atomic_motion_executed'),
                 model_decides_to_resume_replan_or_observe=True)
         result=self.finalize_result(result,before,observation_before,call)
@@ -283,15 +282,23 @@ class ToolExecutor:
         pose = self.motion_controller.pose()
         checked_at = time.monotonic()
         after, done = self.step_callback(action)
-        # RGB-D registration is odometry feedback, not collision permission.
-        motion = estimate_translation(before, after, self.camera) \
-            if action == 'MOVE_FORWARD' else None
+        # Model-directed navigation uses authentic action receipts and exact
+        # RGB-D hashes ONLY. No per-forward feature extraction, metric VO,
+        # position integration, or odometry-dependent route cancellation.
         changed_depth = array_hash(after.depth) != array_hash(before.depth)
         changed_rgb = array_hash(after.rgb) != array_hash(before.rgb)
-        if motion is not None:
-            # Viewpoint separation is observable even when metric registration
-            # fails. Never treat the commanded 0.25m as measured translation.
-            motion = dict(motion, observed_frame_change=changed_depth or changed_rgb)
+        motion = (dict(
+            status='NOT_ESTIMATED',reason='metric_odometry_disabled',
+            source='executed_atomic_action_and_public_RGBD_hashes',
+            observed_frame_change=bool(changed_depth or changed_rgb),
+            translation_m=None,uncertainty_m=None,
+            vertical_motion='UNKNOWN',position_verified=False,
+            observation_pair=dict(
+                before_rgb_hash=array_hash(before.rgb),
+                after_rgb_hash=array_hash(after.rgb),
+                before_depth_hash=array_hash(before.depth),
+                after_depth_hash=array_hash(after.depth)))
+            if action=='MOVE_FORWARD' else None)
         self.motion_controller.accept_feedback(action,motion)
         feedback = dict(
             forward_depth_preflight=live_preflight,
@@ -329,19 +336,17 @@ class ToolExecutor:
                     observation_before=feedback['observation_before'],
                     observation_after=feedback['observation_after'],
                     source='registered_rgbd_estimate_only')
-            # Some Habitat MOVE_FORWARD receipts produce byte-identical RGB-D
-            # before/after (e.g. 13 actions in the provided eval-batch4 trace).
-            # Treat this as an explicit *no observed motion* stall rather than
-            # an ordinary odometry gap. Never infer a collision or ground-truth
-            # translation from this alone; but halt this local route so the
-            # model can pick a different short motion/observation strategy.
-            if motion['status'] != 'ESTIMATED':
-                self.memory.event('odometry_diagnostic_unknown',
-                    action_step=len(self.memory.actions)-1,
-                    reason=motion.get('reason'),
-                    observation_before=feedback['observation_before'],
-                    observation_after=feedback['observation_after'],
-                    does_not_reset_route=True)
+            # Metric translation is intentionally not inferred from two
+            # images. Distinguish executed-and-visually-changed from executed
+            # with unchanged RGB-D; neither proves physical displacement.
+            self.memory.event('forward_action_receipt_observed',
+                action_step=len(self.memory.actions)-1,
+                observation_before=feedback['observation_before'],
+                observation_after=feedback['observation_after'],
+                observed_frame_change=bool(changed_rgb or changed_depth),
+                stance_generation=self.motion_controller.viewpoint_generation,
+                displacement_verified=False,
+                metric_translation_computed=False)
             # Only a demonstrably unchanged frame can interrupt a route.
             # Low-consensus feature matching by itself is NOT a movement veto.
             alert_reason=('no_observed_frame_change_after_forward'
@@ -513,14 +518,15 @@ class ToolExecutor:
                 if (
                     (attempt['result'] == 'BLOCKED' or any(e['status'] == 'BLOCKED' for e in attempt.get('interruptions', [])))
                     and abs(delta) <= math.radians(self.camera.turn_angle)
-                    and math.hypot(origin['x'] - source['pose']['x'], origin['z'] - source['pose']['z'])
-                    <= 0.35
+                    and origin.get('motion_epoch')==source['pose'].get('motion_epoch')
+                    and origin.get('viewpoint_generation')==
+                        source['pose'].get('viewpoint_generation')
                 ):
                     failures.append(
                         dict(
                             attempt_id=attempt['attempt_id'],
                             reason=attempt['reason'],
-                            basis='estimated_local_pose_and_heading',
+                            basis='same_executed_forward_stance_and_commanded_heading',
                             confidence='low',
                             suppressed=False,
                         )
@@ -539,8 +545,9 @@ class ToolExecutor:
                 execution_status='PROPOSED',
                 goal_status='GOAL_EVIDENCE_AVAILABLE' if associations else 'GOAL_DIRECTION_UNKNOWN',
                 frame='source_robot_camera', angle_unit='radians',
-                endpoint_xz_m=[source['pose']['x'] - math.sin(heading) * candidate['distance'],
-                               source['pose']['z'] + math.cos(heading) * candidate['distance']],
+                endpoint_xz_m=None,
+                endpoint_estimate_valid=False,
+                route_execution_basis='commanded_yaw_and_finite_forward_action_count',
                 association_rejections=[r for r in relations if not r['relevant']] + excluded,
                 execution_requirements=['reconfirm_uncertain_goal','model_requested_geometry_optional'], 
             )
@@ -600,9 +607,10 @@ class ToolExecutor:
             target_reached=False,action_intent_completed=action_complete,
             displacement_verified=False,endpoint_estimate_valid=False,
             reach_basis='atomic_action_receipts_not_verified_metric_arrival',
-            original_target=list(checked['original_target']),
-            pending_target=list(self.motion_controller.target)
-                if self.motion_controller.target is not None else None,
+            original_target=None,
+            pending_target=None,
+            pending_waypoint_id=(self.motion_controller.target
+                if isinstance(self.motion_controller.target,str) else None),
             remaining_distance=None,
             remaining_commanded_forward_actions=remaining_actions,
             nominal_remaining_command_distance_m=round(
@@ -629,11 +637,12 @@ class ToolExecutor:
                 return checked
             self._cancel_local_navigation('model_selected_new_target')
             self.memory.start_attempt(path,self.motion_controller.pose())
-            # Retain the historical endpoint for display ONLY. Commanded
-            # bearing and finite forward action count drive execution.
-            self.motion_controller.target=tuple(checked['original_target'])
+            # The active target is an IDENTITY, not a fake x/z endpoint.
+            # Movement is driven by heading + finite forward action receipts.
+            self.motion_controller.target=path['id']
             attempt=self.memory.active_attempt
-            attempt['original_endpoint_xz_m']=list(self.motion_controller.target)
+            attempt['original_endpoint_xz_m']=None
+            attempt['target_reference']='model_selected_waypoint_id_not_metric_position'
             attempt['forward_action_horizon']=max(1,math.ceil(
                 (path['distance']-1e-6)/self.camera.forward_step))
             attempt['forward_actions']=0
@@ -685,9 +694,10 @@ class ToolExecutor:
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
                 attempt['forward_actions']+=1
+                # Every executed forward has UNKNOWN metric displacement.
+                # Track that fact without vetoing or resetting the current
+                # finite model-authored action sequence.
                 if not result['feedback']['translation_supported']:
-                    # Diagnostic fact only: neither steer to the stale metric
-                    # endpoint nor reset the active model-selected route.
                     attempt['unknown_motion_seen']=True
                     attempt['unknown_observation_ids'].append(
                         self.memory.current['observation_id'])
