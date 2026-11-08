@@ -29,7 +29,7 @@ def navigation_episode_history(memory, pose):
     def append(step,priority,kind,**fields):
         nonlocal sequence
         timeline.append(dict(step=step,kind=kind,**fields,
-                             _sort=(step,priority,sequence)))
+                             _priority=priority,_sequence=sequence))
         sequence+=1
 
     for turn in getattr(memory,'navigation_turns',[]):
@@ -129,9 +129,41 @@ def navigation_episode_history(memory, pose):
             end_observation_id=result.get('end_observation_id'),
             executed_motion=result.get('executed_motion'))
 
-    timeline.sort(key=lambda e:e['_sort'])
+    turns=getattr(memory,'navigation_turns',[])
+    def owner(event):
+        kind=event['kind']
+        if kind in ('NAVIGATION_DECISION','NAVIGATION_TOOL_RESULT'):
+            return next((i for i,t in enumerate(turns)
+                if t.get('decision_id')==event.get('decision_id')
+                and ((kind=='NAVIGATION_DECISION'
+                      and t.get('step_started')==event['step'])
+                     or (kind=='NAVIGATION_TOOL_RESULT'
+                      and t.get('step_finished')==event['step']))),
+                len(turns))
+        step=event['step']
+        if kind=='OBSERVATION_TASK':
+            # An observation tool can consume zero atomic turns; do not
+            # accidentally place its checkpoint after the next decision.
+            matches=[i for i,t in enumerate(turns)
+                if (t.get('decision') or {}).get('tool')=='observe_for_goal'
+                and t.get('step_started',-1)<=step<=t.get('step_finished',-1)]
+            if matches:
+                return matches[0]
+        if kind=='ATOMIC_ACTION':
+            return next((i for i,t in enumerate(turns)
+                if t.get('step_started',-1)<=step<t.get('step_finished',-1)),
+                len(turns))
+        return len(turns)
+
+    # Action step alone cannot order two zero-action decisions, or a tool
+    # result and the next decision at the SAME action count. Use the
+    # recorded model-turn index as the primary causal clock, followed by
+    # decision -> observation -> atomic actions -> result.
+    timeline.sort(key=lambda e:(
+        owner(e),e['_priority'],e['step'],e['_sequence']))
     for item in timeline:
-        item.pop('_sort')
+        item.pop('_priority')
+        item.pop('_sequence')
 
     catalog=[]
     for o in memory.observations:
