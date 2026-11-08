@@ -42,7 +42,6 @@ def navigation_episode_history(memory, pose):
             source_stance_id=turn.get('source_stance_id'),
             source_viewpoint_generation=turn.get('source_viewpoint_generation'),
             tool=decision.get('tool'),args=decision.get('args'),
-            direction_intent=decision.get('direction_intent'),
             progress_narrative=decision.get('progress_narrative'),
             navigation_intent=decision.get('navigation_intent'),
             uncertainties=decision.get('uncertainties'),
