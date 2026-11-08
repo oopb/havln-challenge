@@ -34,6 +34,9 @@ class ObservationController:
             progress_at_start=m.task.progress_narrative,
             intent_at_start=m.task.navigation_intent,
             start_observation_id=start_id,start_pose=copy.deepcopy(pose),
+            start_step=len(m.actions),
+            intent_source_at_start=copy.deepcopy(
+                getattr(m.task,'navigation_intent_anchor',{})),
             started_monotonic=time.monotonic(),outcome='IN_PROGRESS',
             checkpoints=[],actions=[],waypoints=[])
         m.observation_searches.append(record)
@@ -205,6 +208,7 @@ class ObservationController:
             record['outcome']='PARTIAL_OBSERVATION' if viewed else 'VISION_UNAVAILABLE'
         record.update(
             end_observation_id=m.current['observation_id'],
+            step_finished=len(m.actions),
             covered_turn_deg=turned,
             observation_summary=summary[:750],
             navigation_suggestion=suggestion[:600],

@@ -7,6 +7,7 @@ from .contexts import fields
 from .memory_records import MemoryRecords, task_tokens
 from .motion import registered_action
 from .mission_history import mission_evidence
+from .navigation_history import navigation_episode_history
 
 
 
@@ -383,14 +384,17 @@ class MemoryService(MemoryRecords):
             mission_evidence=mission_evidence(
                 self,self.runtime.motion_controller.pose(),
                 max_observation_tasks=6),
+            episode_history=navigation_episode_history(
+                self,self.runtime.motion_controller.pose()),
             progress_revision_audit=[
                 dict(step=v.get('step'),
                      progress_narrative=v.get('progress_narrative'),
                      navigation_intent=v.get('navigation_intent'),
+                     navigation_intent_anchor=v.get('navigation_intent_anchor'),
                      context_observation_id=v.get('context_observation_id'),
                      evidence_observation_ids=v.get('evidence_observation_ids'))
-                for v in self.task.progress_history[-10:]],
-            history_scope='all_episode_factual_memory_projected_to_bounded_model_context')
+                for v in self.task.progress_history],
+            history_scope='complete_causal_episode_timeline_and_source_linked_sensor_index')
 
     def read_memory_record(self, record_id):
         session=next((s for s in self.observation_searches
@@ -404,6 +408,11 @@ class MemoryService(MemoryRecords):
                 sensor_record=copy.deepcopy(next(o for o in self.observations if o['observation_id']==record_id)),
                 visual_analyses=copy.deepcopy([v for v in self.scene_history if v['source']['observation_id']==record_id]),
                 grounding_ids=[g['grounding_id'] for g in self.groundings if g['source']['observation_id']==record_id])
+        turn=next((t for t in getattr(self,'navigation_turns',[])
+            if t.get('decision_id')==record_id),None)
+        if turn is not None:
+            return dict(detail_requested=True,record=copy.deepcopy(turn),
+                        direction_is_source_camera_relative=True)
         for values,key in [(self.tool_ledger,'call_id'),(self.groundings,'grounding_id'),
                            (self.visual_targets,'id')]:
             value=next((v for v in values if v[key]==record_id),None)

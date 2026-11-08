@@ -1,3 +1,124 @@
+# v13 — complete navigation history, grounded turn intent and prompt consolidation
+
+**Real failure case:** `eval-batch4-27` observation `obs_0095`.
+NavigationAgent described inspecting the stone arch to the **left** of a
+person but returned `turn_and_observe(RIGHT,30)`; Habitat correctly
+executed two right turns. The previous decision at `obs_0091` had
+recorded `navigation_intent="Follow the opening slightly right"` at a
+different yaw (195 degrees), whereas `obs_0095` was at 180 degrees and
+a different executed-forward stance. That camera-relative sentence was
+still being copied verbatim into current navigation context.
+This is a source-binding/decision-consistency flaw, **not** a demonstrated
+left/right sign error in the atomic executor.
+
+## 1. Full ordered context without duplicate prompt histories
+
+Every NavigationAgent API request now receives
+`context_contract=navigation_context_v2_complete_causal_history` with
+`episode_history` containing **all** earlier:
+- navigation decisions: tool name, exact args, source observation ID,
+  source heading/stance, direction intent, progress and uncertainties
+- results: status, executed actions, associated tool call ID, error or
+  blocked evidence, terminal observation and visual guidance
+- atomic actions: every TURN, LOOK, FORWARD and STOP with exact source
+  observation IDs, current stance, heading, RGB-D change and live
+  Depth preflight status
+- VLM observation tasks: all session objectives, observation checkpoints,
+  model hypotheses, visible target boxes, suggestions, source frames and
+  camera actions
+- RGB-D frame catalog: all recorded observation IDs, step, heading,
+  stance generation, public frame hashes, possible static-structure
+  revisit matches, explicitly **not** verified physical localization
+
+The timeline is ordered by **model-turn causality**, not just atomic
+action count, so zero-action turns and prior tool results appear before
+the following decision. Full history is sourced from canonical Memory;
+the old three-task/four-receipt/five-motion overlapping mini-summaries
+are removed from the NavigationAgent projection. The VLM's separate
+mission_evidence format remains backward-compatible.
+
+The visual payload includes the **current RGB and calibrated Depth pair**
+and up to **4 diverse historical RGB-D pairs**, with a manifest that maps
+every image position to its source `observation_id`, original heading,
+stance and selection reason. Historical frames may include initial
+scene, visually similar revisit, route-candidate checkpoint and
+recent changed-forward view. A hash mismatch or missing sparse archived
+frame means skip the attachment, not fabricate an image or crash; all
+historical records remain available as source IDs in the text catalog.
+Historical Depth **never** grants current collision clearance. This
+limits per-turn media cost while preserving complete textual chronology.
+
+## 2. Historical relative intent validity
+
+Each updated `navigation_intent` is stored with:
+`source_observation_id, source_heading_deg, source_pitch_deg,
+motion_epoch, viewpoint_generation, stance_id, source_action_step`.
+After any TURN changing yaw or any MOVE changing the stance, the old
+free-text intent remains as `progress.prior_navigation_intent` but
+`progress.navigation_intent` becomes null until the model reissues an
+intent at the current camera view. Free-text "left/right" must never
+silently become a current bearing.
+
+The pre-decision Depth scan may refresh the RGB-D sensor; the context
+is now constructed **after** this fresh scan and scheduler binds tool
+execution to the actual post-refresh observation ID used for inference,
+preventing a stale-source decision/execute mismatch.
+
+## 3. Model-owned grounded direction intent
+
+`navigate_relative` and `turn_and_observe` require structured
+`direction_intent` with `mode` and `reason`:
+- `ALIGN_VISIBLE_TARGET`: a **current** observation ID and a normalized
+  `target_box_xyxy_norm` are mandatory. The calibrated center ray (left
+  positive, right negative) must agree in sign with the declared turn
+  when outside the actuator half-step ambiguity zone. A mismatch causes
+  `APIError(category=structured_field)` and the scheduler's existing
+  one-time corrective model retry — never an automatic Python turn.
+- `EXPLORE_ALTERNATIVE`: the model may intentionally turn in another
+  direction to avoid an obstacle if its reason explains the choice.
+- `FOLLOW_CURRENT_EVIDENCE`, `REORIENT_USING_HISTORY` and
+  `CONTINUE_CURRENT_ROUTE` remain model-selected modes. Historical
+  direction text is not a current camera-relative target box.
+
+There is deliberately no keyword heuristic matching English "left" to
+LEFT, no hard-coded stair rules, no forced forward action and no hidden
+steering. A bounding box supplied by a model is a *claim*: geometric
+consistency can be checked, but object presence/identity still requires
+real RGB inspection. Depth and safety remain controlled by the existing
+current-frame preflight.
+
+## 4. Prompt and audit
+
+The former 6.5k-character NavigationAgent prompt has been consolidated
+to role, provenance, evidence and decision principles; detailed tool
+argument syntax is defined once by `compact_navigation_protocol` and
+validated by the registered JSON schema. The old redundant recent
+history fragments are not duplicated in the new full timeline.
+`PROMPT_VERSION=havln-agent-v13-causal-history-grounded-turns`.
+Every completed model decision and source-bound tool receipt is also
+persisted in `memory.json` under `navigation_turns`, enabling direct
+review of the historical interpretation and execution.
+
+## 5. Verification
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
+python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
+python -m unittest discover -s tests -p 'test_v12_action_stance.py' -v
+```
+
+Please run a new `eval-batch4-28` on the same val_seen episode and
+128-step budget. Monitor API context characters / images / token usage
+(the history is larger), visual directional intent contradictions,
+navigation forward ratio, observation turns, and whether the arch-to-
+window route reversal recurs. This code has not yet proven a navigation
+score improvement; only a real simulator run can demonstrate that.
+
+---
+
 # v12 — action-receipt stance identity (no metric VO in navigation)
 
 **Problem addressed:** In `eval-batch4-26`, 14/33 executed forward

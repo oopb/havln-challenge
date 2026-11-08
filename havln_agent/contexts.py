@@ -6,6 +6,7 @@ from the same immutable Memory records.
 """
 import copy
 from .mission_history import mission_evidence
+from .navigation_history import navigation_episode_history
 from .contracts import CAMERA_PITCH_LIMIT_DEG, camera_look_options
 
 def fields(value,names):
@@ -22,6 +23,8 @@ def navigation_context(runtime):
                               max_observation_tasks=3)
     return dict(
         memory=evidence,
+        episode_history=navigation_episode_history(runtime.memory,pose),
+        context_contract='navigation_context_v2_complete_causal_history',
         actuator=dict(
             forward_step_m=runtime.camera.forward_step,
             turn_step_deg=runtime.camera.turn_angle,
@@ -42,8 +45,25 @@ def navigation_context(runtime):
         current_rgb_image_attached_separately=True)
 
 def compact_navigation_context(state):
-    # Projection is bounded centrally; do NOT add a second rollup here.
-    return copy.deepcopy(state)
+    """Remove duplicate slices; keep ALL events in the canonical timeline.
+
+    The former projection repeated the last three observation tasks, four
+    tool receipts, three historical image descriptions and five motion
+    segments in addition to the full episode log. Those are now accessed
+    through episode_history.timeline and its complete frame catalog.
+    Keep only *derived current* evidence in memory, such as live stance
+    coverage, blocker ROIs and directional intent provenance.
+    """
+    output=copy.deepcopy(state)
+    if 'episode_history' in output:
+        memory=output.get('memory') or {}
+        for field in (
+                'observation_tasks','historical_frames',
+                'recent_tool_receipts','observed_forward_action_segments'):
+            memory.pop(field,None)
+        memory['full_chronology_path']='episode_history.timeline'
+        memory['all_frame_index_path']='episode_history.rgbd_observation_catalog'
+    return output
 
 def planner_context(runtime):
     return dict(instruction=runtime.memory.task.instruction)
