@@ -6,6 +6,7 @@ from the same immutable Memory records.
 """
 import copy
 from .mission_history import mission_evidence
+from .navigation_history import navigation_episode_history
 from .contracts import CAMERA_PITCH_LIMIT_DEG, camera_look_options
 
 def fields(value,names):
@@ -22,6 +23,8 @@ def navigation_context(runtime):
                               max_observation_tasks=3)
     return dict(
         memory=evidence,
+        episode_history=navigation_episode_history(runtime.memory,pose),
+        context_contract='navigation_context_v2_complete_causal_history',
         actuator=dict(
             forward_step_m=runtime.camera.forward_step,
             turn_step_deg=runtime.camera.turn_angle,
@@ -42,7 +45,9 @@ def navigation_context(runtime):
         current_rgb_image_attached_separately=True)
 
 def compact_navigation_context(state):
-    # Projection is bounded centrally; do NOT add a second rollup here.
+    # Full chronology and source indices live in episode_history; recent
+    # model-facing mission_evidence is an advisory snapshot, not the
+    # entire history. Never concatenate two independently summarized logs.
     return copy.deepcopy(state)
 
 def planner_context(runtime):
