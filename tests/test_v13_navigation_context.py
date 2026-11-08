@@ -154,6 +154,17 @@ class CompleteHistoryTests(unittest.TestCase):
             'relative_direction_valid_for_current_camera'])
         self.assertEqual(after_forward['prior_navigation_intent']['source'][
             'source_observation_id'],'obs_0091')
+        # A model that merely repeats an old "slightly right" sentence
+        # at obs_0095 must NOT silently reanchor it to the new camera.
+        m.observations.append(observation('obs_0095',95,180,25))
+        m.current=m.observations[-1]
+        m.note_navigation_assessment(dict(
+            navigation_intent='Follow the opening slightly right.'))
+        repeated=mission_evidence(m,pose(180,25))['progress']
+        self.assertIsNone(repeated['navigation_intent'])
+        self.assertEqual(
+            repeated['prior_navigation_intent']['source'][
+                'source_observation_id'],'obs_0091')
 
     def test_history_not_cut_at_last_three_observation_tasks(self):
         m=MemoryRecords(camera())
