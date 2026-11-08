@@ -83,10 +83,15 @@ def run(runtime,append):
             binding={}
             turn_start_step=len(runtime.memory.actions)
             def decide(feedback):
+                proposal=runtime.navigation_agent.decide(feedback)
+                # NavigationAgent may refresh the RGB-D frame during its
+                # pre-decision Depth check. Bind the tool to the ACTUAL
+                # image used by the completed model decision, not a stale
+                # observation ID sampled before inference.
                 binding.update(
                     observation_id=runtime.memory.current['observation_id'],
                     actor='navigation_agent')
-                return runtime.navigation_agent.decide(feedback)
+                return proposal
             proposal=request(runtime,'navigation_agent',decide,append)
             runtime.decisions+=1
             runtime.event('navigation_decision',
