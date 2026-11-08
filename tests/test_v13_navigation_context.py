@@ -130,6 +130,26 @@ class CompleteHistoryTests(unittest.TestCase):
         self.assertTrue(timeline['complete_action_history'])
         self.assertTrue(timeline['all_rgbd_frames_indexed'])
 
+    def test_zero_action_turns_keep_decision_result_order(self):
+        m=MemoryRecords(camera())
+        m.reset('ep','Continue to the rug')
+        m.observations=[observation('obs_0000',0)]
+        m.current=m.observations[0]
+        m.note_navigation_turn(dict(tool='query_task_memory',args={}),
+            dict(tool_call_id='tool_1',status='OK',executed_actions=0),
+            'obs_0000',0,'navigation_1')
+        m.note_navigation_turn(dict(tool='observe_for_goal',
+                                     args=dict(objective='Inspect foyer')),
+            dict(tool_call_id='tool_2',status='OK',executed_actions=0),
+            'obs_0000',0,'navigation_2')
+        timeline=navigation_episode_history(m,pose())['timeline']
+        self.assertEqual([
+            (v['kind'],v.get('decision_id')) for v in timeline],[
+            ('NAVIGATION_DECISION','navigation_1'),
+            ('NAVIGATION_TOOL_RESULT','navigation_1'),
+            ('NAVIGATION_DECISION','navigation_2'),
+            ('NAVIGATION_TOOL_RESULT','navigation_2')])
+
     def test_old_relative_intent_is_not_current_after_turn_or_forward(self):
         m=MemoryRecords(camera())
         m.reset('episode','Follow the arch')
@@ -242,6 +262,26 @@ class GroundedTurnContractTests(unittest.TestCase):
         self.assertTrue(Draft7Validator(schema).is_valid(dict(
             tool='observe_for_goal',args=dict(
                 objective='Find a visible hall entrance'))))
+
+    def test_unavailable_archived_history_is_indexed_not_a_crash(self):
+        r,_=test_runtime()
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        r._step('TURN_LEFT')
+        r.navigation_mode='OBSERVE'
+        r.frames.clear()  # all archived frames unavailable to load
+        with patch('havln_agent.navigation_agent.image_url',
+                   return_value='data:image/jpeg;base64,R'),patch(
+                   'havln_agent.navigation_agent.depth_image_url',
+                   return_value='data:image/png;base64,D'):
+            r.navigation_agent.decide()
+        ctx=r.client.complete.call_args.args[3]
+        self.assertEqual(len(r.client.complete.call_args.kwargs[
+            'image_url']),2)
+        self.assertEqual(len(ctx['history_media']['manifest']),2)
+        self.assertGreater(len(ctx['episode_history'][
+            'rgbd_observation_catalog']),1)
+        self.assertTrue(ctx['history_media'][
+            'omitted_historical_image_bytes_are_indexed_in_episode_history'])
 
     def test_real_nav_request_contains_rgbd_media_and_full_history(self):
         r,actions=test_runtime(changed_forwards=True)
