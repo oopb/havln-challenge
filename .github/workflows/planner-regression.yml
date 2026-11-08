@@ -11,6 +11,7 @@ on:
       - "tests/test_recoverable_camera_pitch.py"
       - "tests/test_navigation_blocked_history_contract.py"
       - "tests/test_v11_observation_review.py"
+      - "tests/test_v12_action_stance.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -38,5 +39,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_navigation_blocked_history_contract.py' -v
       - name: Verify v11 VLM JSON integrity, cross-session view memory and real RGB-D conversation input audit
         run: python -m unittest discover -s tests -p 'test_v11_observation_review.py' -v
-      - name: Verify RGB-D feature-registration math
+      - name: Verify v12 no-VO forward receipts, stance reuse, historical invalidation and Depth veto
+        run: python -m unittest discover -s tests -p 'test_v12_action_stance.py' -v
+      - name: Verify independent OFFLINE RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
