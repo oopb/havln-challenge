@@ -6,7 +6,7 @@ from .contracts import (navigation_schema, compact_navigation_protocol,
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
-from .perception import image_url, depth_image_url
+from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
 from .heading import box_center_bearing
@@ -16,12 +16,15 @@ MISSION_PROMPT=(
     'You are NavigationAgent. Complete the ORIGINAL full navigation mission. '
     'Only you choose MOVE, observation, replanning and STOP; ObservationAgent '
     'supplies visual evidence, never movement authorization. '
-    'Read context.episode_history: the full ordered causal record of ALL '
-    'earlier navigation decisions, tool outcomes, atomic action receipts, '
-    'observation checkpoints and a source-indexed RGB-D catalog. '
-    'Historical RGB-D image pairs attached to this request are labeled in '
-    'context.history_media.manifest by exact image index and observation ID. '
-    'The FIRST pair is the CURRENT RGB-D; other pairs are HISTORICAL only. '
+    'Read context.memory (mission_evidence_v1): the same bounded '
+    'mission progress, recent observation tasks, forward receipts, '
+    'current-stance view coverage and Depth obstacle evidence used in v12. '
+    'Do not assume omitted older events did not occur. '
+    'The FIRST attached image is CURRENT RGB; subsequent images are '
+    'selected historical RGB views. Each historical image is described '
+    'in history_media.manifest by original observation ID, heading '
+    'and stance. Historical images are NOT current surroundings or '
+    'live Depth clearance. '
     'Compare early and recent static scene structure when deciding whether '
     'you may be returning to a previously explored route, but never assert '
     'physical place identity from image resemblance alone. '
@@ -122,28 +125,17 @@ class NavigationAgent:
         preflight=r.forward_preflight(stage='navigation_decision')
         context=compact_navigation_context(navigation_context(r))
         context['front_depth_preflight']=preflight
-        # A text-complete episode history is present even when historical
-        # RGB-D files are archived sparsely. Real image bytes are attached
-        # below only after source-hash verification.
+        # Keep exactly the old v12 bounded mission context; attach at most
+        # 3 source-verified historical RGB images as optional extras.
         if format_feedback:
             context['format_feedback']=format_feedback
         evidence=context['memory']
-        full_history=context['episode_history']
         r.event('mission_context_built',source='memory_projection',
             memory_contract=evidence['contract'],
-            episode_history_contract=full_history['contract'],
-            episode_history_counts=full_history['counts'],
-            observation_task_ids=[
-                v.get('observation_task_id')
-                for v in full_history['timeline']
-                if v.get('kind')=='OBSERVATION_TASK'],
-            historical_frame_ids=[
-                v['observation_id']
-                for v in full_history['rgbd_observation_catalog'][-4:]],
-            # Shared mission_evidence projections expose source-anchored
-            # obstacle facts as source_observation_id (not observation_id).
-            # Keep this diagnostic keyed to the public history contract:
-            # the event must never crash NavigationAgent before inference.
+            observation_task_ids=[v.get('observation_task_id')
+                                  for v in evidence['observation_tasks']],
+            historical_frame_ids=[v['observation_id']
+                                  for v in evidence['historical_frames']],
             blocked_source_ids=[v['source_observation_id']
                                 for v in evidence['blocked_at_source_stances']],
             model_progress_revisions=evidence['progress']['model_revision_count'])
@@ -159,23 +151,19 @@ class NavigationAgent:
                 or pose!=view['pose']):
                 raise APIError('navigation_current_RGBD_pose_identity_mismatch',
                                category='structured_field')
-            images=[
-                image_url(frame,max_edge=640),
-                depth_image_url(frame,r.camera,
-                                max_edge=640,display_max_m=5.0)]
-            manifest=[
-                dict(image_index=0,kind='current_RGB',
-                     observation_id=source['observation_id'],
-                     heading_deg=round(math.degrees(pose['heading'])%360,2),
-                     stance_id=pose.get('stance_id'),
-                     current_sensor_frame=True),
-                dict(image_index=1,kind='current_Depth',
-                     observation_id=source['observation_id'],
-                     depth_colormap='near_black_far_white_invalid_magenta',
-                     current_sensor_frame=True)]
+            # v12 input shape + a SMALL number of authentic historical RGB
+            # views. Do not attach full RGB-D sessions, full timelines,
+            # historical Depth or a duplicated all-frame catalog.
+            images=[image_url(frame,max_edge=640)]
+            manifest=[dict(
+                image_index=0,kind='current_RGB',
+                observation_id=source['observation_id'],
+                heading_deg=round(math.degrees(pose['heading'])%360,2),
+                stance_id=pose.get('stance_id'),
+                current_sensor_frame=True)]
             by_id={o['observation_id']:o for o in r.memory.observations}
             for descriptor in navigation_visual_anchors(
-                    r.memory,source['observation_id'],max_pairs=4):
+                    r.memory,source['observation_id'],max_pairs=3):
                 identifier=descriptor['observation_id']
                 item=by_id.get(identifier)
                 if item is None:continue
@@ -185,43 +173,30 @@ class NavigationAgent:
                     if (array_hash(historical.rgb)!=item.get('rgb_hash')
                             or array_hash(historical.depth)!=item.get('depth_hash')):
                         continue
-                    # Prepare the WHOLE pair and its provenance before
-                    # committing images to the request. If a sparse archive
-                    # frame is malformed, no dangling image index remains.
                     history_pose=item.get('pose') or {}
                     h=history_pose.get('heading')
                     if not isinstance(h,(int,float)) or not math.isfinite(h):
                         continue
-                    history_heading=round(math.degrees(h)%360,2)
-                    encoded_pair=[
-                        image_url(historical,max_edge=640),
-                        depth_image_url(historical,r.camera,max_edge=640,
-                                        display_max_m=5.0)]
-                    pos=len(images)
-                    images.extend(encoded_pair)
-                    for index,kind in ((pos,'historical_RGB'),
-                                       (pos+1,'historical_Depth')):
-                        manifest.append(dict(
-                            image_index=index,kind=kind,
-                            observation_id=identifier,
-                            source_action_step=item.get('step'),
-                            source_heading_deg=history_heading,
-                            source_pitch_deg=history_pose.get('pitch_deg'),
-                            source_stance_id=history_pose.get('stance_id'),
-                            selection_reason=descriptor['selection_reason'],
-                            current_sensor_frame=False,
-                            historical_only_not_live_clearance=True,
-                            physical_revisit_not_verified=True))
+                    encoded=image_url(historical,max_edge=640)
+                    image_index=len(images)
+                    images.append(encoded)
+                    manifest.append(dict(
+                        image_index=image_index,kind='historical_RGB',
+                        observation_id=identifier,
+                        source_heading_deg=round(math.degrees(h)%360,2),
+                        source_pitch_deg=history_pose.get('pitch_deg'),
+                        source_stance_id=history_pose.get('stance_id'),
+                        selection_reason=descriptor['selection_reason'],
+                        historical_only_not_live_clearance=True))
                 except (KeyError,OSError,ValueError,TypeError,AttributeError):
-                    # A sparse diagnostic archive must not crash live nav.
+                    # Missing historical frame is optional. Current RGB
+                    # and v12 text memory are always sufficient to proceed.
                     continue
             context['history_media']=dict(
                 manifest=manifest,
-                actual_image_count=len(images),
-                complete_text_history_is_independent_of_image_sampling=True,
-                omitted_historical_image_bytes_are_indexed_in_episode_history=True,
-                image_order='one pair current RGB/Depth then selected historical RGB/Depth',
-                historical_depth_never_authorizes_motion=True)
+                attached_historical_RGB=len(images)-1,
+                source_frame_provenance='actual_RGBD_hashes',
+                historical_images_are_not_live_clearance=True)
             context['current_rgb']=dict(
                 image_attached=True,observation_id=source['observation_id'],
                 heading_deg=round(math.degrees(pose['heading'])%360,2),
@@ -231,13 +206,13 @@ class NavigationAgent:
                     source_observation_id=source['observation_id'],
                     rgb_hash=source['rgb_hash'],
                     total_attached_images=len(images),
-                    historical_pairs=(len(images)-2)//2)
+                    historical_RGB=len(images)-1)
         else:
             context['current_rgb']=dict(image_attached=False,
                                         scope='no_live_image_available')
             context['history_media']=dict(
-                manifest=[],actual_image_count=0,
-                complete_text_history_is_independent_of_image_sampling=True)
+                manifest=[],attached_historical_RGB=0,
+                historical_images_are_not_live_clearance=True)
         schema=navigation_schema(tools)
         def validate(value):
             # Truly malformed tool arguments remain format errors; the error
