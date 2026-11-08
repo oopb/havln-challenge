@@ -355,5 +355,5 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             absolute_heading_deg='0..360, increases on LEFT turn',
             model_turn_commands='LEFT or RIGHT + nonnegative degrees; NONE + 0',
             stored_relative_bearing='positive LEFT, negative RIGHT; internal evidence only',
-            coordinate_scope='local_pose_and_motion_epoch_not_global_localization'),
+            coordinate_scope='executed_forward_stance_yaw_pitch_only_no_metric_xyz'),
         historical_clearance_authorizes_move=False)
