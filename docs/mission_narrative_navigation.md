@@ -1,3 +1,63 @@
+# v14 — rollback NavigationAgent input to v12 + selected historical RGB
+
+This revision **reverts only the model-facing NavigationAgent INPUT**, not
+its navigation output schema or robot motion/Depth checks. Real
+`eval-batch4-28` had overlarge text history and 10 image attachments per
+decision, coinciding with JSON/format failures and early API termination.
+
+## Per-navigation-decision payload
+
+- Restore exactly the v12-style bounded `navigation_context` projection:
+  `memory=mission_evidence_v1` (recent observation tasks, task progress,
+  local stance view coverage, recent tool receipts, blocked bearings, forward
+  action segments and a few historical frame descriptors), `actuator`,
+  `camera_controls`, `actions_remaining`, `navigation_mode`, and fresh
+  `front_depth_preflight`.
+- **Do not include** `episode_history.timeline`, a full RGB-D catalog,
+  historical per-action event records or repeated verbose log fragments in
+  the routine navigation prompt. The complete canonical records remain
+  persisted in Memory and accessible through `query_task_memory` and
+  `read_memory_record` if the model explicitly requests them.
+- Attach **one CURRENT RGB** (as in v12) and at most **three genuine
+  HISTORICAL RGB images** selected to cover a suspected revisit, episode
+  origin, recent candidate route, or recent changed-forward scene.
+  Historical Depth images and a separate current Depth image are **not
+  sent**. The real current Depth preflight remains present as structured
+  measured blocker evidence; pre-forward safety is unchanged.
+- One small `history_media.manifest` maps every attached image to its
+  source `observation_id`, original heading/pitch, action stance ID,
+  selection reason, and image index. Media bytes are hash checked against
+  their recorded RGB-D sources; missing historic images are skipped safely.
+  Source-relative historical left/right text is not current navigation
+  permission or a live camera bearing.
+- The v13 *output* contract (model-authored `direction_intent` for
+  movement, guarded `ALIGN_VISIBLE_TARGET` image-box turn consistency
+  versus explicit `EXPLORE_ALTERNATIVE`) **is kept unchanged**. This
+  change reduces input load only and is NOT a claim that all JSON output
+  compatibility errors have been repaired. If malformed outputs remain,
+  debug output protocol and limited recovery separately.
+
+`PROMPT_VERSION=havln-agent-v14-compact-v12-memory-with-history-rgb`.
+
+## Check before live eval
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
+python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_v12_action_stance.py' -v
+```
+
+Use a NEW `eval-batch4-29` directory for controlled comparison with the
+v13 `eval-batch4-28` failure. Verify `image_count` <=4 for every
+NavigationAgent call (unless transport adds unrelated images), **no
+`episode_history` field** in navigation request context, correct
+source-frame manifest, actual token usage, valid JSON rate and
+forward/turn distribution. No online metric-odometry integration returns.
+
+---
+
 # v13 — complete navigation history, grounded turn intent and prompt consolidation
 
 **Real failure case:** `eval-batch4-27` observation `obs_0095`.
