@@ -31,7 +31,7 @@ MISSION_PROMPT=(
     'Historical relative left/right phrases are valid ONLY at their original '
     'source observation and camera heading; progress.prior_navigation_intent '
     'explicitly marks freshness. After turning or moving, reevaluate any '
-    'old direction against the CURRENT RGB-D and pose. '
+    'old direction against the CURRENT RGB, pose and live Depth preflight. '
     'For ALIGN_VISIBLE_TARGET you MUST ground a target box in the CURRENT '
     'RGB image, then choose the turn direction that moves its center toward '
     'the CURRENT optical axis. If you intentionally explore elsewhere '
@@ -119,9 +119,8 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
-        # Depth preflight may REFRESH the current camera frame. Build the
-        # entire source-indexed episode/history context only AFTER it so
-        # historical catalog, current observation ID and RGB-D hashes agree.
+        # Build the compact v12 context after the current Depth preflight,
+        # so the attached current RGB and tool execution use one source ID.
         preflight=r.forward_preflight(stage='navigation_decision')
         context=compact_navigation_context(navigation_context(r))
         context['front_depth_preflight']=preflight
