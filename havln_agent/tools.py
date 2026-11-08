@@ -214,7 +214,7 @@ class ToolExecutor:
                 same_waypoint_pending=bool(active),
                 remaining_turn_actions_est=remaining_turns,
                 min_atomic_actions_until_first_forward_attempt=forward_budget,
-                first_forward_still_requires_live_safety=False,
+                first_forward_still_requires_live_safety=True,
                 geometry_diagnostics_model_invoked_only=True,
                 endpoint_estimate_valid=result.get('endpoint_estimate_valid',False),
                 action_intent_completed=result.get('action_intent_completed',False),
@@ -617,8 +617,12 @@ class ToolExecutor:
                 remaining_actions*step_size,3),
             commanded_forward_actions=forwards,
             commanded_forward_horizon=horizon,
-            odometry_unknown_during_route=bool(attempt.get('unknown_motion_seen')),
-            unknown_observation_ids=list(attempt.get('unknown_observation_ids',[])),
+            odometry_unknown_during_route=False,
+            metric_odometry_enabled=False,
+            translation_estimate_available=False,
+            unknown_observation_ids=[],
+            observed_forward_action_ids=list(
+                attempt.get('observed_forward_action_ids',[])),
             remaining_path=dict(path_id=path['id'],
                 original_endpoint_xz_m=list(checked['original_target']),
                 endpoint_estimate_valid=False,
@@ -648,6 +652,7 @@ class ToolExecutor:
             attempt['forward_actions']=0
             attempt['unknown_motion_seen']=False
             attempt['unknown_observation_ids']=[]
+            attempt['observed_forward_action_ids']=[]
         elif self.motion_controller.target is None or not self.memory.active_attempt:
             return dict(status='INVALID_TARGET',reason='no_pending_target')
         else:
@@ -694,13 +699,10 @@ class ToolExecutor:
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
                 attempt['forward_actions']+=1
-                # Every executed forward has UNKNOWN metric displacement.
-                # Track that fact without vetoing or resetting the current
-                # finite model-authored action sequence.
-                if not result['feedback']['translation_supported']:
-                    attempt['unknown_motion_seen']=True
-                    attempt['unknown_observation_ids'].append(
-                        self.memory.current['observation_id'])
+                # Track actual forward receipts, not a perpetual
+                # 'odometry failed' flag (metric registration is disabled).
+                attempt.setdefault('observed_forward_action_ids',[]).append(
+                    self.memory.current['observation_id'])
                 alert=result['feedback'].get('motion_alert') or {}
                 if alert.get('reason')=='no_observed_frame_change_after_forward':
                     return self._navigation_feedback(
