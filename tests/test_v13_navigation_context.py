@@ -1,4 +1,4 @@
-"""v13 navigation history and grounded-direction regression.
+"""v13 internal provenance and v14 compact NavigationAgent-input regression.
 
 No API calls, privileged simulator poses or external datasets required.
 Run: python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
@@ -263,61 +263,62 @@ class GroundedTurnContractTests(unittest.TestCase):
             tool='observe_for_goal',args=dict(
                 objective='Find a visible hall entrance'))))
 
-    def test_unavailable_archived_history_is_indexed_not_a_crash(self):
+    def test_missing_archived_frames_keep_bounded_v12_memory(self):
         r,_=test_runtime()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
         r._step('TURN_LEFT')
         r.navigation_mode='OBSERVE'
-        r.frames.clear()  # all archived frames unavailable to load
+        r.frames.clear()
         with patch('havln_agent.navigation_agent.image_url',
-                   return_value='data:image/jpeg;base64,R'),patch(
-                   'havln_agent.navigation_agent.depth_image_url',
-                   return_value='data:image/png;base64,D'):
+                   return_value='data:image/jpeg;base64,R'):
             r.navigation_agent.decide()
         ctx=r.client.complete.call_args.args[3]
-        self.assertEqual(len(r.client.complete.call_args.kwargs[
-            'image_url']),2)
-        self.assertEqual(len(ctx['history_media']['manifest']),2)
-        self.assertGreater(len(ctx['episode_history'][
-            'rgbd_observation_catalog']),1)
-        self.assertTrue(ctx['history_media'][
-            'omitted_historical_image_bytes_are_indexed_in_episode_history'])
+        images=r.client.complete.call_args.kwargs['image_url']
+        self.assertEqual(len(images),1)
+        self.assertEqual(len(ctx['history_media']['manifest']),1)
+        self.assertNotIn('episode_history',ctx)
+        self.assertEqual(ctx['memory']['contract'],'mission_evidence_v1')
+        self.assertIn('observation_tasks',ctx['memory'])
+        self.assertIn('historical_frames',ctx['memory'])
+        self.assertIn('recent_tool_receipts',ctx['memory'])
+        self.assertIn('recent_views_at_current_stance',ctx['memory'])
 
-    def test_real_nav_request_contains_rgbd_media_and_full_history(self):
+    def test_navigation_request_reverts_to_v12_input_plus_small_RGB_history(self):
         r,actions=test_runtime(changed_forwards=True)
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
-        # Add a distinct historical view: first sensor frame remains valid
-        # and is indexed separately from the new camera pose.
         r._step('TURN_LEFT')
         r._step('TURN_RIGHT')
         r.navigation_mode='OBSERVE'
         with patch('havln_agent.navigation_agent.image_url',
-                   return_value='data:image/jpeg;base64,R'),patch(
-                   'havln_agent.navigation_agent.depth_image_url',
-                   return_value='data:image/png;base64,D'):
+                   return_value='data:image/jpeg;base64,R'):
             r.navigation_agent.decide()
         call=r.client.complete.call_args
         ctx=call.args[3]
         images=call.kwargs['image_url']
-        self.assertEqual(ctx['context_contract'],
-                         'navigation_context_v2_complete_causal_history')
-        self.assertEqual(ctx['episode_history']['counts']['atomic_actions'],2)
-        self.assertEqual(ctx['episode_history']['counts']['source_frames'],
-                         len(r.memory.observations))
+        # This is the exact bounded mission-evidence input surface from v12,
+        # not a reserialized 128-step, 10-image v13 episode transcript.
+        self.assertNotIn('context_contract',ctx)
+        self.assertNotIn('episode_history',ctx)
+        self.assertEqual(ctx['memory']['contract'],'mission_evidence_v1')
+        self.assertIn('observation_tasks',ctx['memory'])
+        self.assertIn('recent_tool_receipts',ctx['memory'])
+        self.assertIn('observed_forward_action_segments',ctx['memory'])
+        self.assertIn('recent_views_at_current_stance',ctx['memory'])
         self.assertEqual(ctx['current_rgb']['observation_id'],
                          r.memory.current['observation_id'])
-        self.assertEqual(len(images)%2,0)
-        self.assertGreaterEqual(len(images),4)
+        self.assertGreaterEqual(len(images),2)
+        self.assertLessEqual(len(images),4)
         manifest=ctx['history_media']['manifest']
         self.assertEqual([v['image_index'] for v in manifest],
                          list(range(len(images))))
         self.assertEqual(manifest[0]['kind'],'current_RGB')
-        self.assertEqual(manifest[1]['kind'],'current_Depth')
-        self.assertTrue(all(not i['current_sensor_frame']
-                            for i in manifest[2:]))
-        self.assertEqual(manifest[2]['observation_id'],'obs_0000')
-        self.assertNotIn('observation_tasks',ctx['memory'])
-        self.assertIn('recent_views_at_current_stance',ctx['memory'])
+        self.assertTrue(all(v['kind']=='historical_RGB'
+                            for v in manifest[1:]))
+        self.assertEqual(manifest[1]['observation_id'],'obs_0000')
+        self.assertTrue(all(v.get('historical_only_not_live_clearance')
+                            for v in manifest[1:]))
+        self.assertEqual(ctx['history_media']['attached_historical_RGB'],
+                         len(images)-1)
         self.assertLess(len(MISSION_PROMPT),5000)
         validate=call.kwargs['validate']
         old_id=ctx['current_rgb']['observation_id']
