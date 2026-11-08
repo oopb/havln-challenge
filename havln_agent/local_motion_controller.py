@@ -10,7 +10,7 @@ class LocalMotionController:
     """Action-receipt orientation and conservative physical-stance identity.
 
     No RGB-D translational registration feeds the navigation controller.
-    x/y/z remain neutral, explicitly INVALID legacy compatibility fields;
+    x/y/z are explicitly NULL in pose() and never integrated;
     no caller may use them as coordinates, distance, route completion or
     collision evidence. Each executed MOVE_FORWARD starts a new stance epoch,
     even if the images are byte-identical: conservative separation is safer
@@ -19,8 +19,8 @@ class LocalMotionController:
 
     def __init__(self, camera):
         self.camera = camera
-        # Legacy numeric attributes for code that still serializes a pose.
-        # They are never integrated, and pose marks them INVALID.
+        # Legacy object attributes are inert for older tests/introspection.
+        # pose() does NOT emit their numeric placeholder values.
         self.x, self.y, self.z = 0., 0., 0.
         self.heading, self.pitch_deg = 0., 0.
         self.target = None  # active path ID, NOT an estimated x/z endpoint
@@ -40,7 +40,8 @@ class LocalMotionController:
 
     def pose(self):
         return dict(
-            x=self.x, y=self.y, z=self.z,
+            # No fabricated coordinate values enter model/API/log contexts.
+            x=None, y=None, z=None,
             heading=self.heading, pitch_deg=self.pitch_deg,
             source='commanded_yaw_pitch_and_public_action_receipts',
             confidence='action_only_no_metric_localization',
@@ -58,7 +59,7 @@ class LocalMotionController:
             position_coordinates_valid=False,
             metric_position_valid=False,
             metric_position=None,
-            legacy_xyz_are_placeholders=True,
+            legacy_xyz_are_placeholders=False,
             global_chain_continuous=False,
             local_anchor_observation_id=None,
             coordinate_scope='action_stance_only_without_metric_xyz')
