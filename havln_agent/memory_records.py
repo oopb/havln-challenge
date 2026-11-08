@@ -11,6 +11,7 @@ from PIL import Image
 
 from .observation import frame_info
 from .evidence_ledger import EvidenceLedger
+from .heading import same_local_stance
 
 
 def angle_error(a, b):
@@ -193,9 +194,7 @@ class MemoryRecords:
         view_matches=[]
         for old, old_features in zip(self.observations, self._features):
             old_pose=old['pose']
-            if (old_pose.get('motion_epoch') != pose.get('motion_epoch')
-                    or old_pose.get('viewpoint_generation',0) != pose.get('viewpoint_generation',0)
-                    or math.hypot(old_pose['x']-pose['x'],old_pose['z']-pose['z']) > .08
+            if (not same_local_stance(old_pose,pose)
                     or abs(angle_error(old_pose['heading'],pose['heading'])) >
                         math.radians(self.camera.turn_angle/2)
                     or abs(old_pose.get('pitch_deg',0)-pose.get('pitch_deg',0)) > 1):
@@ -226,8 +225,10 @@ class MemoryRecords:
                         confidence='moderate',
                         basis='rgb_depth_structure_and_heading',
                         localization_verified=False,
-                        estimated_position_separation_m=math.hypot(pose['x'] - old['pose']['x'], pose['z'] - old['pose']['z']),
-                        relative_pose_bound_m=pose.get('position_uncertainty', 0.05) + old['pose'].get('position_uncertainty', 0.05),
+                        estimated_position_separation_m=None,
+                        relative_pose_bound_m=None,
+                        same_stance_by_forward_receipts=same_local_stance(
+                            old['pose'],pose),
                     )
                 )
         record = dict(
@@ -275,11 +276,7 @@ class MemoryRecords:
             for h in self.humans
             if time.monotonic() - h['source']['captured_at'] <= self.human_max_age_seconds
             and not (
-                math.hypot(
-                    source['pose']['x'] - h['source']['pose']['x'],
-                    source['pose']['z'] - h['source']['pose']['z'],
-                )
-                <= 0.12
+                same_local_stance(source['pose'],h['source']['pose'])
                 and abs(angle_error(source['pose']['heading'], h['source']['pose']['heading']))
                 <= math.radians(self.camera.turn_angle / 2)
             )
@@ -348,54 +345,44 @@ class MemoryRecords:
         Failed probes never erase earlier registered movement.
         """
         segments=[]
-        # Preserve actual earlier motion across long scan/turn episodes.
-        # The output is still bounded to recent compact segments below.
+        # Successful image change after an executed MOVE is useful history,
+        # but is NOT metric translation or proven navigational arrival.
         for a in self.actions:
             if a.get('action')!='MOVE_FORWARD':
                 continue
             feedback=a.get('result') or {}
-            motion=feedback.get('rgbd_motion') or {}
-            if (motion.get('status')!='ESTIMATED'
-                    or not motion.get('observed_frame_change',True)):
-                continue
-            translation=motion.get('translation_m') or {}
-            if not isinstance(translation,dict):
+            if not feedback.get('visual_change',False):
                 continue
             pose=a.get('pose') or {}
             if not isinstance(pose.get('heading'),(int,float)):
                 continue
             yaw=round(math.degrees(pose['heading'])%360,1)
-            dy=translation.get('y_up')
             epoch=pose.get('motion_epoch')
+            gen=pose.get('viewpoint_generation')
             previous=segments[-1] if segments else None
-            consecutive=(previous and
-                a['step']==previous['last_step']+1 and
-                epoch==previous['motion_epoch'] and
-                abs((yaw-previous['heading_deg']+180)%360-180)<=self.camera.turn_angle/2)
+            consecutive=(previous
+                and a['step']==previous['last_step']+1
+                and epoch==previous['motion_epoch']
+                and abs((yaw-previous['heading_deg']+180)%360-180)
+                    <=self.camera.turn_angle/2)
             if consecutive:
                 previous['last_step']=a['step']
                 previous['forward_steps']+=1
-                previous['observed_height_change_m_est']=(
-                    round(previous['observed_height_change_m_est']+dy,3)
-                    if isinstance(dy,(int,float)) else
-                    previous['observed_height_change_m_est'])
                 previous['end_observation_id']=feedback.get('observation_after')
-                uncertainty=motion.get('uncertainty_m')
-                if isinstance(uncertainty,(int,float)):
-                    previous['uncertainty_m_est']=round(
-                        previous['uncertainty_m_est']+uncertainty,3)
+                previous['last_stance_generation']=gen
             else:
-                segments.append(dict(motion_epoch=epoch,heading_deg=yaw,
+                segments.append(dict(
+                    motion_epoch=epoch,heading_deg=yaw,
                     first_step=a['step'],last_step=a['step'],
                     forward_steps=1,
-                    observed_height_change_m_est=round(dy,3)
-                        if isinstance(dy,(int,float)) else 0.,
+                    first_stance_generation=gen,
+                    last_stance_generation=gen,
+                    observed_height_change_m_est=None,
+                    uncertainty_m_est=None,
                     start_observation_id=feedback.get('observation_before'),
                     end_observation_id=feedback.get('observation_after'),
-                    uncertainty_m_est=round(motion.get('uncertainty_m',0),3)
-                        if isinstance(motion.get('uncertainty_m'),(int,float))
-                        else 0.,
-                    evidence='registered_rgbd_motion_not_habitat_ground_truth'))
+                    evidence='executed_forward_and_RGBD_changed_not_metric_displacement',
+                    displacement_verified=False))
         blocked=[]
         for entry in self.tool_ledger[-50:]:
             call=entry.get('call') or {}
@@ -426,7 +413,7 @@ class MemoryRecords:
             blocked.append(dict(
                 heading_deg=round(math.degrees(heading)%360,1),
                 source_observation_id=result.get('end_observation_id'),
-                local_pose_xz_m_est=[pose.get('x'),pose.get('z')],
+                local_pose_xz_m_est=None,
                 place_id=(end_record or {}).get('place_id'),
                 motion_epoch=pose.get('motion_epoch'),
                 viewpoint_generation=pose.get('viewpoint_generation'),
