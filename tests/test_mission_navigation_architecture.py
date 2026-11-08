@@ -76,6 +76,8 @@ class MissionContracts(unittest.TestCase):
         Draft7Validator.check_schema(schema)
         message=dict(tool='navigate_relative',
             args=dict(turn_direction='RIGHT',turn_degrees=45,distance_m=.5),
+            direction_intent=dict(mode='EXPLORE_ALTERNATIVE',
+                reason='Inspect new opening to the right; no target box grounded.'),
             progress_narrative='I have descended the stairs, but have not located the piano.',
             navigation_intent='Find the hall and cross it toward the piano.',
             uncertainties=['Hall entry not yet localized.'],
