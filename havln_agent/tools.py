@@ -624,7 +624,7 @@ class ToolExecutor:
             observed_forward_action_ids=list(
                 attempt.get('observed_forward_action_ids',[])),
             remaining_path=dict(path_id=path['id'],
-                original_endpoint_xz_m=list(checked['original_target']),
+                original_endpoint_xz_m=None,
                 endpoint_estimate_valid=False,
                 status=path['execution_status'],
                 completed=False,action_intent_completed=action_complete),
@@ -657,7 +657,7 @@ class ToolExecutor:
             return dict(status='INVALID_TARGET',reason='no_pending_target')
         else:
             path=self.paths[self.memory.active_attempt['target']['id']]
-            checked=dict(original_target=list(self.motion_controller.target))
+            checked=dict(original_target=None)
         # The model-chosen finite action sequence is independent of optional
         # translation fitting. Only the global Episode budget limits actions.
         for _ in range(max(0,self.config['max_steps']-1-len(self.memory.actions))):
