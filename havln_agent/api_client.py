@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v12-action-stance-no-metric-odometry'
+PROMPT_VERSION = 'havln-agent-v13-causal-history-grounded-turns'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
