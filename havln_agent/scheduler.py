@@ -81,6 +81,7 @@ def run(runtime,append):
             break
         try:
             binding={}
+            turn_start_step=len(runtime.memory.actions)
             def decide(feedback):
                 binding.update(
                     observation_id=runtime.memory.current['observation_id'],
@@ -98,9 +99,15 @@ def run(runtime,append):
             # recent natural-language progress from THIS decision, too.
             # This updates hypotheses only; it does not write sensor facts.
             memory_update=runtime.memory.note_navigation_assessment(proposal)
+            # Include the model's declared target/turn semantics in the tool
+            # audit without granting Python any steering authority.
+            binding['direction_intent']=proposal.get('direction_intent')
             # Only the registered executable command reaches ToolExecutor.
             command=dict(tool=proposal['tool'],args=proposal['args'])
             result=runtime.execute(command,binding)
+            runtime.memory.note_navigation_turn(
+                proposal,result,binding.get('observation_id'),
+                turn_start_step,runtime.current_decision_id)
             append('navigation_agent',dict(event='tool_feedback',
                 tool_call_id=result['tool_call_id'],
                 decision_id=runtime.current_decision_id,
