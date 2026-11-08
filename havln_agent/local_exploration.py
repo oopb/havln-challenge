@@ -280,7 +280,7 @@ def multi_pitch_coverage(memory, pose, turn_degrees=15, pitch_degrees=30):
     seen_current = {c['heading_deg']
                     for c in by_pitch.get(current_pitch, [])}
     return dict(
-        reference='estimated_same_stance_and_motion_epoch',
+        reference='same_forward_receipt_stance_and_commanded_angles',
         absolute_yaw_convention='degrees_0_to_360',
         pose_epoch=pose.get('motion_epoch', 0),
         current_absolute_heading_deg=bearing_from_pose(pose),
