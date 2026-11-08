@@ -56,6 +56,7 @@ class TaskMemory:
     progress_history: list = field(default_factory=list)
     evidence_observation_ids: list = field(default_factory=list)
     observed_landmarks: list = field(default_factory=list)
+    navigation_intent_anchor: dict = field(default_factory=dict)
 
 
 class MemoryRecords:
@@ -72,6 +73,7 @@ class MemoryRecords:
         self.historical_scenes = []
         self.scene_history, self.visual_changes = [], []
         self.observation_searches = []
+        self.navigation_turns = []
         self.human_max_age_seconds = getattr(self, 'human_max_age_seconds', 2)
         self.current, self.revisits = None, []
         self._features = []
@@ -116,6 +118,26 @@ class MemoryRecords:
             if proposed!=task.uncertainties:
                 task.uncertainties=proposed
                 changed=True
+        # Each navigation intent is a CAMERA-RELATIVE MODEL HYPOTHESIS.
+        # Never silently reuse "slightly right" after a turn or forward.
+        context_record=self.current or {}
+        context_pose=context_record.get('pose') or {}
+        if (isinstance(decision.get('navigation_intent'),str)
+                and decision['navigation_intent'].strip()
+                and context_record.get('observation_id') in allowed):
+            anchor=dict(
+                source_observation_id=context_record['observation_id'],
+                source_action_step=len(self.actions),
+                source_heading_deg=round(
+                    math.degrees(context_pose.get('heading',0))%360,2),
+                source_pitch_deg=context_pose.get('pitch_deg'),
+                motion_epoch=context_pose.get('motion_epoch'),
+                viewpoint_generation=context_pose.get('viewpoint_generation'),
+                stance_id=context_pose.get('stance_id'),
+                direction_is_camera_relative_at_source=True)
+            if anchor!=task.navigation_intent_anchor:
+                task.navigation_intent_anchor=anchor
+                changed=True
         new_refs=[]
         for identifier in cited:
             if identifier not in task.evidence_observation_ids:
@@ -131,17 +153,61 @@ class MemoryRecords:
                 prior=previous,
                 progress_narrative=task.progress_narrative,
                 navigation_intent=task.navigation_intent,
+                navigation_intent_anchor=copy.deepcopy(task.navigation_intent_anchor),
                 uncertainties=list(task.uncertainties),
                 evidence_observation_ids=cited,
                 cited_observation_ids_validated=True,
                 completion_verified=False)
             task.progress_history.append(entry)
-            task.progress_history=task.progress_history[-60:]
+            # Retain every episode revision for causal navigation history.
+            # The model receives a structured projection, not repeated raw
+            # prompt texts or duplicated RGB base64 messages.
             self.event('mission_progress_updated',**entry)
         return dict(changed=changed,
                     evidence_observation_ids=cited,
                     new_evidence_observation_ids=new_refs,
                     context_observation_id=(self.current or {}).get('observation_id'))
+
+    def note_navigation_turn(self, decision, result, source_observation_id,
+                             step_started, decision_id=None):
+        """Record EVERY completed model decision with its real tool receipt.
+
+        Provenance is immutable. Raw visual media remains in observation
+        records, never copied into navigation history or chat logs.
+        """
+        source=next((o for o in self.observations
+                     if o.get('observation_id')==source_observation_id),None)
+        pose=(source or {}).get('pose') or {}
+        result=result or {}
+        item=dict(
+            turn_index=len(self.navigation_turns),
+            decision_id=decision_id,
+            source_observation_id=source_observation_id,
+            source_heading_deg=round(math.degrees(
+                pose.get('heading',0))%360,2),
+            source_stance_id=pose.get('stance_id'),
+            source_motion_epoch=pose.get('motion_epoch'),
+            source_viewpoint_generation=pose.get('viewpoint_generation'),
+            step_started=step_started,
+            step_finished=len(self.actions),
+            decision=copy.deepcopy(decision),
+            tool_call_id=result.get('tool_call_id'),
+            result=dict(
+                status=result.get('status'),
+                interrupted_status=result.get('interrupted_status'),
+                reason=result.get('reason'),
+                executed_actions=result.get('executed_actions'),
+                executed_motion=copy.deepcopy(
+                    result.get('executed_motion',[])),
+                end_observation_id=result.get('end_observation_id'),
+                blocked_at=copy.deepcopy(result.get('blocked_at')),
+                motion_alert=copy.deepcopy(result.get('motion_alert')),
+                observation_summary=result.get('observation_summary'),
+                navigation_suggestion=result.get('navigation_suggestion'),
+                evidence_observation_ids=copy.deepcopy(
+                    result.get('evidence_observation_ids',[]))))
+        self.navigation_turns.append(item)
+        return item
 
     def note_observation_evidence(self, identifiers, objective=''):
         """Link genuine VLM checkpoints to Memory, not to task completion."""
@@ -446,6 +512,7 @@ class MemoryRecords:
             historical_scenes=self.historical_scenes,
             scene_history=self.scene_history,
             observation_searches=copy.deepcopy(self.observation_searches),
+            navigation_turns=copy.deepcopy(self.navigation_turns),
             visual_changes=self.visual_changes,
             observations=self.observations,
             actions=self.actions,
