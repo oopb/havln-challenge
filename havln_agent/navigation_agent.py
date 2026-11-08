@@ -185,29 +185,34 @@ class NavigationAgent:
                     if (array_hash(historical.rgb)!=item.get('rgb_hash')
                             or array_hash(historical.depth)!=item.get('depth_hash')):
                         continue
-                    # Attached text index matches exactly the order of
-                    # serialized image_url fields in the wire request.
-                    pos=len(images)
-                    images.extend([
+                    # Prepare the WHOLE pair and its provenance before
+                    # committing images to the request. If a sparse archive
+                    # frame is malformed, no dangling image index remains.
+                    history_pose=item.get('pose') or {}
+                    h=history_pose.get('heading')
+                    if not isinstance(h,(int,float)) or not math.isfinite(h):
+                        continue
+                    history_heading=round(math.degrees(h)%360,2)
+                    encoded_pair=[
                         image_url(historical,max_edge=640),
                         depth_image_url(historical,r.camera,max_edge=640,
-                                        display_max_m=5.0)])
-                    history_pose=item.get('pose') or {}
+                                        display_max_m=5.0)]
+                    pos=len(images)
+                    images.extend(encoded_pair)
                     for index,kind in ((pos,'historical_RGB'),
                                        (pos+1,'historical_Depth')):
                         manifest.append(dict(
                             image_index=index,kind=kind,
                             observation_id=identifier,
                             source_action_step=item.get('step'),
-                            source_heading_deg=round(math.degrees(
-                                history_pose.get('heading',0))%360,2),
+                            source_heading_deg=history_heading,
                             source_pitch_deg=history_pose.get('pitch_deg'),
                             source_stance_id=history_pose.get('stance_id'),
                             selection_reason=descriptor['selection_reason'],
                             current_sensor_frame=False,
                             historical_only_not_live_clearance=True,
                             physical_revisit_not_verified=True))
-                except (KeyError,OSError,ValueError,TypeError):
+                except (KeyError,OSError,ValueError,TypeError,AttributeError):
                     # A sparse diagnostic archive must not crash live nav.
                     continue
             context['history_media']=dict(
