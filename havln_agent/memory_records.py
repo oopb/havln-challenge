@@ -135,7 +135,15 @@ class MemoryRecords:
                 viewpoint_generation=context_pose.get('viewpoint_generation'),
                 stance_id=context_pose.get('stance_id'),
                 direction_is_camera_relative_at_source=True)
-            if anchor!=task.navigation_intent_anchor:
+            # Repeating the EXACT same free-text intent after movement
+            # is not new grounding: it may be the stale "slightly right"
+            # sentence copied forward verbatim. Only a genuinely revised
+            # intent creates a new source binding; an unchanged phrase
+            # retains its ORIGINAL camera reference until replaced.
+            novel_intent=(
+                task.navigation_intent!=previous['navigation_intent']
+                or not task.navigation_intent_anchor)
+            if novel_intent and anchor!=task.navigation_intent_anchor:
                 task.navigation_intent_anchor=anchor
                 changed=True
         new_refs=[]
