@@ -3,44 +3,65 @@
 import math
 import time
 
-from .spatial import angle_delta, relative_pose_error
+from .spatial import angle_delta
 
 
 class LocalMotionController:
+    """Action-receipt orientation and conservative physical-stance identity.
+
+    No RGB-D translational registration feeds the navigation controller.
+    x/y/z remain neutral, explicitly INVALID legacy compatibility fields;
+    no caller may use them as coordinates, distance, route completion or
+    collision evidence. Each executed MOVE_FORWARD starts a new stance epoch,
+    even if the images are byte-identical: conservative separation is safer
+    than mistakenly reusing a previous camera scan at a changed location.
+    """
+
     def __init__(self, camera):
         self.camera = camera
-        self.x, self.y, self.z, self.heading = 0., 0., 0., 0.
-        self.target = None
-        self.position_uncertainty = .05
-        self.motion_error_total, self.motion_epoch, self.local_reference = 0., 0, 0
-        self.pitch_deg = 0.0
-        # A failed RGB-D registration cannot be repaired by assuming an action
-        # moved the robot 0.25m. It invalidates the old global-ish chain, but a
-        # fresh public RGB-D image can anchor NEW local relative waypoints.
-        self.local_anchor_observation_id = None
-        self.global_chain_continuous = True
-        # Command receipts are independent of optional RGB-D translation fitting.
-        # A changed post-action view starts a new observed stance; failed
-        # registration alone never resets a waypoint or its action budget.
-        self.forward_actions_attempted = 0
-        self.unknown_forward_actions = 0
+        # Legacy numeric attributes for code that still serializes a pose.
+        # They are never integrated, and pose marks them INVALID.
+        self.x, self.y, self.z = 0., 0., 0.
+        self.heading, self.pitch_deg = 0., 0.
+        self.target = None  # active path ID, NOT an estimated x/z endpoint
+        self.motion_epoch = 0
         self.viewpoint_generation = 0
+        self.forward_actions_attempted = 0
+        self.forward_actions_with_frame_change = 0
+        self.forward_stall_actions = 0
+        # Kept as a descriptive compatibility count, not a registration
+        # failure or a control-flow gate: ALL translation is unmeasured.
+        self.unknown_forward_actions = 0
+        self.global_chain_continuous = False
+        self.position_uncertainty = None
+        self.motion_error_total = None
+        self.local_reference = 0
+        self.local_anchor_observation_id = None
 
     def pose(self):
-        return dict(x=self.x, y=self.y, z=self.z, heading=self.heading, pitch_deg=self.pitch_deg,
-            source='optional_rgbd_translation_and_commanded_yaw',
-            confidence=('estimated' if self.global_chain_continuous else 'action_only_unlocalized'),
-            position_uncertainty=self.position_uncertainty, local_reference=self.local_reference,
-            motion_error_total=self.motion_error_total, motion_epoch=self.motion_epoch,
-            displacement_verified=False, uncertainty_source='registration_residual_not_ground_truth',
+        return dict(
+            x=self.x, y=self.y, z=self.z,
+            heading=self.heading, pitch_deg=self.pitch_deg,
+            source='commanded_yaw_pitch_and_public_action_receipts',
+            confidence='action_only_no_metric_localization',
+            position_uncertainty=None, local_reference=self.local_reference,
+            motion_error_total=None, motion_epoch=self.motion_epoch,
+            displacement_verified=False,
+            uncertainty_source='metric_translation_not_computed',
             forward_actions_attempted=self.forward_actions_attempted,
+            forward_actions_with_frame_change=self.forward_actions_with_frame_change,
+            forward_stall_actions=self.forward_stall_actions,
             unknown_forward_actions=self.unknown_forward_actions,
             viewpoint_generation=self.viewpoint_generation,
-            position_coordinates_valid=self.global_chain_continuous,
-            global_chain_continuous=self.global_chain_continuous,
-            local_anchor_observation_id=self.local_anchor_observation_id,
-            coordinate_scope=('episode_relative' if self.global_chain_continuous else
-                              'action_only_after_unregistered_translation'))
+            stance_id='%d:%d' % (self.motion_epoch,self.viewpoint_generation),
+            stance_identity_source='executed_forward_action_receipts',
+            position_coordinates_valid=False,
+            metric_position_valid=False,
+            metric_position=None,
+            legacy_xyz_are_placeholders=True,
+            global_chain_continuous=False,
+            local_anchor_observation_id=None,
+            coordinate_scope='action_stance_only_without_metric_xyz')
 
     def accept_feedback(self, action, measurement):
         if action == 'TURN_LEFT':
@@ -48,56 +69,31 @@ class LocalMotionController:
         elif action == 'TURN_RIGHT':
             self.heading -= math.radians(self.camera.turn_angle)
         elif action == 'MOVE_FORWARD':
+            # Increment ONLY when Habitat actually executed the atomic action.
+            # A Depth preflight veto never invokes accept_feedback.
             self.forward_actions_attempted += 1
-            # Only a changed public frame supports treating the new view as
-            # a different physical stance. Neither a receipt nor a command
-            # certifies the nominal 0.25m of movement.
-            if not measurement or measurement['status'] != 'ESTIMATED':
-                # Unregistered but visibly changed steps require a new
-                # observation stance. Registered motion already changes x/z
-                # naturally and should not fragment place memory every step.
-                if measurement and measurement.get('observed_frame_change',False):
-                    self.viewpoint_generation += 1
-                self.unknown_forward_actions += 1
-                self.global_chain_continuous = False
-                # Preserve metric uncertainty as UNKNOWN (via pose confidence)
-                # rather than adding an invented 0.25m uncertainty or
-                # invalidating the model-selected route with a new motion_epoch.
-                return
-            motion=measurement['translation_m']
-            x,z=motion['x_right'],motion['z_forward']
-            self.x += x*math.cos(self.heading)-z*math.sin(self.heading)
-            self.z += x*math.sin(self.heading)+z*math.cos(self.heading)
-            self.y += motion['y_up']
-            error=measurement['uncertainty_m']
-            self.position_uncertainty += error
-            self.motion_error_total += error
-            self.local_reference += 1
+            self.viewpoint_generation += 1
+            self.unknown_forward_actions += 1
+            changed=bool(measurement and
+                         measurement.get('observed_frame_change',False))
+            if changed:
+                self.forward_actions_with_frame_change += 1
+            else:
+                self.forward_stall_actions += 1
+            # Do not integrate, reanchor, extrapolate or mark x/y/z valid,
+            # even if a legacy caller passes a numerical measurement.
         self.heading=(self.heading+math.pi)%(2*math.pi)-math.pi
 
     def anchor_relative_frame(self, observation_id):
-        """Start a NEW relative waypoint chain from actual post-action RGB-D.
+        """Compatibility hook: local RGB-D frames are indexed by stance ID.
 
-        No missing translation is inferred. Old global coordinates remain
-        numerically present for historical bookkeeping, but are invalid across
-        motion_epoch. Within this new chain only *deltas* to subsequent live
-        frames are meaningful.
+        No metric coordinate chain exists to reanchor.
         """
-        if self.global_chain_continuous or not observation_id:
-            return False
-        self.local_anchor_observation_id = observation_id
-        return True
+        return False
 
     def next_action(self):
-        if self.target is None:
-            return None
-        dx,dz=self.target[0]-self.x,self.target[1]-self.z
-        if math.hypot(dx,dz) < self.camera.forward_step*.6:
-            return None
-        angle=angle_delta(math.atan2(-dx,dz),self.heading)
-        if abs(angle)>math.radians(self.camera.turn_angle)/2:
-            return 'TURN_LEFT' if angle>0 else 'TURN_RIGHT'
-        return 'MOVE_FORWARD'
+        """No hidden metric waypoint steering: use route_action instead."""
+        return None
 
     @staticmethod
     def needs_view(reason, **extra):
@@ -128,17 +124,16 @@ class LocalMotionController:
         r = runtime
         source, pose = path['source'], self.pose()
         if not resume:
-            # Saved candidate waypoints from a different visual stance should
-            # not be silently reused. An active finite route is still resumable
-            # even if several RGB-D registrations failed mid-command.
-            start_stance = source['pose'].get('viewpoint_generation')
-            current_stance = pose.get('viewpoint_generation')
-            if (start_stance is not None and current_stance is not None
-                    and start_stance != current_stance):
-                return dict(status='STALE_TARGET', reason='viewpoint_changed_since_waypoint_proposal')
-            if math.hypot(source['pose']['x']-pose['x'],
-                          source['pose']['z']-pose['z']) > self.camera.forward_step / 2:
-                return dict(status='STALE_TARGET', reason='path_start_position_changed')
+            # A historical candidate is only reusable before any intervening
+            # executed forward. No comparison of fake x/z placeholders.
+            source_pose=source['pose']
+            if (source_pose.get('motion_epoch') != pose.get('motion_epoch')
+                    or source_pose.get('viewpoint_generation') !=
+                       pose.get('viewpoint_generation')):
+                return dict(status='STALE_TARGET',
+                            reason='executed_forward_since_waypoint_proposal')
+            # resume=True is the SAME actively executing model-chosen route;
+            # its finite forward horizon is counted from action receipts.
         r.refresh()
         if time.monotonic() - r.observation.captured_at > r.config['max_depth_age_seconds']:
             return self.needs_view('fresh_rgbd_required')
@@ -152,9 +147,7 @@ class LocalMotionController:
         forwards_done = attempt.get('forward_actions', 0) if same_path else 0
         action = self.route_action(path, forwards_done, forward_horizon)
         target_heading = source['pose']['heading'] + path['angle']
-        endpoint = self.target if resume and self.target is not None else (
-            source['pose']['x']-math.sin(target_heading)*path['distance'],
-            source['pose']['z']+math.cos(target_heading)*path['distance'])
+        endpoint = None  # No metric position/endpoint can be inferred from receipts.
         turn_only = action in ('TURN_LEFT','TURN_RIGHT')
         remaining_actions = max(0, forward_horizon - forwards_done)
         diagnostic = dict(scope='model_requested_geometry_only',
@@ -179,7 +172,7 @@ class LocalMotionController:
         result = dict(status='OK',
             candidate=dict(path, angle=angle_delta(target_heading, pose['heading']),
                            distance=remaining_actions*self.camera.forward_step),
-            original_target=list(endpoint), executable_segment=segment,
+            original_target=None, executable_segment=segment,
             validation=validation)
         path['execution_status'] = 'REVALIDATED'
         r.memory.note_validation(path, result)
