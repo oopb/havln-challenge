@@ -1,3 +1,37 @@
+# v15 — remove direction_intent and restore model-owned navigation turns
+
+In eval-batch4-29, the navigator made 0 forward actions and stopped after
+malformed responses repeatedly nested `direction_intent` inside `args`.
+That wrapper was a v13 patch for a contradictory visual description/turn,
+not evidence that a target was correctly localized.
+
+- Model output is again a single `{"tool": "...", "args": {...}}` object,
+  with optional progress and uncertainty fields. There is no structured
+  direction-intent mode, target bounding-box requirement, or Python semantic
+  direction check. Tool arguments still use legal LEFT/RIGHT/NONE and
+  nonnegative magnitudes; the executor checks physical action legality.
+- Current RGB, at most 3 source-verified historical RGB images, v12
+  bounded mission evidence, pre-decision Depth, and source-linked stale
+  navigation-intent handling remain as in v14.
+- NavigationAgent chooses the route, observation and turn autonomously.
+  A mismatch between a visual phrase and a turn is a model decision issue
+  to inspect in trajectory diagnostics, not a reason to require a second
+  schema envelope that can abort an otherwise valid navigation command.
+- Scheduler no longer forwards the removed field in tool bindings, and
+  internal episode-history projections no longer emit it. Stored older
+  episode files can still contain their historical v13 decisions.
+- No motion executor, Depth policy, forced direction rules or metric
+  odometry changes. This change addresses schema compliance; it does not
+  by itself guarantee useful forward motion or external API reliability.
+
+`PROMPT_VERSION=havln-agent-v15-simple-navigation-tool-protocol`.
+
+Run `python -m compileall -q havln_agent` and
+`python -m unittest discover -s tests -v` locally; compare next
+`eval-batch4-30` with the same episode and 128-step budget.
+
+---
+
 # v14 — rollback NavigationAgent input to v12 + selected historical RGB
 
 This revision **reverts only the model-facing NavigationAgent INPUT**, not

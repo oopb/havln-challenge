@@ -9,7 +9,6 @@ from .api_client import APIError
 from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
-from .heading import box_center_bearing
 from .heading import signed_turn
 
 MISSION_PROMPT=(
@@ -32,13 +31,12 @@ MISSION_PROMPT=(
     'source observation and camera heading; progress.prior_navigation_intent '
     'explicitly marks freshness. After turning or moving, reevaluate any '
     'old direction against the CURRENT RGB, pose and live Depth preflight. '
-    'For ALIGN_VISIBLE_TARGET you MUST ground a target box in the CURRENT '
-    'RGB image, then choose the turn direction that moves its center toward '
-    'the CURRENT optical axis. If you intentionally explore elsewhere '
-    '(for example to bypass an obstacle), declare EXPLORE_ALTERNATIVE and '
-    'explain the evidence rather than saying you are aligning the other way. '
-    'Do not invent a target box. With no visible localized target, choose '
-    'an explicit exploratory mode or ask ObservationAgent for evidence. '
+    'Choose each turn from CURRENT RGB, recent tool evidence and the '
+    'task goal. A past left/right phrase is not a current direction. '
+    'When an opening or route is visible, select the useful heading '
+    'yourself; never turn away from your stated target by accident. '
+    'If no route is certain, choose a short informed exploration or '
+    'ask ObservationAgent for specific evidence. '
     'The current front_depth_preflight is calibrated, live, directional '
     'Depth evidence; BLOCKED confirms a measured front obstruction, '
     'UNKNOWN is not a veto, CLEAR does not guarantee physical passage. '
@@ -59,55 +57,6 @@ MISSION_PROMPT=(
     'a rejected LOOK is recoverable, not mission failure. '
     'Use exactly one registered tool and obey its output protocol.'
 )
-
-def validate_direction_intent(value, current_observation_id,
-                              camera_hfov, turn_step_deg):
-    """Check MODEL-DECLARED grounding consistency, not semantic policy.
-
-    This cannot prove a visual object exists or that a path is walkable.
-    If a model says ALIGN a specific CURRENT image box, its turn cannot
-    point away from that box. EXPLORE_ALTERNATIVE remains model-autonomous.
-    Never silently flip LEFT to RIGHT or infer intent from English words.
-    """
-    if value.get('tool') not in ('turn_and_observe','navigate_relative'):
-        return
-    binding=value.get('direction_intent')
-    if not isinstance(binding,dict):
-        raise APIError('navigation_direction_intent_required_for_motion',
-                       category='structured_field')
-    mode=binding.get('mode')
-    if mode!='ALIGN_VISIBLE_TARGET':
-        return
-    if binding.get('target_observation_id')!=current_observation_id:
-        raise APIError(
-            'align_target_requires_current_RGB_observation_id_not_historical',
-            category='structured_field')
-    box=binding.get('target_box_xyxy_norm')
-    if box is None:
-        raise APIError(
-            'align_visible_target_requires_grounded_current_RGB_box',
-            category='structured_field')
-    try:
-        offset=box_center_bearing(box,camera_hfov)
-    except (ValueError,TypeError) as error:
-        raise APIError('align_target_invalid_normalized_box:'+str(error),
-                       category='structured_field') from None
-    args=value['args']
-    signed=signed_turn(args['turn_direction'],args['turn_degrees'])
-    # Sub-actuator offsets are genuinely ambiguous for a 15-degree robot
-    # and should not be treated as a hard steering restriction.
-    if abs(offset)>=max(2.,turn_step_deg*.5) and signed*offset<0:
-        expected='LEFT' if offset>0 else 'RIGHT'
-        raise APIError(
-            'direction_intent_turn_away_from_current_RGB_target:'
-            'target_observation_id='+str(current_observation_id)+
-            ',box_center_offset_deg='+str(offset)+
-            ',align_direction='+expected+
-            ',commanded='+args['turn_direction']+
-            '; either align toward target OR explicitly choose '
-            'EXPLORE_ALTERNATIVE with a reason',
-            category='structured_field')
-
 
 class NavigationAgent:
     def __init__(self,runtime):
@@ -241,9 +190,6 @@ class NavigationAgent:
                     signed_turn(args['turn_direction'],args['turn_degrees'])
                 except ValueError as error:
                     raise APIError(str(error),category='structured_field') from None
-                validate_direction_intent(
-                    value,(r.memory.current or {}).get('observation_id'),
-                    r.camera.hfov,r.camera.turn_angle)
         return r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
             schema,validate=validate,image_url=images,

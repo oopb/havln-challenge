@@ -12,11 +12,11 @@ from jsonschema import Draft7Validator
 
 from havln_agent.api_client import APIError
 from havln_agent.contexts import compact_navigation_context, navigation_context
-from havln_agent.contracts import navigation_schema, registry
+from havln_agent.contracts import (navigation_schema, navigation_envelope,
+                                   compact_navigation_protocol, registry)
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.mission_history import mission_evidence
-from havln_agent.navigation_agent import (
-    NavigationAgent, MISSION_PROMPT, validate_direction_intent)
+from havln_agent.navigation_agent import NavigationAgent, MISSION_PROMPT
 from havln_agent.navigation_history import (
     navigation_episode_history, navigation_visual_anchors)
 from havln_agent.perception import Camera
@@ -47,16 +47,11 @@ def observation(identifier,step,heading=0,generation=0):
         revisit_matches=[],revisited_static_view=False)
 
 
-def motion_decision(direction,mode,source,box=None):
+def motion_decision(direction):
     return dict(
         tool='turn_and_observe',
         args=dict(turn_direction=direction,turn_degrees=30,
-                  look='none',purpose='Inspect an opening beside the person.'),
-        direction_intent=dict(
-            mode=mode,target_observation_id=source,
-            target_box_xyxy_norm=box,
-            reason='Compare the declared target direction with the camera.',
-            expected_observation='Learn if a passage is accessible.'))
+                  look='none',purpose='Inspect an opening beside the person.'))
 
 
 class CompleteHistoryTests(unittest.TestCase):
@@ -94,9 +89,6 @@ class CompleteHistoryTests(unittest.TestCase):
         chosen=dict(tool='navigate_relative',
                     args=dict(turn_direction='NONE',turn_degrees=0,
                               distance_m=.25),
-                    direction_intent=dict(
-                        mode='CONTINUE_CURRENT_ROUTE',
-                        reason='Continue toward current opening.'),
                     navigation_intent='Follow the arch slightly right.')
         m.note_navigation_turn(chosen,dict(
             tool_call_id='tool_00',status='ACTIONS_COMPLETED',
@@ -118,9 +110,7 @@ class CompleteHistoryTests(unittest.TestCase):
                          sorted(v['step'] for v in timeline['timeline']))
         self.assertEqual(
             timeline['timeline'][0]['source_observation_id'],'obs_0000')
-        self.assertEqual(
-            timeline['timeline'][0]['direction_intent']['mode'],
-            'CONTINUE_CURRENT_ROUTE')
+        self.assertNotIn('direction_intent',timeline['timeline'][0])
         self.assertEqual(
             timeline['rgbd_observation_catalog'][0]['observation_id'],
             'obs_0000')
@@ -212,56 +202,39 @@ class CompleteHistoryTests(unittest.TestCase):
         self.assertIn('obs_0000',[x['observation_id'] for x in anchors])
 
 
-class GroundedTurnContractTests(unittest.TestCase):
-    def test_obs95_left_arch_right_turn_rejected_but_alternative_allowed(self):
-        bad=motion_decision(
-            'RIGHT','ALIGN_VISIBLE_TARGET','obs_0095',
-            [.1,.25,.3,.75])
-        with self.assertRaisesRegex(
-                APIError,'direction_intent_turn_away_from_current_RGB_target'):
-            validate_direction_intent(bad,'obs_0095',90,15)
-        corrected=motion_decision(
-            'LEFT','ALIGN_VISIBLE_TARGET','obs_0095',
-            [.1,.25,.3,.75])
-        validate_direction_intent(corrected,'obs_0095',90,15)
-        alternative=motion_decision(
-            'RIGHT','EXPLORE_ALTERNATIVE','obs_0095',
-            [.1,.25,.3,.75])
-        validate_direction_intent(alternative,'obs_0095',90,15)
-
-    def test_historical_box_not_accepted_for_current_alignment(self):
-        bad=motion_decision(
-            'LEFT','ALIGN_VISIBLE_TARGET','obs_0091',
-            [.1,.2,.3,.7])
-        with self.assertRaisesRegex(
-                APIError,'align_target_requires_current_RGB_observation_id'):
-            validate_direction_intent(bad,'obs_0095',90,15)
-
-    def test_align_without_box_is_rejected_not_autofilled(self):
-        bad=motion_decision('LEFT','ALIGN_VISIBLE_TARGET','obs_0095',None)
-        with self.assertRaisesRegex(
-                APIError,'align_visible_target_requires_grounded_current_RGB_box'):
-            validate_direction_intent(bad,'obs_0095',90,15)
-
-    def test_near_center_box_not_an_arbitrary_hard_turn_veto(self):
-        turn=motion_decision(
-            'RIGHT','ALIGN_VISIBLE_TARGET','obs_0095',
-            [.48,.2,.50,.8])
-        validate_direction_intent(turn,'obs_0095',90,15)
-
-    def test_registered_schema_requires_intent_only_for_motion(self):
+class SimpleNavigationContractTests(unittest.TestCase):
+    def test_tool_and_args_are_sufficient_for_turns_and_moves(self):
         specs=registry(camera(),10)
         schema=navigation_schema(specs)
+        envelope=navigation_envelope(specs)
         Draft7Validator.check_schema(schema)
-        base=dict(tool='navigate_relative',args=dict(
-            turn_direction='LEFT',turn_degrees=15,distance_m=.25))
-        self.assertFalse(Draft7Validator(schema).is_valid(base))
-        base['direction_intent']=dict(
-            mode='EXPLORE_ALTERNATIVE',reason='View a new corridor')
-        self.assertTrue(Draft7Validator(schema).is_valid(base))
+        for direction in ('LEFT','RIGHT'):
+            decision=motion_decision(direction)
+            self.assertTrue(Draft7Validator(schema).is_valid(decision))
+            self.assertTrue(Draft7Validator(envelope).is_valid(decision))
+        move=dict(tool='navigate_relative',args=dict(
+            turn_direction='NONE',turn_degrees=0,distance_m=.25))
+        self.assertTrue(Draft7Validator(schema).is_valid(move))
         self.assertTrue(Draft7Validator(schema).is_valid(dict(
-            tool='observe_for_goal',args=dict(
-                objective='Find a visible hall entrance'))))
+            tool='observe_for_goal',
+            args=dict(objective='Find a visible hall entrance'))))
+        # The removed field must not be part of the output protocol at
+        # either level. Old responses must regenerate as tool + args.
+        extra=motion_decision('RIGHT')
+        extra['direction_intent']=dict(mode='EXPLORE_ALTERNATIVE',
+                                      reason='Redundant wrapper')
+        self.assertFalse(Draft7Validator(schema).is_valid(extra))
+        self.assertFalse(Draft7Validator(envelope).is_valid(extra))
+        nested=motion_decision('RIGHT')
+        nested['args']['direction_intent']=extra['direction_intent']
+        self.assertFalse(Draft7Validator(schema).is_valid(nested))
+
+    def test_prompt_protocol_is_simple(self):
+        protocol=compact_navigation_protocol(registry(camera(),10))
+        self.assertIn('top-level tool and args',protocol)
+        self.assertNotIn('direction_intent',protocol)
+        self.assertNotIn('ALIGN_VISIBLE_TARGET',MISSION_PROMPT)
+        self.assertNotIn('EXPLORE_ALTERNATIVE',MISSION_PROMPT)
 
     def test_missing_archived_frames_keep_bounded_v12_memory(self):
         r,_=test_runtime()
@@ -321,15 +294,14 @@ class GroundedTurnContractTests(unittest.TestCase):
                          len(images)-1)
         self.assertLess(len(MISSION_PROMPT),5000)
         validate=call.kwargs['validate']
-        old_id=ctx['current_rgb']['observation_id']
-        with self.assertRaisesRegex(
-                APIError,'direction_intent_turn_away_from_current_RGB_target'):
-            validate(motion_decision(
-                'RIGHT','ALIGN_VISIBLE_TARGET',old_id,
-                [.1,.3,.3,.7]))
-        validate(motion_decision(
-            'RIGHT','EXPLORE_ALTERNATIVE',old_id,None))
-
+        # A robot may turn either direction according to model judgment.
+        # No visual-box or semantic-direction gate rejects valid commands.
+        validate(motion_decision('RIGHT'))
+        validate(motion_decision('LEFT'))
+        bad=motion_decision('LEFT')
+        bad['args']['turn_degrees']=-30
+        with self.assertRaises(APIError):
+            validate(bad)
 
 if __name__=='__main__':
     unittest.main()

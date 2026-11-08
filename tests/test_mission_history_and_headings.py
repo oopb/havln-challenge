@@ -47,9 +47,7 @@ class DirectionProtocol(unittest.TestCase):
         Draft7Validator.check_schema(schema)
         self.assertTrue(Draft7Validator(schema).is_valid(dict(
             tool='navigate_relative',args=dict(
-                turn_direction='RIGHT',turn_degrees=30,distance_m=.5),
-            direction_intent=dict(mode='EXPLORE_ALTERNATIVE',
-                reason='Investigate corridor beyond current view.'))))
+                turn_direction='RIGHT',turn_degrees=30,distance_m=.5))))
         self.assertFalse(Draft7Validator(schema).is_valid(dict(
             tool='navigate_relative',args=dict(turn_deg=-30,distance_m=.5))))
         self.assertTrue(Draft7Validator(reg['turn_and_observe']['parameters']).is_valid(

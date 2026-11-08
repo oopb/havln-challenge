@@ -95,23 +95,6 @@ def registry(camera, max_actions, pitch_deg=0.):
                         'turn_and_observe','observe_for_goal') else 'READ_ONLY'))
         for name,(desc,params) in specs.items()}
 
-# The model must distinguish aiming at a visible current-frame target
-# from an intentional alternative search. Python checks only declared
-# source/coordinate consistency; it never chooses or reverses a route.
-_DIRECTION_INTENT=_optional(dict(
-    mode=dict(enum=[
-        'ALIGN_VISIBLE_TARGET','EXPLORE_ALTERNATIVE',
-        'FOLLOW_CURRENT_EVIDENCE','REORIENT_USING_HISTORY',
-        'CONTINUE_CURRENT_ROUTE']),
-    target_observation_id=dict(type=['string','null']),
-    target_box_xyxy_norm=dict(
-        anyOf=[dict(type='null'),dict(type='array',minItems=4,maxItems=4,
-            items=dict(type='number',minimum=0,maximum=1))]),
-    target_label=dict(type='string',maxLength=160),
-    reason=dict(type='string',minLength=1,maxLength=550),
-    expected_observation=dict(type='string',maxLength=300)),
-    ('mode','reason'))
-
 _PROGRESS=dict(
     progress_narrative=dict(type='string',maxLength=1200),
     navigation_intent=dict(type='string',maxLength=700),
@@ -123,24 +106,16 @@ _PROGRESS=dict(
 def navigation_schema(tools):
     branches=[]
     for name,spec in tools.items():
-        moving=name in ('navigate_relative','turn_and_observe')
-        branch=_optional(dict(
-            tool=dict(const=name),
-            args=spec['parameters'],
-            **(dict(direction_intent=copy.deepcopy(_DIRECTION_INTENT))
-               if moving else {}),
-            **copy.deepcopy(_PROGRESS)),
-            ('tool','args','direction_intent') if moving
-            else ('tool','args'))
+        branch=_optional(dict(tool=dict(const=name),
+                              args=spec['parameters'],**copy.deepcopy(_PROGRESS)),
+                         ('tool','args'))
         branch['description']=spec['description']
         branches.append(branch)
     return dict(oneOf=branches)
 
 def navigation_envelope(tools):
     return _optional(dict(tool=dict(enum=list(tools)),
-                          args=dict(type='object'),
-                          direction_intent=copy.deepcopy(_DIRECTION_INTENT),
-                          **copy.deepcopy(_PROGRESS)),
+                          args=dict(type='object'),**copy.deepcopy(_PROGRESS)),
                      ('tool','args'))
 
 def compact_navigation_protocol(tools):
@@ -157,16 +132,14 @@ def compact_navigation_protocol(tools):
         req=set(spec['parameters'].get('required',[]))
         result.append(name+'('+', '.join(k+('' if k in req else '?')+':'+signature(v)
             for k,v in args.items())+')')
-    return ('Return exactly one JSON tool call. For navigate_relative '
-        'and turn_and_observe, direction_intent is REQUIRED with mode and '
-        'reason. ALIGN_VISIBLE_TARGET additionally requires a current '
-        'target_observation_id and normalized target_box_xyxy_norm, and '
-        'the turn must aim toward the BOX CENTER relative to CURRENT camera. '
-        'EXPLORE_ALTERNATIVE may deliberately turn away from a visible '
-        'target; explain why in reason. Historical left/right text is NOT '
-        'a current-camera bearing. Action directions: LEFT positive yaw, '
-        'RIGHT negative yaw, NONE 0; turn_degrees is nonnegative. '
-        'Optional progress fields are hypotheses, not sensor facts. '
+    return ('Return exactly one JSON object with top-level tool and args. '
+        'Put tool parameters directly inside args, not in another wrapper. '
+        'Optionally include progress_narrative, navigation_intent, '
+        'uncertainties and evidence_observation_ids at top level. '
+        'Historical left/right text is NOT a current camera bearing. '
+        'Action directions: LEFT positive yaw, RIGHT negative yaw, NONE 0; '
+        'turn_degrees is nonnegative. Optional progress fields are '
+        'model assessments, not sensor proof. '
         'Tools: '+'; '.join(result))
 
 def tool_result_schema():
