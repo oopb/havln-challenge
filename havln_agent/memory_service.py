@@ -284,7 +284,6 @@ class MemoryService(MemoryRecords):
             if action.get('action')!='MOVE_FORWARD':
                 continue
             feedback=action.get('result') or {}
-            m=feedback.get('rgbd_motion') or {}
             motions.append(dict(
                 step=action.get('step'),
                 observation_id=feedback.get('observation_after'),
