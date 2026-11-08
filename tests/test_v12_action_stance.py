@@ -168,6 +168,45 @@ class ActionStanceV12(unittest.TestCase):
         self.assertFalse(result['target_reached'])
         self.assertEqual(r.motion_controller.viewpoint_generation,2)
 
+    def test_active_route_can_resume_across_forward_stance_generation(self):
+        # A finite model-authored route can be partially executed before
+        # budget exhaustion. Synthetic budget extension verifies the resume
+        # branch without falsely projecting a metric endpoint.
+        r,actions=test_runtime(changed_forwards=True)
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        r.config['max_steps']=2
+        partial=r._navigate_relative('NONE',0,.5)
+        self.assertEqual(partial['status'],'PARTIAL')
+        self.assertEqual(actions,['MOVE_FORWARD'])
+        waypoint_id=partial['waypoint_id']
+        self.assertEqual(r.active_waypoint_id,waypoint_id)
+        self.assertEqual(r.motion_controller.target,waypoint_id)
+        self.assertEqual(r.motion_controller.viewpoint_generation,1)
+        r.config['max_steps']=88
+        done=r._navigate_local(waypoint_id)
+        self.assertEqual(done['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(r.motion_controller.viewpoint_generation,2)
+        self.assertIsNone(r.motion_controller.target)
+        self.assertIsNone(done['remaining_path']['original_endpoint_xz_m'])
+        self.assertIsNone(done['original_target'])
+
+    def test_saved_candidate_stales_after_forward_receipt_not_after_turn(self):
+        r,_=test_runtime(changed_forwards=True)
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        source=r.motion_controller.pose()
+        path=dict(id='sample',angle=0.,distance=.25,
+                  source=dict(pose=source))
+        r._step('TURN_RIGHT')
+        before=r.motion_controller.validate(r,path)
+        self.assertEqual(before['status'],'OK')
+        r._step('MOVE_FORWARD')
+        stale=r.motion_controller.validate(r,path)
+        self.assertEqual(stale['status'],'STALE_TARGET')
+        self.assertEqual(stale['reason'],
+                         'executed_forward_since_waypoint_proposal')
+        self.assertEqual(r.motion_controller.viewpoint_generation,1)
+
     def test_source_linked_action_receipts_not_metric_motion_verification(self):
         r,_=test_runtime(changed_forwards=True)
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
