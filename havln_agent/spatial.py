@@ -30,49 +30,90 @@ def validity(source, current, now, max_age):
 
 
 def relative_pose_error(source, pose):
-    """Shared odometry prefixes cancel only within one explicitly known chain."""
-    if all('motion_error_total' in p and 'motion_epoch' in p for p in (source, pose)):
-        if (source['motion_epoch'] != pose['motion_epoch']
-                or source.get('unknown_forward_actions',0) != pose.get('unknown_forward_actions',0)):
+    """Metric odometry uncertainty is unavailable in action-stance mode.
+
+    Relative object geometry can still be transformed by commanded yaw
+    when no forward action occurred between the source and current view.
+    """
+    if (source.get('position_coordinates_valid') is False or
+            pose.get('position_coordinates_valid') is False):
+        if (source.get('motion_epoch')==pose.get('motion_epoch')
+                and source.get('viewpoint_generation')==
+                    pose.get('viewpoint_generation')
+                and 'viewpoint_generation' in source
+                and 'viewpoint_generation' in pose):
+            return 0.  # no *relative translation* occurred in this stance
+        return float('inf')
+    if all(isinstance(p.get('motion_error_total'),(int,float))
+           and 'motion_epoch' in p for p in (source,pose)):
+        if (source['motion_epoch']!=pose['motion_epoch'] or
+                source.get('unknown_forward_actions',0)!=
+                    pose.get('unknown_forward_actions',0)):
             return float('inf')
-        return abs(pose['motion_error_total'] - source['motion_error_total'])
-    return source.get('position_uncertainty', 0.05) + pose.get('position_uncertainty', 0.05)
+        return abs(pose['motion_error_total']-source['motion_error_total'])
+    return (source.get('position_uncertainty') or .05) + (
+        pose.get('position_uncertainty') or .05)
 
 
 def relative_goal(grounding, pose):
-    """Transform a visible point estimate; never turn it into certified terrain."""
-    point, source = grounding['position'], grounding['source']['pose']
-    region = 'target_point'
-    entry = grounding.get('entry', {})
-    # Do not replace the model-visible target with a category-specific
-    # entry point. Entry and other image regions are independent evidence
-    # hypotheses the model may select through direct motion tools.
-    if point['status'] != 'LOCALIZED':
-        return dict(status='UNKNOWN', requires_reconfirmation=True, reasons=['unlocalized_goal'])
-    h = source['heading']
-    dx = source['x'] + point['x_right'] * math.cos(h) - point['z_forward'] * math.sin(h) - pose['x']
-    dz = source['z'] + point['x_right'] * math.sin(h) + point['z_forward'] * math.cos(h) - pose['z']
-    x = dx * math.cos(pose['heading']) + dz * math.sin(pose['heading'])
-    z = -dx * math.sin(pose['heading']) + dz * math.cos(pose['heading'])
-    error = relative_pose_error(source, pose)
-    # An unknown motion interval invalidates the old anchor. Keep exported
-    # uncertainty finite; the reason below prevents its use for execution.
-    uncertainty = (error if math.isfinite(error) else source.get('position_uncertainty', .05)
-                   + pose.get('position_uncertainty', .05)) + max(.05, point.get('depth_spread_metres', 0)/2)
-    reasons = []
+    """Project a grounded point at a SAME STANCE; no fake x/z delta.
+
+    In action-only mode, camera yaw and source-local RGB-D target geometry
+    are sufficient for a local candidate bearing if no MOVE_FORWARD was
+    executed since grounding. Across generations the target MUST be
+    re-grounded; stale object coordinates cannot authorize a new route.
+    """
+    point=grounding['position']
+    source=grounding['source']['pose']
+    entry=grounding.get('entry',{})
+    region='target_point'
+    if point['status']!='LOCALIZED':
+        return dict(status='UNKNOWN',requires_reconfirmation=True,
+                    reasons=['unlocalized_goal'])
+    error=relative_pose_error(source,pose)
     if not math.isfinite(error):
-        reasons.append('unknown_motion_since_anchor')
-    if uncertainty > 0.5:
+        return dict(status='UNKNOWN',requires_reconfirmation=True,
+                    reasons=['executed_forward_since_target_source'],
+                    source_stance_reusable=False)
+    hs, hc=source['heading'],pose['heading']
+    if (source.get('position_coordinates_valid') is False or
+            pose.get('position_coordinates_valid') is False):
+        # Rotate target vector from its original RGB-D camera bearing into
+        # the current commanded heading, with NO translation estimate.
+        dx=(point['x_right']*math.cos(hs)
+            - point['z_forward']*math.sin(hs))
+        dz=(point['x_right']*math.sin(hs)
+            + point['z_forward']*math.cos(hs))
+        x=dx*math.cos(hc)+dz*math.sin(hc)
+        z=-dx*math.sin(hc)+dz*math.cos(hc)
+        uncertainty=max(.05,point.get('depth_spread_metres',0)/2)
+        source_label='same_action_stance_RGBD_target_and_commanded_yaw'
+    else:
+        dx=(source['x']+point['x_right']*math.cos(hs)
+            -point['z_forward']*math.sin(hs)-pose['x'])
+        dz=(source['z']+point['x_right']*math.sin(hs)
+            +point['z_forward']*math.cos(hs)-pose['z'])
+        x=dx*math.cos(hc)+dz*math.sin(hc)
+        z=-dx*math.sin(hc)+dz*math.cos(hc)
+        uncertainty=error+max(.05,point.get('depth_spread_metres',0)/2)
+        source_label='rgb_depth_and_valid_relative_odometry'
+    reasons=[]
+    if uncertainty>.5:
         reasons.append('spatial_uncertainty_too_large')
-    if grounding['semantic']['confidence'] == 'low':
+    if grounding['semantic']['confidence']=='low':
         reasons.append('low_semantic_confidence')
-    return dict(status='UNCERTAIN' if reasons else 'ESTIMATED', x_right_m=x, z_forward_m=z,
-                region=region,
-                bearing_deg=math.degrees(math.atan2(-x, z)), uncertainty_m=uncertainty,
-                uncertainty_kind='relative_odometry_chain_and_depth_spread_not_calibrated',
-                heading_uncertainty='NOT_CALIBRATED',
-                frame='current_robot_camera', source='rgb_depth_and_action_odometry',
-                requires_reconfirmation=bool(reasons), reasons=reasons)
+    return dict(
+        status='UNCERTAIN' if reasons else 'ESTIMATED',
+        x_right_m=x,z_forward_m=z,region=region,
+        bearing_deg=math.degrees(math.atan2(-x,z)),
+        uncertainty_m=uncertainty,
+        uncertainty_kind='target_depth_spread_not_global_position',
+        heading_uncertainty='NOT_CALIBRATED',
+        frame='current_robot_camera',
+        source=source_label,
+        metric_robot_position_known=False
+            if source_label.startswith('same_action') else True,
+        requires_reconfirmation=bool(reasons),reasons=reasons)
 
 
 def goal_estimate(grounding, memory, pose, now, max_age, static_max_age=300, human_max_age=2):
