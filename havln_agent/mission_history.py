@@ -19,7 +19,10 @@ def _view(record, observation):
                           math.degrees(pose.get('heading',0))%360),2),
         pitch_deg=record.get('pitch_deg',pose.get('pitch_deg')),
         motion_epoch=pose.get('motion_epoch'),
-        position_xz_m_est=[pose.get('x'),pose.get('z')],
+        position_xz_m_est=(
+            [pose.get('x'),pose.get('z')]
+            if pose.get('position_coordinates_valid') is not False
+            else None),
         observation_summary=(visual.get('observation_summary') or
                              visual.get('evidence') or '')[:300],
         navigation_suggestion=(visual.get('navigation_suggestion') or
@@ -112,7 +115,7 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
                 yaw,math.degrees(pose.get('heading',0))%360),
             observed_only=True)
     return dict(
-        scope='current_local_stance_same_motion_epoch_and_viewpoint',
+        scope='same_executed_forward_stance_not_metric_position',
         sampled_observations=samples,
         distinct_heading_pitch_views=len(unique),
         latest_distinct_views=list(unique.values())[:max_views],
@@ -330,7 +333,11 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             heading_deg=round(math.degrees(pose.get('heading',0))%360,2),
             pitch_deg=pose.get('pitch_deg'),
             motion_epoch=pose.get('motion_epoch'),
-            position_xz_m_est=[pose.get('x'),pose.get('z')],
+            position_xz_m_est=(
+                [pose.get('x'),pose.get('z')]
+                if pose.get('position_coordinates_valid') is not False
+                else None),
+            stance_id=pose.get('stance_id'),
             position_coordinates_valid=pose.get('position_coordinates_valid',True)),
         observation_tasks=searches,
         historical_frames=selected_history_frames(memory,current_id),
