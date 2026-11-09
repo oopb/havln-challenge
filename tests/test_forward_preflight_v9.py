@@ -195,7 +195,7 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertEqual(result['status'],'ACTIONS_COMPLETED')
         self.assertEqual(actions,['MOVE_FORWARD'])
         self.assertEqual(r.pitch_deg,-30)
-        self.assertEqual(result['forward_actions_executed'],1)
+        self.assertEqual(result['commanded_forward_actions'],1)
         self.assertFalse(any(a in ('LOOK_UP','LOOK_DOWN') for a in actions))
 
     def test_stall_is_not_silently_treated_as_collision(self):
