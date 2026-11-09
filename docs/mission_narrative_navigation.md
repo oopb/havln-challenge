@@ -808,3 +808,46 @@ collision metrics, API use and early STOP before asserting performance gains.
 The old tests dedicated to numbered milestones, `VERIFY`, or Planner
 decomposition test a retired contract; they need to be migrated before
 treating the entire legacy test suite as an acceptance gate.
+
+
+## v17 — retain tilted camera during motion and evidence-first navigation output
+
+Atomic forward movements no longer trigger `LOOK_UP` to level the camera.
+The model-selected pitch is retained across TURN and MOVE; `_step`
+still refreshes live RGB-D and runs the same calibrated central Depth
+obstacle preflight before *each* forward. `Geometry` projects each pixel's
+ray using `observation.pitch_deg`; missing FOV evidence remains UNKNOWN,
+never a claim of safe clearance. The model can explicitly LOOK when the
+camera angle is uninformative. No new hard-coded stairs mode is introduced.
+
+Navigation responses now have a three-part autoregressive structure:
+1. `observed_evidence`: 1–5 short, grounded observations (required)
+2. optional narrative progress notes and `decision_analysis`: short
+   visible rationale based on current and historical evidence (required)
+3. `tool`, `args`: the only executable choice, always written last
+
+The underlying tool envelope remains `tool + args` and the scheduler
+continues to project only these fields to the executor. A concise rationale
+is an inspectable decision summary, not hidden internal chain-of-thought,
+movement authorization, or a new direction-intent validator. The outgoing
+wire JSON no longer alphabetizes schema keys, so model-facing property order
+is preserved for JSON-schema-mode providers. No provider is assumed to
+guarantee response key order; model instruction and schema order guide it.
+
+Sample:
+
+```json
+{
+  "observed_evidence": [
+    "Current RGB shows a descending stair tread ahead.",
+    "Live Depth reports UNKNOWN rather than a confirmed centerline block."
+  ],
+  "decision_analysis": "The stair direction is visible, but there is no certified clearance; try a short controlled move and reassess the next frame.",
+  "tool": "navigate_relative",
+  "args": {"turn_direction": "NONE", "turn_degrees": 0, "distance_m": 0.25}
+}
+```
+
+Regression: `python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v`
+and `test_v13_navigation_context.py`, `test_mission_history_and_headings.py`,
+`test_mission_navigation_architecture.py`.

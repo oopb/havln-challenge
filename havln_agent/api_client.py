@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v16-evidence-coverage-route-continuity'
+PROMPT_VERSION = 'havln-agent-v17-pitched-forward-observe-analyze-decide'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
@@ -590,7 +590,12 @@ class APIClient:
             record['request_phase'] = 'preparing_request'
             self._inflight(record, 'in_progress')
             try:
-                payload = canonical(body).encode()
+                # Preserve insertion order of JSON Schema properties on the
+                # wire. canonical() remains the stable, sorted signature and
+                # audit formatter; sorting the outgoing body used to move the
+                # model's decision fields ahead of its evidence fields.
+                payload = json.dumps(body,ensure_ascii=False,
+                                     allow_nan=False).encode()
                 record['request_body_sha256'] = hashlib.sha256(payload).hexdigest()
                 request = urllib.request.Request(
                     config['base_url'].rstrip('/') + '/chat/completions',

@@ -95,6 +95,18 @@ def registry(camera, max_actions, pitch_deg=0.):
                         'turn_and_observe','observe_for_goal') else 'READ_ONLY'))
         for name,(desc,params) in specs.items()}
 
+# Output is intentionally authored in autoregressive reading order:
+# authentic visual/tool observations -> short explicit decision analysis
+# -> final tool/args. This is a visible decision summary, not hidden chain
+# of thought or a separate validator authorizing the movement.
+_EVIDENCE=dict(
+    observed_evidence=dict(type='array',minItems=1,maxItems=5,
+        items=dict(type='string',minLength=1,maxLength=220)),
+)
+_DECISION_ANALYSIS=dict(
+    decision_analysis=dict(type='string',minLength=1,maxLength=700),
+)
+
 _PROGRESS=dict(
     progress_narrative=dict(type='string',maxLength=1200),
     navigation_intent=dict(type='string',maxLength=700),
@@ -106,17 +118,22 @@ _PROGRESS=dict(
 def navigation_schema(tools):
     branches=[]
     for name,spec in tools.items():
-        branch=_optional(dict(tool=dict(const=name),
-                              args=spec['parameters'],**copy.deepcopy(_PROGRESS)),
-                         ('tool','args'))
+        branch=_optional(dict(
+            **copy.deepcopy(_EVIDENCE),
+            **copy.deepcopy(_PROGRESS),
+            **copy.deepcopy(_DECISION_ANALYSIS),
+            tool=dict(const=name),args=spec['parameters']),
+            ('observed_evidence','decision_analysis','tool','args'))
         branch['description']=spec['description']
         branches.append(branch)
     return dict(oneOf=branches)
 
 def navigation_envelope(tools):
-    return _optional(dict(tool=dict(enum=list(tools)),
-                          args=dict(type='object'),**copy.deepcopy(_PROGRESS)),
-                     ('tool','args'))
+    return _optional(dict(
+        **copy.deepcopy(_EVIDENCE),**copy.deepcopy(_PROGRESS),
+        **copy.deepcopy(_DECISION_ANALYSIS),
+        tool=dict(enum=list(tools)),args=dict(type='object')),
+        ('observed_evidence','decision_analysis','tool','args'))
 
 def compact_navigation_protocol(tools):
     import json
@@ -132,10 +149,20 @@ def compact_navigation_protocol(tools):
         req=set(spec['parameters'].get('required',[]))
         result.append(name+'('+', '.join(k+('' if k in req else '?')+':'+signature(v)
             for k,v in args.items())+')')
-    return ('Return exactly one JSON object with top-level tool and args. '
-        'Put tool parameters directly inside args, not in another wrapper. '
-        'Optionally include progress_narrative, navigation_intent, '
-        'uncertainties and evidence_observation_ids at top level. '
+    return ('Return EXACTLY one JSON object. Generate its fields in this '
+        'reasoning-friendly order: (1) observed_evidence: 1..5 short '
+        'source-grounded observations from CURRENT RGB, history, Depth and '
+        'tool receipts; distinguish seen facts from hypotheses; '
+        '(2) optional progress_narrative/navigation_intent/uncertainties/'
+        'evidence_observation_ids: revisable model assessments; '
+        '(3) decision_analysis: concise evidence-based explanation of '
+        'the next navigation choice, including current-vs-historical '
+        'heading and obstacle uncertainty where relevant; '
+        '(4) tool; (5) args: the FINAL executable decision, always LAST. '
+        'observed_evidence and decision_analysis are REQUIRED, not '
+        'hidden reasoning or a second motion authorization. '
+        'Put tool parameters directly inside args, not another wrapper. '
+        'Do not put any fields after args. '
         'Historical left/right text is NOT a current camera bearing. '
         'Action directions: LEFT positive yaw, RIGHT negative yaw, NONE 0; '
         'turn_degrees is nonnegative. Optional progress fields are '

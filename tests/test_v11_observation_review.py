@@ -35,6 +35,12 @@ def visual_answer(next_action='finish', turn_deg=0):
 
 
 class V11ReadOnlyVisualJson(unittest.TestCase):
+    def test_vlm_json_schema_places_visual_evidence_before_camera_decision(self):
+        order=list(SCAN_GUIDANCE_SCHEMA['properties'])
+        self.assertLess(order.index('evidence'),order.index('reason'))
+        self.assertLess(order.index('reason'),order.index('next_action'))
+        self.assertEqual(order[-2:],['next_action','turn_deg'])
+
     def test_identical_duplicate_boolean_recovers_only_when_opted_in(self):
         raw=json.dumps(visual_answer()).replace(
             '"target_visible": false',

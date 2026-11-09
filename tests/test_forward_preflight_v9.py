@@ -134,23 +134,37 @@ class ForwardPreflightV9(unittest.TestCase):
             'OBSERVED_FRONT_DEPTH_BLOCK_NO_MOVE_ATTEMPT')
         self.assertFalse(indexed['observed_front_blocks'][0]['attempted_forward'])
 
-    def test_camera_recenter_is_real_and_precedes_forward_after_turn(self):
+    def test_tilted_camera_is_preserved_before_blocked_forward(self):
         r,actions=test_runtime()
         r.motion_controller.pitch_deg=-30
         r.refresh()
         r.geometry=Mock(return_value=geometry('BLOCKED'))
         result=r._navigate_relative('RIGHT',30,.5)
         self.assertEqual(result['status'],'BLOCKED')
-        self.assertEqual(actions,
-            ['TURN_RIGHT','TURN_RIGHT','LOOK_UP','LOOK_UP'])
-        self.assertEqual(r.pitch_deg,0)
+        self.assertEqual(actions,['TURN_RIGHT','TURN_RIGHT'])
+        self.assertEqual(r.pitch_deg,-30)
         self.assertEqual(result['obstacle_observation']['depth'][
             'focus_region_xyxy_norm'],[.42,.34,.61,.78])
-        self.assertEqual(result['forward_depth_preflight']['pitch_deg'],0)
+        self.assertEqual(result['forward_depth_preflight']['pitch_deg'],-30)
         self.assertEqual(result['forward_depth_preflight']['heading_deg'],330)
         self.assertEqual(len(r.memory.evidence.obstacle_blocks),1)
         self.assertEqual(r.runtime_event_counts[
             'atomic_forward_confirmed_depth_block'],1)
+
+    def test_tilted_camera_moves_without_auto_recenter(self):
+        r,actions=test_runtime(changed_forwards=True)
+        r.motion_controller.pitch_deg=-60
+        r.refresh()
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        result=r._navigate_relative('NONE',0,.5)
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(actions,['MOVE_FORWARD','MOVE_FORWARD'])
+        self.assertEqual(r.pitch_deg,-60)
+        forward=[a for a in r.memory.actions if a['action']=='MOVE_FORWARD']
+        self.assertEqual(len(forward),2)
+        self.assertTrue(all(
+            a['result']['forward_depth_preflight']['pitch_deg']==-60
+            for a in forward))
 
     def test_no_unnecessary_look_steps_during_continuous_forward(self):
         r,actions=test_runtime(changed_forwards=True)
@@ -171,17 +185,18 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertEqual(len(r.memory.evidence.obstacle_blocks),0)
         self.assertGreaterEqual(g.central_forward_obstruction.call_count,2)
 
-    def test_camera_alignment_cannot_spend_reserved_stop_action(self):
-        r,actions=test_runtime()
+    def test_tilted_forward_does_not_spend_budget_on_auto_look(self):
+        r,actions=test_runtime(changed_forwards=True)
         r.config['max_steps']=2  # Only one non-STOP action remains.
         r.motion_controller.pitch_deg=-30
         r.refresh()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
         result=r._navigate_relative('NONE',0,.25)
-        self.assertEqual(result['status'],'BUDGET_LIMIT')
-        self.assertEqual(actions,['LOOK_UP'])
-        self.assertEqual(r.pitch_deg,-15)
-        self.assertFalse(any(a=='MOVE_FORWARD' for a in actions))
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(actions,['MOVE_FORWARD'])
+        self.assertEqual(r.pitch_deg,-30)
+        self.assertEqual(result['commanded_forward_actions'],1)
+        self.assertFalse(any(a in ('LOOK_UP','LOOK_DOWN') for a in actions))
 
     def test_stall_is_not_silently_treated_as_collision(self):
         r,actions=test_runtime()

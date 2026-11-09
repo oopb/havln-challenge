@@ -224,19 +224,27 @@ class CompleteHistoryTests(unittest.TestCase):
 
 
 class SimpleNavigationContractTests(unittest.TestCase):
-    def test_tool_and_args_are_sufficient_for_turns_and_moves(self):
+    def test_evidence_analysis_and_tool_args_are_required(self):
         specs=registry(camera(),10)
         schema=navigation_schema(specs)
         envelope=navigation_envelope(specs)
         Draft7Validator.check_schema(schema)
         for direction in ('LEFT','RIGHT'):
             decision=motion_decision(direction)
+            self.assertFalse(Draft7Validator(schema).is_valid(decision))
+            decision.update(
+                observed_evidence=['Current RGB shows a visible path.'],
+                decision_analysis='Select a short step toward the path.')
             self.assertTrue(Draft7Validator(schema).is_valid(decision))
             self.assertTrue(Draft7Validator(envelope).is_valid(decision))
-        move=dict(tool='navigate_relative',args=dict(
-            turn_direction='NONE',turn_degrees=0,distance_m=.25))
+        move=dict(observed_evidence=['Current Depth has no confirmed block.'],
+            decision_analysis='Move one step, then recheck.',
+            tool='navigate_relative',args=dict(
+                turn_direction='NONE',turn_degrees=0,distance_m=.25))
         self.assertTrue(Draft7Validator(schema).is_valid(move))
         self.assertTrue(Draft7Validator(schema).is_valid(dict(
+            observed_evidence=['Current RGB does not localize the hall.'],
+            decision_analysis='Request an observation of the entrance.',
             tool='observe_for_goal',
             args=dict(objective='Find a visible hall entrance'))))
         # The removed field must not be part of the output protocol at
@@ -252,8 +260,17 @@ class SimpleNavigationContractTests(unittest.TestCase):
 
     def test_prompt_protocol_is_simple(self):
         protocol=compact_navigation_protocol(registry(camera(),10))
-        self.assertIn('top-level tool and args',protocol)
+        self.assertIn('FINAL executable decision',protocol)
+        self.assertIn('Put tool parameters directly inside args',protocol)
+        self.assertIn('observed_evidence',protocol)
+        self.assertIn('decision_analysis',protocol)
         self.assertNotIn('direction_intent',protocol)
+        nav_schema=navigation_schema(registry(camera(),10))
+        props=list(nav_schema['oneOf'][0]['properties'])
+        self.assertEqual(props[0],'observed_evidence')
+        self.assertEqual(props[-3:],['decision_analysis','tool','args'])
+        self.assertEqual(nav_schema['oneOf'][0]['required'],
+                         ['observed_evidence','decision_analysis','tool','args'])
         self.assertNotIn('ALIGN_VISIBLE_TARGET',MISSION_PROMPT)
         self.assertNotIn('EXPLORE_ALTERNATIVE',MISSION_PROMPT)
 
@@ -317,12 +334,15 @@ class SimpleNavigationContractTests(unittest.TestCase):
         validate=call.kwargs['validate']
         # A robot may turn either direction according to model judgment.
         # No visual-box or semantic-direction gate rejects valid commands.
-        validate(motion_decision('RIGHT'))
-        validate(motion_decision('LEFT'))
+        def with_evidence(decision):
+            return dict(observed_evidence=['Current RGB evidence.'],
+                decision_analysis='Select the calibrated turn.',**decision)
+        validate(with_evidence(motion_decision('RIGHT')))
+        validate(with_evidence(motion_decision('LEFT')))
         bad=motion_decision('LEFT')
         bad['args']['turn_degrees']=-30
         with self.assertRaises(APIError):
-            validate(bad)
+            validate(with_evidence(bad))
 
 if __name__=='__main__':
     unittest.main()
