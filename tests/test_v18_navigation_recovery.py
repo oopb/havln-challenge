@@ -16,7 +16,7 @@ from havln_agent.scheduler import (
     request,run,format_repair_feedback,
     FORMAT_REGENERATIONS_PER_DECISION,MAX_RECOVERABLE_FORMAT_CYCLES)
 from havln_agent.visual_perception import SCAN_GUIDANCE_PROMPT
-from test_forward_preflight_v9 import camera,test_runtime
+from test_forward_preflight_v9 import camera,test_runtime,geometry
 
 
 def bad_distance_error():
@@ -39,6 +39,19 @@ class NavigationOutputV18(unittest.TestCase):
         self.assertTrue(Draft7Validator(schema).is_valid(base))
         base['observed_evidence']=['A'*601]
         self.assertFalse(Draft7Validator(schema).is_valid(base))
+
+    def test_nav_validator_returns_specific_invalid_distance_field(self):
+        rt,_=test_runtime()
+        rt.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        rt.navigation_agent.decide()
+        validate=rt.client.complete.call_args.kwargs['validate']
+        invalid=dict(observed_evidence=['Inspect the passage at right.'],
+            decision_analysis='Rotate right without moving.',
+            tool='navigate_relative',args=dict(
+                turn_direction='RIGHT',turn_degrees=30,distance_m=0))
+        with self.assertRaisesRegex(APIError,'distance_m'):
+            validate(invalid)
+        self.assertEqual(invalid['args']['distance_m'],0)
 
     def test_zero_distance_still_invalid_and_pure_turn_is_valid(self):
         schema=navigation_schema(registry(camera(),3))
