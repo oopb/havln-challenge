@@ -1,12 +1,14 @@
 """Regression tests for official RoboWorld HA-VLN 2.0 offline scoring."""
-import math
+import json
+import tempfile
+from pathlib import Path
 import unittest
 
 from havln_agent.competition_scoring import (
     EXPECTED_EPISODES, HUMAN_BETA, aggregate_episodes, official_formula,
     summarize_run, summarize_split,
 )
-from havln_agent.replay_server import _split_for_episode
+from havln_agent.replay_server import _load_scoring_report, _split_for_episode
 
 
 class FormulaTests(unittest.TestCase):
@@ -129,6 +131,21 @@ class ReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize_run({'val_seen':['1']},
                           dict(split='unreleased', metrics=dict(SR=0,NE=1,CR=0,TCR=0)))
+
+    def test_auto_import_reads_existing_report_without_copy(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder=Path(root)
+            src=folder/'score_metrics.json'
+            payload={'split':'val_seen','metrics':
+                     {'SR':.2,'NE':5.0,'CR':.3,'TCR':2}}
+            src.write_text(json.dumps(payload))
+            fake=type('Source', (), {
+                'read': lambda self,name:(folder/name).read_bytes()
+            })()
+            result,name=_load_scoring_report(fake)
+            self.assertEqual(result,payload)
+            self.assertEqual(name,'score_metrics.json')
+            self.assertEqual(sorted(p.name for p in folder.iterdir()),['score_metrics.json'])
 
     def test_split_identity(self):
         self.assertEqual(_split_for_episode('val_seen-123'),'val_seen')
