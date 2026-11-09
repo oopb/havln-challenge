@@ -14,6 +14,10 @@ on:
       - "tests/test_v12_action_stance.py"
       - "tests/test_v13_navigation_context.py"
       - "tests/test_v16_observation_continuity.py"
+      - "tests/test_replay_studio.py"
+      - "replay_ui/**"
+      - "scripts/serve_agent_replay.py"
+      - "scripts/pack_agent_diagnostics.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -47,5 +51,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
       - name: Verify v16 full scan coverage, source-bound route memory and cross-session VLM reuse
         run: python -m unittest discover -s tests -p 'test_v16_observation_continuity.py' -v
+      - name: Verify replay capture, deduplicated images, timeline and ZIP compatibility
+        run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
+      - name: Verify replay frontend JavaScript syntax
+        run: node --check replay_ui/app.js
       - name: Verify independent OFFLINE RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
