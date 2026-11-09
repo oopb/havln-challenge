@@ -5,7 +5,7 @@ from .contracts import (navigation_schema, compact_navigation_protocol,
                         navigation_envelope)
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
-from .api_client import APIError
+from .api_client import APIError, specific_schema_error
 from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
@@ -62,8 +62,25 @@ MISSION_PROMPT=(
     'Use memory.last_motion_decision as a factual action receipt: when '
     'forward actions visibly changed the scene and no new obstruction '
     'contradicts the route, consider continuing the same route rather '
-    'than starting an unrelated scan. You alone choose the next action. '
+    'than starting an unrelated scan. When a visibly continuous corridor '
+    'supports it, you MAY choose a finite 0.5–1m (or longer) segment '
+    'instead of only 0.25m per decision: each 0.25m atomic move still '
+    'gets fresh Depth and interrupts on a measured block or unchanged RGB-D. '
+    'In narrow stairs, close furniture, uncertain human passages, prefer '
+    'a short segment or ask for specific new visual evidence; choose based '
+    'on the actual scene, not a fixed distance rule. '
+    'You alone choose the next action. '
     'You may reobserve changed scenes or dynamic people when useful. '
+    'When a person, railing or doorway makes the local passage ambiguous, '
+    'consider observe_for_goal with a specific question comparing the '
+    'visible LEFT/RIGHT walkable corridors, foreground blockage and '
+    'occluded floor; do not assume a pedestrian is static. Avoid repeated '
+    'LOOK pitch switches if Depth stayed UNKNOWN without new evidence. '
+    'UNKNOWN is neither a measured blocker nor guaranteed safety. '
+    'Pure turn or turn+LOOK without forward motion MUST use '
+    'turn_and_observe, e.g. RIGHT 30 degrees, look=none. '
+    'navigate_relative ALWAYS means execute positive forward distance '
+    '(0.25..3m); do not use distance_m=0 to express a pure turn. '
     'Keep progress narratives as revisable hypotheses, distinguishing '
     'what was visually seen, what was physically attempted and what '
     'remains uncertain. Only request_finish success when the final '
@@ -203,9 +220,13 @@ class NavigationAgent:
                             ('navigation_invalid_tool_argument:'+
                              value['tool']+'.'+field+':'+detail)[:300],
                             category='structured_field')
-            if not Draft7Validator(schema).is_valid(value):
-                raise APIError('navigation_tool_arguments_violate_registered_schema',
-                               category='structured_field')
+            issue=next(Draft7Validator(schema).iter_errors(value),None)
+            if issue is not None:
+                issue=specific_schema_error(issue)
+                field='.'.join(map(str,issue.absolute_path)) or 'response'
+                raise APIError(
+                    ('navigation_invalid_output_field:'+field+':'+
+                     issue.message)[:350],category='structured_field')
             if value['tool'] in ('navigate_relative','turn_and_observe'):
                 args=value['args']
                 try:

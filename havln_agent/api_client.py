@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-agent-v17-pitched-forward-observe-analyze-decide'
+PROMPT_VERSION = 'havln-agent-v18-navigation-output-recovery-and-visual-route-guidance'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
@@ -637,8 +637,15 @@ class APIClient:
                     if result != original:
                         self.normalizations += 1
                         record['repair_result'] = 'locally_normalized'
+                # A navigation-specific validator reports the exact bad
+                # tool parameter before the generic tagged-union schema
+                # produces an unhelpful top-level oneOf error. It still
+                # validates the full registered tool schema and never
+                # repairs or executes the malformed action.
+                if role=='navigation_agent' and validate is not None:
+                    validate(result)
                 result_validator.validate(result)
-                if validate is not None:
+                if role!='navigation_agent' and validate is not None:
                     validate(result)
                 if time.monotonic() >= deadline:
                     raise RequestDeadlineExceeded('total_request_deadline_exceeded')
