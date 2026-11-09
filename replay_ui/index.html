@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HA-VLN Replay Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="brand"><span class="brand-icon">◈</span><div><strong>HA-VLN Replay Studio</strong><small>真实画面 · 模型请求 · 执行轨迹</small></div></div>
+      <div class="header-controls">
+        <label>Episode <select id="episodeSelect" aria-label="选择 Episode"></select></label>
+        <label>回放单位 <select id="modeSelect"><option value="api">模型调用</option><option value="action">原子动作</option><option value="all">完整事件</option><option value="issues">错误 / 阻挡</option></select></label>
+        <span id="orderBadge" class="pill"></span>
+      </div>
+    </header>
+    <section class="mission-bar">
+      <div class="mission-text"><span class="muted">任务指令</span><strong id="instruction">读取中…</strong></div>
+      <div class="kpis"><span id="totalActions"></span><span id="totalApis"></span><span id="totalTools"></span><span id="stopReason"></span></div>
+    </section>
+    <div class="workspace">
+      <aside class="timeline-pane panel">
+        <div class="panel-heading"><strong>事件时间线</strong><small id="eventCounter"></small></div>
+        <div class="search-row"><input id="searchBox" placeholder="搜索 Agent / 工具 / 错误 / 步数" aria-label="搜索事件"></div>
+        <div class="timeline-list" id="eventList"></div>
+      </aside>
+      <main class="visual-pane panel">
+        <div class="panel-heading"><strong>仿真真实画面</strong><span id="visualLabel" class="pill">—</span></div>
+        <div class="frame-area">
+          <div class="frame-box large"><div class="frame-label">RGB <span id="rgbSource"></span></div><img id="rgbImg" alt="机器人当前 RGB 视角"><div id="rgbMissing" class="missing hidden">未保存该帧</div></div>
+          <div class="depth-row">
+            <div class="frame-box"><div class="frame-label">Depth · 距离可视化</div><img id="depthImg" alt="当前深度图"><div id="depthMissing" class="missing hidden">深度帧不可用</div></div>
+            <div class="frame-box"><div class="frame-label">执行后 RGB <span id="afterSource"></span></div><img id="afterImg" alt="执行后的机器人画面"><div id="afterMissing" class="missing hidden">请选择动作查看前后对比</div></div>
+          </div>
+        </div>
+        <div class="pose-strip" id="poseStrip">选择一项事件查看画面与位姿。</div>
+        <section class="media-section"><div class="section-title"><strong>本次模型实际接收的图片</strong><small id="mediaNote"></small></div><div class="media-gallery" id="mediaGallery"></div></section>
+        <section class="status-section"><div class="section-title"><strong>执行反馈</strong></div><div id="executionSummary" class="inline-summary muted">选择事件查看结果</div></section>
+      </main>
+      <aside class="detail-pane panel">
+        <div class="panel-heading"><strong id="detailTitle">模型输入 / 输出</strong><span id="detailType" class="pill">—</span></div>
+        <nav class="tabs" aria-label="详细信息">
+          <button class="tab active" data-tab="input">输入</button>
+          <button class="tab" data-tab="output">输出 / 结果</button>
+          <button class="tab" data-tab="raw">原始记录</button>
+        </nav>
+        <div class="details-body" id="detailsBody"><p class="muted">请选择模型调用或动作。</p></div>
+      </aside>
+    </div>
+    <footer class="transport panel">
+      <div class="transport-top"><strong id="positionText">—</strong><span id="eventTitle" class="muted"></span></div>
+      <input type="range" id="scrubber" min="0" max="0" value="0" aria-label="拖动跳转">
+      <div class="transport-actions">
+        <div class="button-group">
+          <button id="firstBtn" title="跳到第一步">⏮</button>
+          <button id="prevBtn" title="上一步 (←)">← 上一步</button>
+          <button id="nextBtn" class="primary" title="下一步 (→)">下一步 →</button>
+          <button id="lastBtn" title="跳到最后一步">⏭</button>
+        </div>
+        <div class="jump-control"><label for="jumpInput">跳转至</label><input id="jumpInput" type="number" min="1" value="1" aria-label="跳转到第 N 项"><button id="jumpBtn">跳转</button></div>
+      </div>
+    </footer>
+  </div>
+  <div id="toast" role="alert" class="toast hidden"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
