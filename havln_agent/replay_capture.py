@@ -77,6 +77,7 @@ class ReplayRecorder:
         self.path.touch()
         self.media_dir = self.path.parent / 'media'
         self.by_hash = {}
+        self._renditions = {}
         self.api_count = 0
         self.tool_count = 0
         self.event_count = 0
@@ -116,6 +117,8 @@ class ReplayRecorder:
         self.api_count += 1
 
     def _observation_renditions(self, identifier):
+        if identifier in self._renditions:
+            return self._renditions[identifier]
         file = self.directory / 'observations' / (identifier + '.npz')
         if not file.is_file():
             return []
@@ -132,6 +135,7 @@ class ReplayRecorder:
                     variants.append((digest, dict(
                         kind='observation', observation_id=identifier,
                         sensor=sensor, max_edge=max_edge, sha256=digest)))
+                self._renditions[identifier] = variants
                 return variants
         except (OSError, ValueError, KeyError, TypeError):
             return []
@@ -164,7 +168,17 @@ class ReplayRecorder:
         Existing api.jsonl.messages already stores system and current user text;
         here only prior dialogue, media refs, and protocol parameters are added.
         """
-        context_candidates = _ids(context)
+        preferred = []
+        if isinstance(context, dict):
+            for key in ('source_observation_id', 'observation_id'):
+                if isinstance(context.get(key), str):
+                    preferred.append(context[key])
+            current = context.get('current_rgb') or {}
+            if isinstance(current, dict) and current.get('observation_id'):
+                preferred.append(current['observation_id'])
+            preferred.extend(_ids((context.get('history_media') or {}).get('manifest', [])))
+            preferred.extend(_ids(context.get('historical_images', [])))
+        context_candidates = list(dict.fromkeys(preferred + _ids(context)))
         prior = []
         current_media = []
         for index, message in enumerate(messages):
