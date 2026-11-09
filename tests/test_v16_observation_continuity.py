@@ -142,6 +142,18 @@ class CrossSessionObservation(unittest.TestCase):
         controller.scan_mission('Locate a different passage',sweep_degrees=90)
         self.assertEqual(runtime.visual_perception.guide_scan_view.call_count,2)
 
+    def test_changed_forward_stance_does_not_reuse_old_vlm_result(self):
+        runtime,_=test_runtime(changed_forwards=True)
+        runtime.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        runtime.visual_perception=SimpleNamespace(
+            guide_scan_view=Mock(return_value=visual_answer('finish',0)))
+        controller=ObservationController(runtime)
+        controller.scan_mission('Inspect the corridor',sweep_degrees=30)
+        self.assertEqual(runtime.visual_perception.guide_scan_view.call_count,1)
+        runtime._step('MOVE_FORWARD')
+        controller.scan_mission('Inspect the corridor',sweep_degrees=30)
+        self.assertEqual(runtime.visual_perception.guide_scan_view.call_count,2)
+
     def test_unboxed_candidate_is_recorded_after_observation(self):
         runtime,_=test_runtime()
         runtime.geometry=Mock(return_value=geometry('EXECUTABLE'))
@@ -156,8 +168,38 @@ class CrossSessionObservation(unittest.TestCase):
         self.assertEqual(result['status'],'OK')
         self.assertEqual(result['waypoints'],[])
         self.assertEqual(len(runtime.memory.route_candidates),1)
-        self.assertFalse(runtime.memory.route_candidates[0][
-            'angular_bearing_grounded'])
+        candidate=runtime.memory.route_candidates[0]
+        self.assertFalse(candidate['angular_bearing_grounded'])
+        expanded=runtime.memory.read_memory_record(
+            candidate['candidate_id'])
+        self.assertEqual(expanded['record']['source_observation_id'],
+                         candidate['source_observation_id'])
+        self.assertTrue(expanded[
+            'historical_visual_hypothesis_not_live_clearance'])
+
+
+class CachedCameraActionSafety(unittest.TestCase):
+    def test_saved_turn_is_not_reexecuted_when_rgbd_is_identical(self):
+        from havln_agent.active_observation import cached_view_from_prior_task
+        m=MemoryRecords(camera())
+        m.reset('ep','Find the hall')
+        initial=observed('old',0,rgb='rgb_same',depth='depth_same')
+        current=observed('new',0,rgb='rgb_same',depth='depth_same')
+        m.observations=[initial,current]
+        m.current=current
+        answer=visual_answer('turn_left',30)
+        m.observation_searches=[
+            dict(objective='Inspect the hall',checkpoints=[
+                dict(observation_id='old',visual=answer)]),
+            dict(objective='Inspect the hall',checkpoints=[])]
+        reused,source=cached_view_from_prior_task(
+            m,dict(observation_id='new',pose=current['pose'],
+                rgb_hash='rgb_same',depth_hash='depth_same'),
+            'Inspect the hall')
+        self.assertEqual(source,'old')
+        self.assertEqual(reused['next_action'],'finish')
+        self.assertEqual(reused['turn_deg'],0)
+        self.assertEqual(answer['next_action'],'turn_left')
 
 
 class TargetedObstacleObservation(unittest.TestCase):

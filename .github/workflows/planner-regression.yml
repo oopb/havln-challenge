@@ -13,6 +13,7 @@ on:
       - "tests/test_v11_observation_review.py"
       - "tests/test_v12_action_stance.py"
       - "tests/test_v13_navigation_context.py"
+      - "tests/test_v16_observation_continuity.py"
       - ".github/workflows/planner-regression.yml"
   workflow_dispatch:
 
@@ -44,5 +45,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v12_action_stance.py' -v
       - name: Verify internal causal memory, v14 compact navigator context, sourced history RGB and direction contract
         run: python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
+      - name: Verify v16 full scan coverage, source-bound route memory and cross-session VLM reuse
+        run: python -m unittest discover -s tests -p 'test_v16_observation_continuity.py' -v
       - name: Verify independent OFFLINE RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v

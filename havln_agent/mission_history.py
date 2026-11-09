@@ -365,6 +365,10 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             (memory.current or {}).get('observation_id')==
             last_motion.get('end_observation_id'))
         last_motion['motion_is_evidence_not_command']=True
+        last_motion['atomic_actions_since_motion']=max(
+            0,len(memory.actions)-last_motion.get('action_step_finished',0))
+        last_motion['current_heading_deg']=round(
+            math.degrees(pose.get('heading',0))%360,2)
     anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})
     anchored_source=by_id.get(anchor.get('source_observation_id'))
     source_pose=(anchored_source or {}).get('pose') or {}
