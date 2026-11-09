@@ -84,6 +84,12 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
     catalog={}
     for trace in episodes:
         files.update(trace/name for name in TRACE_NAMES if (trace/name).is_file())
+        # Replay events store canonical-log indices, not duplicate log bodies.
+        replay_events = trace / 'replay' / 'events.jsonl'
+        if replay_events.is_file():
+            files.add(replay_events)
+        if frames != 'none':
+            files.update((trace / 'replay' / 'media').glob('*.png'))
         images=sorted((trace/'observations').glob('obs_*.npz'))
         selected=({x.stem for x in images} if frames=='all' else
                   select_frames(trace,interval) if frames=='critical' else set())
