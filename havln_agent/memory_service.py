@@ -408,6 +408,13 @@ class MemoryService(MemoryRecords):
                 sensor_record=copy.deepcopy(next(o for o in self.observations if o['observation_id']==record_id)),
                 visual_analyses=copy.deepcopy([v for v in self.scene_history if v['source']['observation_id']==record_id]),
                 grounding_ids=[g['grounding_id'] for g in self.groundings if g['source']['observation_id']==record_id])
+        candidate=next((v for v in getattr(self,'route_candidates',[])
+            if v.get('candidate_id')==record_id),None)
+        if candidate is not None:
+            return dict(detail_requested=True,
+                record=copy.deepcopy(candidate),
+                original_visual_frame=candidate.get('source_observation_id'),
+                historical_visual_hypothesis_not_live_clearance=True)
         turn=next((t for t in getattr(self,'navigation_turns',[])
             if t.get('decision_id')==record_id),None)
         if turn is not None:

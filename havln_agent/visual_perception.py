@@ -116,7 +116,12 @@ SCAN_GUIDANCE_PROMPT=(
     'Use mission_memory as the shared evidence index: previous observation '
     'task IDs, real viewpoint headings, and blocked source frames. '
     'For a recent central-depth block, read current_front_depth_preflight '
-    'and recent_forward_failures. Use the measured blocker '
+    'and recent_forward_failures. When obstacle_focus is present, answer '
+    'its specific visual question using the CURRENT RGB-D, distinguishing '
+    'the measured near-field region from any passage BEYOND it. The local '
+    'depth blocker is not proof that every alternative route is blocked. '
+    'Do not assert that a measured occupied forward step is safe. '
+    'Use the measured blocker '
     'focus_region_xyxy_norm / source_pixel_xy to inspect the corresponding '
     'REAL RGB region. State whether it looks like wall, rail, human or '
     'uncertain; do not invent metric clearance. Distinguish a pre-forward '
@@ -381,6 +386,27 @@ class VisualPerception:
                 alignment='same_pixel_coordinates_as_RGB'),
             waypoint_scope='hypothesis_not_route_permission',
             vision_contract=dict(coordinate_space='image_1000_xyxy'))
+        depth_now=request['current_front_depth_preflight']
+        if (depth_now.get('status')=='BLOCKED'
+                and depth_now.get('source_observation_id')==
+                    source['observation_id']):
+            blocker=depth_now.get('blocker') or {}
+            if blocker.get('focus_region_xyxy_norm') is not None:
+                # The existing RGB-D observation request supplies the
+                # current ROI; no extra HTTP inference or Python steering.
+                request['obstacle_focus']=dict(
+                    source_observation_id=source['observation_id'],
+                    depth_region_xyxy_norm=copy.deepcopy(
+                        blocker.get('focus_region_xyxy_norm')),
+                    depth_focus_xy_norm=copy.deepcopy(
+                        blocker.get('focus_point_xy_norm')),
+                    nearest_along_m=blocker.get('nearest_along_m'),
+                    question=('What is visibly present at this measured '
+                        'near-field ROI, and is a different passage visible '
+                        'beyond or beside it? Separate visible structure '
+                        'from measured occupancy; report uncertainty.'),
+                    measured_block_of_current_forward_step_only=True,
+                    distant_route_walkability_unverified=True)
         if view_correction is not None:request['view_correction']=view_correction
         if view_coverage is not None:request['view_coverage']=view_coverage
         prior_current,prior_historical=session_frame_ids(session)

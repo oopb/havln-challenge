@@ -74,6 +74,10 @@ class MemoryRecords:
         self.scene_history, self.visual_changes = [], []
         self.observation_searches = []
         self.navigation_turns = []
+        # Canonical, source-linked hypotheses and real motion receipts.
+        # Neither field grants safety clearance or authorizes a move.
+        self.route_candidates = []
+        self.latest_motion_receipt = None
         self.human_max_age_seconds = getattr(self, 'human_max_age_seconds', 2)
         self.current, self.revisits = None, []
         self._features = []
@@ -215,6 +219,96 @@ class MemoryRecords:
                 evidence_observation_ids=copy.deepcopy(
                     result.get('evidence_observation_ids',[]))))
         self.navigation_turns.append(item)
+        if decision.get('tool') in ('navigate_relative','navigate_local'):
+            forward=[action for action in self.actions[step_started:]
+                     if action.get('action')=='MOVE_FORWARD']
+            status=result.get('interrupted_status') or result.get('status')
+            end=(self.current or {}).get('observation_id')
+            end_pose=(self.current or {}).get('pose') or {}
+            self.latest_motion_receipt=dict(
+                decision_id=decision_id,
+                tool=decision['tool'],
+                source_observation_id=source_observation_id,
+                end_observation_id=end,
+                last_heading_deg=round(
+                    math.degrees(end_pose.get('heading',0))%360,2),
+                last_stance_id=end_pose.get('stance_id'),
+                status=status,
+                reason=result.get('reason'),
+                commanded_args=copy.deepcopy(decision.get('args') or {}),
+                executed_forward_actions=len(forward),
+                forward_actions_with_RGBD_change=sum(
+                    bool((a.get('result') or {}).get('visual_change'))
+                    for a in forward),
+                observed_motion_not_verified_translation=True,
+                action_step_finished=len(self.actions),
+                continuation_is_model_choice=True,
+                last_motion_was_uninterrupted=(
+                    status in ('ACTIONS_COMPLETED','TARGET_REACHED')))
+        return item
+
+    def note_visual_route_candidate(self, value):
+        """Remember a visual route hypothesis even when no target box exists.
+
+        Only actual RGB-D source IDs are accepted. A box can supply a
+        source-relative angular bearing; prose without a box never acquires
+        a fabricated precise heading, distance or walkability certificate.
+        """
+        if not isinstance(value,dict):
+            return None
+        identifier=value.get('source_observation_id')
+        source=next((o for o in reversed(self.observations)
+                     if o.get('observation_id')==identifier),None)
+        if source is None:
+            return None
+        evidence=str(value.get('evidence') or '').strip()[:420]
+        suggestion=str(value.get('navigation_suggestion') or '').strip()[:350]
+        if not (evidence or suggestion):
+            return None
+        pose=source.get('pose') or {}
+        objective=str(value.get('objective') or '').strip()[:250]
+        target_type=str(value.get('target_type') or 'possible passage')[:90]
+        absolute=value.get('absolute_heading_deg')
+        if not isinstance(absolute,(int,float)) or not math.isfinite(absolute):
+            absolute=None
+        for prior in reversed(self.route_candidates):
+            old=next((o for o in reversed(self.observations)
+                      if o.get('observation_id')==
+                         prior.get('source_observation_id')),None)
+            if (prior.get('target_type')==target_type
+                    and prior.get('objective')==objective
+                    and old is not None
+                    and old.get('rgb_hash')==source.get('rgb_hash')
+                    and old.get('depth_hash')==source.get('depth_hash')
+                    and same_local_stance(old.get('pose') or {},pose)
+                    and abs(angle_error(
+                        (old.get('pose') or {}).get('heading',0),
+                        pose.get('heading',0)))<math.radians(1)):
+                return prior
+        item=dict(
+            candidate_id='visual_route_%04d'%len(self.route_candidates),
+            source_observation_id=identifier,
+            source_stance_id=pose.get('stance_id'),
+            source_heading_deg=round(math.degrees(pose.get('heading',0))%360,2),
+            target_type=target_type,confidence=value.get('confidence'),
+            target_kind=value.get('target_kind'),
+            objective=objective,
+            evidence=evidence,navigation_suggestion=suggestion,
+            uncertainty=str(value.get('uncertainty') or '')[:300],
+            target_visible=bool(value.get('target_visible')),
+            target_box=copy.deepcopy(value.get('target_box')),
+            absolute_heading_deg=round(absolute%360,2)
+                if absolute is not None else None,
+            angular_bearing_grounded=absolute is not None,
+            distance_m_hint=value.get('distance_m_hint')
+                if absolute is not None else None,
+            route_status='VISUAL_HYPOTHESIS_NOT_VERIFIED_TRAVERSABILITY',
+            motion_authorized=False)
+        self.route_candidates.append(item)
+        self.event('visual_route_candidate_recorded',
+                   candidate_id=item['candidate_id'],
+                   source_observation_id=identifier,
+                   angular_bearing_grounded=absolute is not None)
         return item
 
     def note_observation_evidence(self, identifiers, objective=''):
@@ -521,6 +615,8 @@ class MemoryRecords:
             scene_history=self.scene_history,
             observation_searches=copy.deepcopy(self.observation_searches),
             navigation_turns=copy.deepcopy(self.navigation_turns),
+            route_candidates=copy.deepcopy(self.route_candidates),
+            latest_motion_receipt=copy.deepcopy(self.latest_motion_receipt),
             visual_changes=self.visual_changes,
             observations=self.observations,
             actions=self.actions,
