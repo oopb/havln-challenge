@@ -1,3 +1,58 @@
+# v16 — complete observation evidence and model-owned route continuity
+
+Addresses the eval-batch4-29 (2026-11-08T151735Z) failure mode of
+88 turns / 22 forwards and repeated visually identical observations at
+the same physical-action stance. It retains the v15 `tool + args`
+protocol and the v12 movement executor.
+
+## Runtime changes
+
+1. `recent_views_at_stance` includes **every** observation at the
+   current motion epoch and executed-forward stance, even across >80
+   frames and separate observation sessions. It serializes complete
+   quantized yaw/pitch bins compactly, with a small sample of detailed
+   source-labelled views and exact RGB-D repeat counts.
+2. An ObservationController session checks prior **same-question,
+   same-RGBD, same-action-stance, same-yaw/pitch** VLM checkpoints.
+   Matching visual evidence is reused without a paid API call, but
+   *camera turns are never replayed*; changed frames, stance or
+   questions always require a fresh VLM decision.
+3. All candidate-approach evidence, including cues with no target box,
+   is recorded in canonical Memory. Unboxed cues have NO exact heading.
+   Grounded box-centre headings are only reprojected at the original
+   action stance; moving forward invalidates their relative bearing.
+4. The latest model-selected motion **receipt** is saved for next-turn
+   route continuity. It records executed forwards, actual RGB-D change
+   and interruption status. It never triggers automatic continuation.
+5. The existing VLM-guided RGB-D request embeds a focused near-field
+   ROI question when the live Depth preflight confirms an obstacle.
+   No second VLM call, separate obstacle validator, semantic stair rule,
+   automatic turn, or Depth safety bypass is introduced.
+6. NavigationAgent prompt uses complete same-stance coverage, route
+   candidates and last motion receipts. The model retains authority
+   over another scan, route continuation, STOP and alternatives.
+
+`PROMPT_VERSION=havln-agent-v16-evidence-coverage-route-continuity`.
+
+## Verification
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v16_observation_continuity.py' -v
+python -m unittest discover -s tests -p 'test_v11_observation_review.py' -v
+python -m unittest discover -s tests -p 'test_mission_history_and_headings.py' -v
+python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
+python -m unittest discover -s tests -p 'test_forward_preflight_v9.py' -v
+```
+
+Compare a fresh val_seen single-episode 128-step run with eval-batch4-29.
+Evaluate invalid API responses, actual action receipts, longest no-forward
+run, repeated identical RGB-D observations, obstacle ROI interpretation,
+and route continuation at the staircase, not just the final forward ratio.
+No claimed official success until real simulator measurements confirm it.
+
+---
+
 # v15 — remove direction_intent and restore model-owned navigation turns
 
 In eval-batch4-29, the navigator made 0 forward actions and stopped after
