@@ -68,7 +68,7 @@ def _aggregate_metrics(item):
 def _bool01(value, key):
     if type(value) is bool:
         return value
-    if type(value) is int and value in (0, 1):
+    if type(value) in (int, float) and value in (0, 1):
         return bool(value)
     raise ValueError('%s must be true/false or 0/1' % key)
 
@@ -77,13 +77,17 @@ def _episode_row(row):
     """Accepted *post-evaluation* episode evidence (not agent observations)."""
     if not isinstance(row, dict) or not str(row.get('episode_id', '')).strip():
         raise ValueError('episode_id required for scored episode')
-    nav = row.get('navigation_error_m', row.get('distance_to_goal_m'))
+    nav = row.get('navigation_error_m',
+                  row.get('distance_to_goal_m', row.get('distance_to_goal')))
     success = row.get('success')
     if 'adjusted_collision_count' in row:
         adjusted = numeric(row['adjusted_collision_count'], 'adjusted_collision_count')
     else:
         collisions = row.get('collisions_count')
-        reference = row.get('reference_collision_count')
+        if collisions is None and isinstance(row.get('collisions'), dict):
+            collisions = row['collisions'].get('count')
+        reference = row.get('reference_collision_count',
+                            row.get('expected_collisions'))
         if collisions is None or reference is None:
             raise ValueError('adjusted_collision_count or both collision counts required')
         adjusted = max(0, numeric(collisions, 'collisions_count')
@@ -191,13 +195,17 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
                              else 'calculated_from_evaluated_episodes'),
                       collision_normalization=cr_scope,
                       limitations=[])
-        if result['evaluated_episodes'] and result['evaluated_episodes'] != expected:
+        if provided_metrics:
+            result['limitations'].append(
+                'Imported aggregate: sample size cannot be verified from four metrics alone.')
+            if result['evaluated_episodes'] and result['evaluated_episodes'] != expected:
+                result['limitations'].append(
+                    'Episode-level evidence covers only %d/%d; it does not define the imported aggregate.'
+                    % (result['evaluated_episodes'], expected))
+        elif result['evaluated_episodes'] != expected:
             result['limitations'].append(
                 'Only %d/%d episodes evaluated: exploratory subset, not leaderboard.'
                 % (result['evaluated_episodes'], expected))
-        elif not result['evaluated_episodes']:
-            result['limitations'].append(
-                'Imported split metrics; original episode sample size not verified.')
         if not provided_metrics and len(per_episode) != len(ids):
             result['limitations'].append(
                 'Not all run episodes have independently evaluated metrics.')
