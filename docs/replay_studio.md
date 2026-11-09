@@ -67,6 +67,110 @@ conversation messages: the viewer marks them as incomplete.
   cross-stream ordering is explicitly marked **approximate**, with each
   original log stream retaining its own order.
 
+## RoboWorld Track 2 score calculation
+
+The viewer includes the exact published [Track 2 composite score rule](https://roboworld2026.github.io/track2):
+
+```text
+Navigation = 0.80 * SR + 0.20 * 3/(3+NE)
+Social     = 0.75 * (1-CR) + 0.25 * 1/(1+TCR)
+Score      = 100 * Navigation * (0.70 + 0.30*Social)
+```
+
+**Score is a split-level aggregate, not a mean of per-episode scores.**
+Compute `SR, NE, CR, TCR` over the evaluated episodes **before**
+applying the nonlinear formula. NE is in metres, SR/CR are fractions
+(not percentages), and TCR is the adjusted mean collision count.
+The scoreboard shows Score, four metrics, Navigation, Social and the
+social penalty factor; when separately evaluated episode evidence is
+available, it also displays the selected episode's true navigation
+error, no-extra-collision success, and adjusted collisions.
+
+The existing `summary.json`, `steps.jsonl`, `api.jsonl` and RGB-D
+frames **cannot** establish ground-truth goal distance, simulator
+collision events or the reference-route collision allowance. They
+are never silently treated as SR/NE/CR/TCR; a missing metric report
+produces **not available**, not zero. CodaBench alone determines official
+rankings, and even a complete local evaluation is marked offline.
+
+### Import independently evaluated metrics (no copy required)
+
+Pass a read-only scorer result alongside an existing run:
+
+```bash
+python scripts/serve_agent_replay.py \
+  --output-dir /HOST/WORKSPACE/agent-runs/eval-batch4-30 \
+  --metrics-file /HOST/WORKSPACE/metrics/validation-score.json
+```
+
+Alternatively, place a single `score_metrics.json` at the **run root**
+(the same level as `traces/`). The viewer discovers it automatically,
+and the diagnostic packer already includes root-level JSON files.
+Never store a second copy if `--metrics-file` already points to the
+original evaluation report.
+
+Supported format A: metrics already computed independently by a scorer:
+
+```json
+{
+  "splits": {
+    "val_seen": {
+      "metrics": {"SR": 0.180, "NE": 6.223, "CR": 0.623, "TCR": 13.726}
+    },
+    "val_unseen": {
+      "metrics": {"SR": 0.129, "NE": 6.387, "CR": 0.684, "TCR": 17.536}
+    }
+  }
+}
+```
+
+*Numbers above illustrate the published CMA baseline's rounded **display**
+values, not an evaluation of your agent. Recomputing a baseline Score from
+rounded inputs will not reproduce the official full-precision Score.*
+
+Supported format B: per-episode **independently evaluated** metrics:
+
+```json
+{
+  "split": "val_seen",
+  "episodes": [
+    {
+      "episode_id": "3",
+      "navigation_error_m": 1.9,
+      "success": true,
+      "collisions_count": 4,
+      "reference_collision_count": 2,
+      "human_influenced": true
+    }
+  ]
+}
+```
+
+Alternatively each episode can provide `adjusted_collision_count` in
+place of both raw collision counts. The scorer computes per-episode
+adjusted TCR = `max(0, collisions_count - reference_collision_count)`,
+SR = `success AND adjusted_TCR==0`, CR indicator = `adjusted_TCR>0`,
+then aggregates all valid episodes. For CR, when each episode has a
+`human_influenced` label, the denominator is the number of marked
+episodes. Otherwise the official full-split beta coefficient is used
+for an **approximate small-sample denominator**, and the UI labels the
+result diagnostic/provisional. The source values must come from the
+independent simulator/scorer, not the NavigationAgent's own success
+claim or a geometry obstacle report. For 778 `val_seen`, 1,839
+`val_unseen` and 3,408 `test` tasks, separate splits are evaluated
+independently; Phase 2 ranks by the test Score.
+
+Users can expand **评分拆解、单条任务依据与公式试算** and enter four
+metric values to evaluate the formula immediately. The preview is
+calculated by the server, is never written to the run, and is explicitly
+marked non-official. Enter `SR=0.18`, not `18` for 18% success.
+
+Run the pure score unit tests with:
+
+```bash
+python -m unittest discover -s tests -p 'test_competition_scoring.py' -v
+```
+
 ## Storage contract
 
 The canonical, already-existing files remain authoritative:
