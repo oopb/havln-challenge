@@ -100,8 +100,8 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(replay.overview()['counts']['api'],1)
         self.assertEqual(replay.events[1]['kind'],'api')
         self.assertEqual(replay.detail(1)['record']['model'],'test')
-        self.assertTrue(replay.frame('obs_0000','rgb').startswith(b'\\x89PNG'))
-        self.assertTrue(replay.frame('obs_0000','depth').startswith(b'\\x89PNG'))
+        self.assertTrue(replay.frame('obs_0000','rgb').startswith(b'\x89PNG'))
+        self.assertTrue(replay.frame('obs_0000','depth').startswith(b'\x89PNG'))
         archive=Path(self.root.parent)/'full-replay.zip'
         pack(self.root,archive,frames='all')
         with ZipFile(archive) as z:
