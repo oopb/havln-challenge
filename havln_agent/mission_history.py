@@ -82,19 +82,21 @@ def selected_history_frames(memory, current_id=None, max_frames=3):
 
 
 def recent_views_at_stance(memory, pose, max_views=16, window=80):
-    """Bounded *observed* yaw/pitch coverage at the CURRENT local stance.
+    """Complete, compact yaw/pitch coverage for the current action stance.
 
-    Older scans are not erased when a new Observation Agent session starts.
-    Pose/epoch validity is checked with the existing same_local_stance
-    contract. Coverage is information for the model, never a forbidden
-    direction, clearance certificate or forced-action condition.
+    All recorded views at this stance contribute, including views older than
+    the latest 80 samples. Only the source-labelled detailed examples are
+    truncated. No view becomes forbidden and no historical depth is current.
     """
     camera=memory.camera
     yaw_step=max(1,float(camera.turn_angle))
     tilt_step=max(1,float(camera.tilt_angle))
     unique={}
+    pitch_bins={}
     samples=0
-    for observation in reversed(memory.observations[-window:]):
+    repeat_rgbd=0
+    seen_image_fingerprints=set()
+    for observation in reversed(memory.observations):
         measured_pose=observation.get('pose') or {}
         if not same_local_stance(measured_pose,pose):
             continue
@@ -102,9 +104,15 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
         yaw=math.degrees(measured_pose.get('heading',0))%360
         pitch=measured_pose.get('pitch_deg',
                                 observation.get('pitch_deg',0))
-        quantized_yaw=(round(yaw/yaw_step)*yaw_step)%360
-        quantized_pitch=round(pitch/tilt_step)*tilt_step
-        key=(quantized_yaw,quantized_pitch)
+        qyaw=(round(yaw/yaw_step)*yaw_step)%360
+        qpitch=round(pitch/tilt_step)*tilt_step
+        key=(qyaw,qpitch)
+        fingerprint=(key,observation.get('rgb_hash'),
+                     observation.get('depth_hash'))
+        if fingerprint in seen_image_fingerprints:
+            repeat_rgbd+=1
+        seen_image_fingerprints.add(fingerprint)
+        pitch_bins.setdefault(qpitch,set()).add(qyaw)
         if key in unique:
             continue
         unique[key]=dict(
@@ -114,12 +122,21 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
             relative_bearing_deg_from_current=relative_bearing(
                 yaw,math.degrees(pose.get('heading',0))%360),
             observed_only=True)
+    # 24 bins at a 15-degree actuator step, independent of episode duration.
+    full_coverage=[dict(
+        pitch_deg=round(pitch,2),
+        observed_heading_bins_deg=[round(a,2) for a in sorted(headings)],
+        distinct_headings=len(headings))
+        for pitch,headings in sorted(pitch_bins.items())]
     return dict(
         scope='same_executed_forward_stance_not_metric_position',
         sampled_observations=samples,
         distinct_heading_pitch_views=len(unique),
         latest_distinct_views=list(unique.values())[:max_views],
         older_views_may_be_omitted=len(unique)>max_views,
+        full_coverage_by_pitch=full_coverage,
+        full_coverage_includes_old_views=True,
+        repeated_same_RGBD_heading_pitch_views=repeat_rgbd,
         action_guidance_only_no_hard_view_ban=True,
         historical_depth_does_not_authorize_move=True)
 
@@ -318,6 +335,36 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         if len(camera_limits)>=3:
             break
     route=memory.route_progress_summary()
+    # Keep a compact, source-linked route candidate pool independent of the
+    # last three observation sessions. A missing box never becomes a bearing.
+    route_candidates=[]
+    for candidate in reversed(getattr(memory,'route_candidates',[])):
+        original=by_id.get(candidate.get('source_observation_id'))
+        if not original:
+            continue
+        fresh=same_local_stance(original.get('pose') or {},pose)
+        absolute=candidate.get('absolute_heading_deg')
+        item={key:copy.deepcopy(candidate.get(key)) for key in (
+            'candidate_id','source_observation_id','target_type',
+            'target_kind','confidence','evidence','navigation_suggestion',
+            'uncertainty','target_visible','absolute_heading_deg',
+            'angular_bearing_grounded','route_status')}
+        item['source_stance_matches_current']=fresh
+        item['relative_bearing_deg_from_current']=(
+            round(relative_bearing(absolute,
+                 math.degrees(pose.get('heading',0))%360),2)
+            if fresh and isinstance(absolute,(int,float)) else None)
+        item['historical_only_not_live_clearance']=True
+        route_candidates.append(item)
+        if len(route_candidates)>=6:
+            break
+    last_motion=copy.deepcopy(
+        getattr(memory,'latest_motion_receipt',None))
+    if last_motion is not None:
+        last_motion['same_camera_as_last_motion']=(
+            (memory.current or {}).get('observation_id')==
+            last_motion.get('end_observation_id'))
+        last_motion['motion_is_evidence_not_command']=True
     anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})
     anchored_source=by_id.get(anchor.get('source_observation_id'))
     source_pose=(anchored_source or {}).get('pose') or {}
@@ -359,6 +406,8 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             stance_id=pose.get('stance_id'),
             position_coordinates_valid=pose.get('position_coordinates_valid',True)),
         observation_tasks=searches,
+        candidate_route_hypotheses=route_candidates,
+        last_motion_decision=last_motion,
         historical_frames=selected_history_frames(memory,current_id),
         blocked_at_source_stances=blocked,
         stalled_forward_at_source_stances=stalls,

@@ -14,6 +14,42 @@ from .heading import (box_center_bearing, direction_from_bearing,
 def _angle_diff(a,b):
     return round((a-b+180)%360-180,2)
 
+def cached_view_from_prior_task(memory, source, objective):
+    """Reuse a VLM interpretation only for an identical RGB-D/question/stance.
+
+    The saved camera action is deliberately NOT replayed. New question,
+    changed RGB-D, or a new forward stance always requires fresh reasoning.
+    """
+    requested=' '.join(str(objective).casefold().split())
+    by_id={o.get('observation_id'):o for o in memory.observations}
+    pose=source.get('pose') or {}
+    for task in reversed(memory.observation_searches[:-1]):
+        if ' '.join(str(task.get('objective') or '').casefold().split())!=requested:
+            continue
+        for checkpoint in reversed(task.get('checkpoints') or []):
+            old=by_id.get(checkpoint.get('observation_id'))
+            if old is None:
+                continue
+            oldpose=old.get('pose') or {}
+            if (old.get('rgb_hash')!=source.get('rgb_hash')
+                    or old.get('depth_hash')!=source.get('depth_hash')
+                    or not same_local_stance(oldpose,pose)
+                    or abs(_angle_diff(
+                        math.degrees(oldpose.get('heading',0)),
+                        math.degrees(pose.get('heading',0))))>0.5
+                    or abs(oldpose.get('pitch_deg',0)-
+                           pose.get('pitch_deg',0))>0.5):
+                continue
+            report=checkpoint.get('visual')
+            if not isinstance(report,dict):
+                continue
+            result=copy.deepcopy(report)
+            result['next_action']='finish'
+            result['turn_deg']=0
+            return result,checkpoint.get('observation_id')
+    return None,None
+
+
 class ObservationController:
     def __init__(self,runtime):
         self.runtime=runtime
@@ -87,8 +123,19 @@ class ObservationController:
                     for v in viewed[-8:]],
                 next_camera_action_model_decides=True,
                 prior_views_are_information_not_route_clearance=True)
+            visual,reused_from=(
+                cached_view_from_prior_task(m,source,objective)
+                if not session else (None,None))
+            if visual is not None:
+                r.event('observation_visual_reused',
+                    source='source_verified_memory',
+                    current_observation_id=source['observation_id'],
+                    prior_observation_id=reused_from,
+                    question=objective[:160],
+                    cached_camera_action_replayed=False)
             try:
-                visual=r.visual_perception.guide_scan_view(
+                if visual is None:
+                    visual=r.visual_perception.guide_scan_view(
                     r.observation,source,objective,['complete mission route'],
                     view_history=viewed,
                     remaining_turn_deg=max(0,sweep_degrees-turned),
@@ -105,15 +152,18 @@ class ObservationController:
                 break
             last_visual=visual
             current['visual']=copy.deepcopy(visual)
+            if reused_from is not None:
+                current['reused_visual_from_observation_id']=reused_from
             viewed.append(current)
             record['checkpoints'].append(current)
             evidence=(visual.get('observation_summary') or
                       visual.get('evidence') or '').strip()
             if evidence and source['observation_id'] in m.keyframes:
                 m.note_semantics(source,[evidence[:350]])
-            # Waypoint is a source-frame VISUAL BEARING, not the camera yaw.
-            # Do not promote a cue without a localized box to a motion target.
+            # A missing visual box still produces a semantic route hypothesis,
+            # but never a precise navigable bearing or motion permission.
             target_box=visual.get('box')
+            image_offset=None
             if (visual.get('candidate_approach') is True
                     and visual.get('target_visible') is True
                     and target_box is not None):
@@ -143,6 +193,23 @@ class ObservationController:
                         traversability='UNCONFIRMED',
                         motion_authorized=False)
                     waypoints.append(proposal)
+            if visual.get('candidate_approach') is True:
+                m.note_visual_route_candidate(dict(
+                    source_observation_id=source['observation_id'],
+                    objective=objective,target_type=visual.get('target_type'),
+                    target_kind=visual.get('target_kind'),
+                    confidence=visual.get('confidence'),
+                    evidence=evidence,
+                    navigation_suggestion=visual.get('navigation_suggestion'),
+                    uncertainty=visual.get('uncertainty'),
+                    target_visible=visual.get('target_visible'),
+                    target_box=(copy.deepcopy(target_box)
+                                if image_offset is not None else None),
+                    absolute_heading_deg=(
+                        (heading+image_offset)%360
+                        if image_offset is not None and
+                           visual.get('target_visible') is True else None),
+                    distance_m_hint=visual.get('distance_m_hint')))
             action=visual.get('next_action','finish')
             if action=='finish':
                 record['outcome']='OBSERVATION_COMPLETED'
