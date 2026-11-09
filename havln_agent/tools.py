@@ -668,17 +668,10 @@ class ToolExecutor:
                 return self._navigation_feedback(
                     path,checked,'ACTIONS_COMPLETED',
                     'model_requested_forward_actions_executed')
-            if action=='MOVE_FORWARD':
-                # Real LOOK_UP/DOWN receipts, not a synthetic pose edit:
-                # recenter when starting a cruise segment after VLM inspection.
-                # Subsequent atomic forwards stay level and are zero-cost.
-                normalizer=getattr(self,'_center_camera_for_forward',None)
-                if normalizer is not None:
-                    centered=normalizer()
-                    if centered['status']!='OK':
-                        return self._navigation_feedback(
-                            path,checked,centered['status'],
-                            centered.get('reason'),camera_recenter=centered)
+            # Keep the camera's actual model-selected pitch during motion.
+            # The per-atomic-action preflight in _step() refreshes RGB-D
+            # and projects Depth using this pitch; no automatic LOOK_UP
+            # actions or synthetic pose edits are inserted here.
             validation=self._revalidate_path(path,resume=True)
             if validation['status']!='OK':
                 checked.update(validation)

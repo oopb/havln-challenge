@@ -46,6 +46,8 @@ class DirectionProtocol(unittest.TestCase):
         schema=navigation_schema(reg)
         Draft7Validator.check_schema(schema)
         self.assertTrue(Draft7Validator(schema).is_valid(dict(
+            observed_evidence=['Current RGB confirms a corridor.'],
+            decision_analysis='Take one short step while monitoring Depth.',
             tool='navigate_relative',args=dict(
                 turn_direction='RIGHT',turn_degrees=30,distance_m=.5))))
         self.assertFalse(Draft7Validator(schema).is_valid(dict(

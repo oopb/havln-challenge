@@ -303,51 +303,14 @@ class AgentRuntime(ToolExecutor):
             obstacle_roi=(result['blocker'] or {}).get('focus_region_xyxy_norm'))
         return result
 
-    def _center_camera_for_forward(self):
-        """Once before the next forward step, return camera to level.
-
-        No action when already level. LOOK actions consume real episode budget
-        and are auditable, unlike silently overwriting pitch_deg. The pose
-        heading and the model-authored route are not changed.
-        """
-        tilt=self.camera.tilt_angle
-        required=int(round(abs(self.pitch_deg)/tilt))
-        if abs(self.pitch_deg)<1e-4:
-            return dict(status='OK',actions=[],pitch_deg=0.,
-                        reason='already_level')
-        if required>math.ceil(60/tilt) or abs(required*tilt-abs(self.pitch_deg))>1e-3:
-            return dict(status='CAMERA_ALIGNMENT_UNCERTAIN',
-                        reason='pitch_not_on_camera_tilt_grid',
-                        pitch_deg=self.pitch_deg,actions=[])
-        before=self.pitch_deg
-        actions=[]
-        for _ in range(required):
-            direction='LOOK_UP' if self.pitch_deg<0 else 'LOOK_DOWN'
-            feedback=self._step(direction)
-            if feedback.get('status')!='EXECUTED':
-                return dict(status=feedback.get('status','PARTIAL'),
-                    reason=feedback.get('reason','camera_recenter_interrupted'),
-                    pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
-                    actions=actions)
-            actions.append(direction)
-        if abs(self.pitch_deg)>1e-3:
-            return dict(status='CAMERA_ALIGNMENT_UNCERTAIN',
-                reason='camera_pitch_did_not_recenter',
-                pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
-                actions=actions)
-        self.event('camera_recentered_for_motion',source='action_receipts',
-            actions=actions,pitch_before_deg=before,
-            pitch_after_deg=self.pitch_deg)
-        return dict(status='OK',actions=actions,
-            pitch_before_deg=before,pitch_after_deg=self.pitch_deg,
-            reason='physical_camera_look_receipts')
-
     def _prepare_forward(self):
         """Same calibrated Depth test as the pre-decision model input.
 
-        This is called ONLY on the freshest public RGB-D after any turn and
-        camera alignment, immediately before an actual atomic forward. Only
-        measured central occupancy stops the pending atomic command.
+        This is called ONLY on the freshest public RGB-D, at the camera's
+        actual current pitch, immediately before each atomic forward. Geometry
+        projects the tilted Depth rays into robot coordinates. Only measured
+        central occupancy stops the pending atomic command; UNKNOWN does not
+        certify safe passage.
         """
         result=self.forward_preflight(stage='atomic_forward')
         self._last_forward_depth_probe=dict(result,

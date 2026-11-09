@@ -74,7 +74,9 @@ class MissionContracts(unittest.TestCase):
         tools=navigation_tool_menu(registry(camera(),3))
         schema=navigation_schema(tools)
         Draft7Validator.check_schema(schema)
-        message=dict(tool='navigate_relative',
+        message=dict(observed_evidence=['Current RGB shows a passage.'],
+            tool='navigate_relative',
+            decision_analysis='Choose the visible passage after checking current Depth.',
             args=dict(turn_direction='RIGHT',turn_degrees=45,distance_m=.5),
             progress_narrative='I have descended the stairs, but have not located the piano.',
             navigation_intent='Find the hall and cross it toward the piano.',
