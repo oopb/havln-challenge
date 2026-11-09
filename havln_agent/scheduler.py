@@ -40,9 +40,44 @@ class EvidenceLivenessGuard:
             decision_owner='navigation_agent',
             no_automatic_semantic_review=True)
 
+FORMAT_ERROR_CATEGORIES=frozenset(
+    ('structured_field','json_syntax','json_schema'))
+# One operation uses up to three exact-role regeneration attempts. A separate
+# bounded recovery below can retry an entire navigation cycle without ever
+# inventing a physical command.
+FORMAT_REGENERATIONS_PER_DECISION=3
+MAX_RECOVERABLE_FORMAT_CYCLES=2
+
+
+def format_repair_feedback(error,context):
+    detail=str(context.get('error_detail') or str(error))[:350]
+    field=context.get('validation_field') or []
+    if isinstance(field,str):
+        field=[field]
+    field_text='.'.join(map(str,field))
+    pure_turn=('distance_m' in detail or 'distance_m' in field_text)
+    return dict(
+        category=error.category,
+        failed_field=field_text or None,
+        error_detail=detail,
+        repair_instruction=(
+            'No physical action executed. Preserve the intended goal '
+            'and observations, then regenerate ONE legal JSON object '
+            'with observed_evidence, decision_analysis, tool and args. '
+            'Pure rotation: choose turn_and_observe with look=none, '
+            'never navigate_relative(distance_m=0). '
+            'A navigate_relative call MUST request distance_m 0.25..3m.'
+            if pure_turn else
+            'No physical action executed. Reconsider the specific invalid '
+            'field and regenerate ONE legal evidence-first JSON decision. '
+            'Keep observed_evidence entries concise (max 600 characters). '
+            'Do not add unregistered fields or change model intent just '
+            'to meet a numeric constraint.'))
+
+
 def request(runtime,role,operation,append):
     feedback=None
-    for attempt in range(2):
+    for attempt in range(FORMAT_REGENERATIONS_PER_DECISION):
         if runtime.memory.current is not None:runtime.refresh()
         runtime.decision_id(role)
         try:
@@ -55,17 +90,20 @@ def request(runtime,role,operation,append):
             runtime.event('api_error',source=role,error=str(error),
                           category=error.category,request_context=context)
             append(role,dict(event='api_error',request_context=context))
-            if attempt or error.category not in (
-                'structured_field','json_syntax','json_schema'):
+            if (attempt+1>=FORMAT_REGENERATIONS_PER_DECISION
+                    or error.category not in FORMAT_ERROR_CATEGORIES):
                 runtime.api_failure=context
                 raise
-            feedback=dict(error=str(error),category=error.category,
-                detail=context.get('error_detail',
-                    'Return a schema-valid tool+args JSON object.')[:400])
+            feedback=format_repair_feedback(error,context)
+            runtime.event('navigation_format_regeneration',
+                source=role,attempt=attempt+1,
+                failed_field=feedback.get('failed_field'),
+                action_executed=False)
 
 def run(runtime,append):
     runtime.start_mission()
     liveness=EvidenceLivenessGuard(runtime)
+    consecutive_format_failures=0
     while not runtime.done:
         if runtime.decisions>=liveness.max_decisions:
             runtime.navigation_liveness=liveness.diagnostic(runtime)
@@ -107,6 +145,7 @@ def run(runtime,append):
             # Only the registered executable command reaches ToolExecutor.
             command=dict(tool=proposal['tool'],args=proposal['args'])
             result=runtime.execute(command,binding)
+            consecutive_format_failures=0
             runtime.memory.note_navigation_turn(
                 proposal,result,binding.get('observation_id'),
                 turn_start_step,runtime.current_decision_id)
@@ -128,4 +167,25 @@ def run(runtime,append):
         except APIError as error:
             runtime.api_failure=getattr(error,'request_context',
                 dict(error=str(error),category=error.category))
+            if (error.category in FORMAT_ERROR_CATEGORIES and
+                    runtime.client.availability()=='available' and
+                    consecutive_format_failures<
+                        MAX_RECOVERABLE_FORMAT_CYCLES):
+                # A malformed response is NOT a movement instruction.
+                # Start a new decision from fresh public observation,
+                # bounded by both the API budget and model-decision guard.
+                consecutive_format_failures+=1
+                runtime.decisions+=1
+                liveness.feedback(runtime)
+                runtime.navigation_liveness=liveness.diagnostic(runtime)
+                runtime.event('navigation_format_cycle_recovered',
+                    source='scheduler',
+                    consecutive_failures=consecutive_format_failures,
+                    max_recoverable=MAX_RECOVERABLE_FORMAT_CYCLES,
+                    no_atomic_motion_executed=True)
+                append('navigation_agent',dict(
+                    event='navigation_format_cycle_recovered',
+                    attempt=consecutive_format_failures,
+                    error=runtime.api_failure))
+                continue
             runtime.terminate('api_error')

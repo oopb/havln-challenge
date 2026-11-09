@@ -358,15 +358,22 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         route_candidates.append(item)
         if len(route_candidates)>=6:
             break
-    last_motion=copy.deepcopy(
-        getattr(memory,'latest_motion_receipt',None))
-    if last_motion is not None:
+    # Compact source-linked receipt rather than repeating raw action logs.
+    raw_motion=getattr(memory,'latest_motion_receipt',None)
+    last_motion=None
+    if raw_motion is not None:
+        last_motion={k:copy.deepcopy(raw_motion.get(k)) for k in (
+            'decision_id','tool','source_observation_id',
+            'end_observation_id','last_heading_deg',
+            'last_stance_id','status','reason',
+            'executed_forward_actions','forward_actions_with_RGBD_change',
+            'last_motion_was_uninterrupted','continuation_is_model_choice')}
         last_motion['same_camera_as_last_motion']=(
             (memory.current or {}).get('observation_id')==
-            last_motion.get('end_observation_id'))
+            raw_motion.get('end_observation_id'))
         last_motion['motion_is_evidence_not_command']=True
         last_motion['atomic_actions_since_motion']=max(
-            0,len(memory.actions)-last_motion.get('action_step_finished',0))
+            0,len(memory.actions)-raw_motion.get('action_step_finished',0))
         last_motion['current_heading_deg']=round(
             math.degrees(pose.get('heading',0))%360,2)
     anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})

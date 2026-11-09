@@ -14,6 +14,7 @@ on:
       - "tests/test_v12_action_stance.py"
       - "tests/test_v13_navigation_context.py"
       - "tests/test_v16_observation_continuity.py"
+      - "tests/test_v18_navigation_recovery.py"
       - "tests/test_replay_studio.py"
       - "tests/test_competition_scoring.py"
       - "replay_ui/**"
@@ -63,6 +64,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v13_navigation_context.py' -v
       - name: Verify v16 full scan coverage, source-bound route memory and cross-session VLM reuse
         run: python -m unittest discover -s tests -p 'test_v16_observation_continuity.py' -v
+      - name: Verify v18 navigation format recovery, pure-turn protocol, model-owned cruise and visual-route grounding
+        run: python -m unittest discover -s tests -p 'test_v18_navigation_recovery.py' -v
       - name: Verify replay capture, deduplicated images, timeline and ZIP compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
       - name: Verify official Track 2 formula, adjusted collision metrics and missing-score semantics

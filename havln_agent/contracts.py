@@ -59,12 +59,20 @@ def registry(camera, max_actions, pitch_deg=0.):
             '=> RIGHT,30; turn left 60 => LEFT,60. No signed angles. '
             'distance_m is a NOMINAL command length quantized into a finite '
             'number of forward action receipts, NOT measured robot displacement. '
+            'Distance MUST be at least 0.25m; for a pure turn without forward '
+            'motion use turn_and_observe(look=none), never distance_m=0. '
+            'Clear stable space may justify 0.5–1m or more; near obstacles '
+            'a shorter segment may be appropriate. The model chooses. '
+            'Every actual forward step still gets live Depth preflight. '
             'No metric robot position is available. '
             'Then execute forward steps until the command finishes or actual '
             'safety/sensor interruption; no milestone authorization.',
             motion),
         'turn_and_observe':(
-            'Turn and optionally LOOK for a purposeful view. The LOOK enum is '
+            'Use for a turn with ZERO forward motion, e.g. RIGHT 30 degrees with '
+            'look=none. Never represent pure turning as navigate_relative '
+            'with distance_m=0. Turn and optionally LOOK for a purposeful '
+            'view. The LOOK enum is '
             'always none/up/down. Camera limits (-60..60 degrees) are checked '
             'at execution; out-of-range LOOK returns recoverable CAMERA_PITCH_LIMIT '
             'with the current allowed_look choices and NO atomic actions. '
@@ -101,7 +109,7 @@ def registry(camera, max_actions, pitch_deg=0.):
 # of thought or a separate validator authorizing the movement.
 _EVIDENCE=dict(
     observed_evidence=dict(type='array',minItems=1,maxItems=5,
-        items=dict(type='string',minLength=1,maxLength=220)),
+        items=dict(type='string',minLength=1,maxLength=600)),
 )
 _DECISION_ANALYSIS=dict(
     decision_analysis=dict(type='string',minLength=1,maxLength=700),
@@ -153,6 +161,7 @@ def compact_navigation_protocol(tools):
         'reasoning-friendly order: (1) observed_evidence: 1..5 short '
         'source-grounded observations from CURRENT RGB, history, Depth and '
         'tool receipts; distinguish seen facts from hypotheses; '
+        'each item should be concise (max 600 characters); '
         '(2) optional progress_narrative/navigation_intent/uncertainties/'
         'evidence_observation_ids: revisable model assessments; '
         '(3) decision_analysis: concise evidence-based explanation of '
@@ -165,7 +174,12 @@ def compact_navigation_protocol(tools):
         'Do not put any fields after args. '
         'Historical left/right text is NOT a current camera bearing. '
         'Action directions: LEFT positive yaw, RIGHT negative yaw, NONE 0; '
-        'turn_degrees is nonnegative. Optional progress fields are '
+        'turn_degrees is nonnegative. For PURE TURN without motion use '
+        'turn_and_observe with look=none; e.g. right 30deg means '
+        '{"tool":"turn_and_observe","args":{"turn_direction":"RIGHT",'
+        '"turn_degrees":30,"look":"none"}}. For TURN + MOVE, use '
+        'navigate_relative with distance_m between 0.25 and 3.0. '
+        'Optional progress fields are '
         'model assessments, not sensor proof. '
         'Tools: '+'; '.join(result))
 
