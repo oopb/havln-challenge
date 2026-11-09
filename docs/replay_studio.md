@@ -4,23 +4,27 @@ A read-only, offline trajectory/debugging interface for **completed**
 `run_api_agent.py` episodes. No API keys, inference, Habitat simulator,
 or GPU are needed to view a run.
 
-## Launch from the same container / Python environment
+## Launch from the server host (recommended)
+
+Use the **host path** corresponding to the persisted Docker `/workspace`
+mount and a Python environment with NumPy, Pillow and the existing agent
+dependencies. Launching on the host makes SSH port forwarding straightforward:
 
 ```bash
-python /toolkit/scripts/serve_agent_replay.py \
-  --output-dir /workspace/agent-runs/eval-batch4-30 \
+cd ~/ccx/havln-challenge
+python scripts/serve_agent_replay.py \
+  --output-dir /HOST/PERSISTENT/WORKSPACE/agent-runs/eval-batch4-30 \
   --host 127.0.0.1 --port 8765
 ```
 
-Open `http://127.0.0.1:8765` in a browser. For remote servers, use an
-SSH port forward instead of binding the viewer to a publicly reachable
-address:
+Open `http://127.0.0.1:8765` in the host's browser. For remote servers,
+use an SSH port forward instead of binding the viewer publicly:
 
 ```bash
 ssh -L 8765:127.0.0.1:8765 USER@SERVER
 ```
 
-Alternatively, open an archived run without extracting it:
+Alternatively, open an archived run without extracting it. If you launch the viewer **inside** an existing Docker container, its localhost is not the server host's localhost; arrange a container port publish or other private forwarding first:
 
 ```bash
 python /toolkit/scripts/serve_agent_replay.py \
