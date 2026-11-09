@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from .perception import depth_image_url
+from .competition_scoring import official_formula, summarize_run
 
 _SAFE = re.compile(r'^[A-Za-z0-9_.-]+$')
 _HASH = re.compile(r'^[a-f0-9]{64}$')
@@ -274,11 +275,46 @@ class EpisodeReplay:
         return raw
 
 
-def serve(source_path, host='127.0.0.1', port=8765):
+def _split_for_episode(episode):
+    for split in ('val_unseen', 'val_seen', 'train', 'test'):
+        if episode.startswith(split + '-'):
+            return split
+    return None
+
+
+def _load_scoring_report(source, metrics_path=None):
+    if metrics_path is not None:
+        file = Path(metrics_path).resolve()
+        if not file.is_file() or file.stat().st_size > 32 * 1024 * 1024:
+            raise ValueError('Metrics file missing or exceeds 32 MiB')
+        raw = file.read_bytes()
+        source_name = file.name
+    else:
+        # The only automatically discovered metric report is explicit and
+        # separate from model-generated summaries or action diagnostics.
+        raw = source.read('score_metrics.json')
+        source_name = 'score_metrics.json' if raw is not None else None
+    if raw is None:
+        return None, None
+    report = _read_json(raw)
+    if not isinstance(report, dict):
+        raise ValueError('Metrics file must contain a valid JSON object')
+    return report, source_name
+
+
+def serve(source_path, host='127.0.0.1', port=8765, metrics_path=None):
     source = ReplaySource(source_path)
     episodes = source.episodes()
     if not episodes:
         raise ValueError('No episode traces found')
+    report, source_name = _load_scoring_report(source, metrics_path)
+    grouped = {}
+    for episode_id in episodes:
+        split = _split_for_episode(episode_id)
+        if split:
+            # Episode id in traces is split-episode_id, preserve entire suffix.
+            grouped.setdefault(split, []).append(episode_id[len(split)+1:])
+    scoring = summarize_run(grouped, report, source_name)
     cache = {}
     assets = Path(__file__).resolve().parents[1] / 'replay_ui'
 
@@ -309,11 +345,37 @@ def serve(source_path, host='127.0.0.1', port=8765):
                 if parts == ['api', 'episodes']:
                     return self._json(dict(episodes=episodes,
                                            source=str(source.path)))
+                if parts == ['api', 'scoring']:
+                    return self._json(scoring)
+                if parts == ['api', 'score', 'calculate']:
+                    values = {}
+                    for field in ('sr', 'ne', 'cr', 'tcr'):
+                        raw = query.get(field, [])
+                        if len(raw) != 1:
+                            raise ValueError('Missing %s' % field.upper())
+                        values[field] = float(raw[0])
+                    return self._json(dict(
+                        status='formula_preview',
+                        official=False,
+                        calculation=official_formula(**values)))
                 if len(parts) >= 3 and parts[:2] == ['api', 'episode']:
                     episode = parts[2]
                     data = current(episode)
                     if len(parts) == 4 and parts[3] == 'timeline':
-                        return self._json(data.overview())
+                        overview = data.overview()
+                        split = _split_for_episode(episode)
+                        overview['scoring_split'] = split
+                        if split:
+                            summary = scoring['by_split'].get(split)
+                            if summary:
+                                # Only return this episode's evidence, not an
+                                # unrelated full split record for every visit.
+                                scoped = dict(summary)
+                                scoped['per_episode'] = (
+                                    summary.get('per_episode', {}).get(
+                                        episode[len(split)+1:]))
+                                overview['scoring'] = scoped
+                        return self._json(overview)
                     if len(parts) == 5 and parts[3] == 'event':
                         return self._json(data.detail(int(parts[4])))
                     if len(parts) == 5 and parts[3] == 'frame':

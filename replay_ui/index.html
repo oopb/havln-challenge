@@ -20,6 +20,51 @@
       <div class="mission-text"><span class="muted">任务指令</span><strong id="instruction">读取中…</strong></div>
       <div class="kpis"><span id="totalActions"></span><span id="totalApis"></span><span id="totalTools"></span><span id="stopReason"></span></div>
     </section>
+    <section class="scoring-panel panel" aria-labelledby="scoringHeading">
+      <div class="scoring-main">
+        <div class="score-primary">
+          <span class="eyebrow" id="scoringHeading">HA-VLN 2.0 · 综合 Score</span>
+          <div class="score-reading"><strong id="officialScore">—</strong><span id="scoreStatus" class="pill">缺少评测数据</span></div>
+          <small id="scoreProvenance" class="muted">按比赛官方公式计算；仅 CodaBench 结果具有官方排名效力。</small>
+        </div>
+        <div class="scoring-kpis">
+          <div><span>SR ↑</span><strong id="scoreSR">—</strong><small>无碰撞成功率</small></div>
+          <div><span>NE ↓</span><strong id="scoreNE">—</strong><small>平均终点误差 · m</small></div>
+          <div><span>CR ↓</span><strong id="scoreCR">—</strong><small>碰撞任务率</small></div>
+          <div><span>TCR ↓</span><strong id="scoreTCR">—</strong><small>调整后碰撞次数</small></div>
+        </div>
+      </div>
+      <details id="scoreDetails" class="scoring-details">
+        <summary>评分拆解、单条任务依据与公式试算 <span id="scoreCoverage" class="muted"></span></summary>
+        <div class="scoring-detail-inner">
+          <div class="score-breakdown">
+            <div><span>Navigation</span><strong id="scoreNavigation">—</strong></div>
+            <div><span>Social</span><strong id="scoreSocial">—</strong></div>
+            <div><span>Social Factor</span><strong id="scoreFactor">—</strong></div>
+          </div>
+          <p id="scoringLimitations" class="scoring-note"></p>
+          <div id="episodeMetricEvidence" class="episode-metric-evidence"></div>
+          <div class="formula-text">
+            <strong>官方计算式</strong>
+            <code>N=0.80×SR+0.20×3/(3+NE)</code>
+            <code>S=0.75×(1−CR)+0.25/(1+TCR)</code>
+            <code>Score=100×N×(0.70+0.30×S)</code>
+            <a href="https://roboworld2026.github.io/track2" target="_blank" rel="noopener noreferrer">比赛官网评分规则</a>
+          </div>
+          <div class="score-calculator">
+            <div><strong>公式试算</strong><small class="muted">输入真实指标或假设值，不改变日志、也不视为官方评测。</small></div>
+            <div class="calculator-fields">
+              <label>SR (0–1)<input id="calcSR" type="number" min="0" max="1" step="any" placeholder="0.18"></label>
+              <label>NE (m)<input id="calcNE" type="number" min="0" step="any" placeholder="6.2"></label>
+              <label>CR<input id="calcCR" type="number" min="0" step="any" placeholder="0.62"></label>
+              <label>TCR<input id="calcTCR" type="number" min="0" step="any" placeholder="13.7"></label>
+              <button id="calcButton" type="button">计算试算分数</button>
+              <div id="calcResult" class="calculator-result" aria-live="polite">输入四项指标后计算</div>
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
     <div class="workspace">
       <aside class="timeline-pane panel">
         <div class="panel-heading"><strong>事件时间线</strong><small id="eventCounter"></small></div>

@@ -15,6 +15,7 @@ on:
       - "tests/test_v13_navigation_context.py"
       - "tests/test_v16_observation_continuity.py"
       - "tests/test_replay_studio.py"
+      - "tests/test_competition_scoring.py"
       - "replay_ui/**"
       - "scripts/serve_agent_replay.py"
       - "scripts/pack_agent_diagnostics.py"
@@ -64,6 +65,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v16_observation_continuity.py' -v
       - name: Verify replay capture, deduplicated images, timeline and ZIP compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
+      - name: Verify official Track 2 formula, adjusted collision metrics and missing-score semantics
+        run: python -m unittest discover -s tests -p 'test_competition_scoring.py' -v
       - name: Verify replay frontend JavaScript syntax
         run: node --check replay_ui/app.js
       - name: Verify independent OFFLINE RGB-D feature-registration math

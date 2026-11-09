@@ -117,6 +117,15 @@ NPZ frames are reused instead of copied. For a portable *complete* replay
 archive, use `pack_agent_diagnostics.py --frames all`; default critical
 archives intentionally omit some frames. See [Replay Studio](docs/replay_studio.md).
 
+The viewer also displays the [official HA-VLN 2.0 composite Score formula](https://roboworld2026.github.io/track2)
+and computes Navigation, Social and Score from independently evaluated
+`SR/NE/CR/TCR`. Add `--metrics-file /path/to/score-metrics.json` to the
+viewer command or place a single `score_metrics.json` in the run root.
+If ground-truth goal distance or human-collision metrics are unavailable,
+Score is marked **unavailable** (not zero); you can still use the
+collapsible four-metric **formula preview** without modifying the run.
+The viewer never infers official success from STOP, action counts or RGB-D.
+
 **Compact diagnostics:** Episode tracing now stores one canonical `observations/obs_XXXX.npz`
 per RGB-D frame and references it from `steps.jsonl`, instead of tripling
 the data with `input-NNN.npz` and `post-NNN.npz`. Model requests are logged
