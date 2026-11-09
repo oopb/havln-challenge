@@ -102,6 +102,21 @@ normal motor actions no longer call a depth-body safety shield automatically. Se
 [post-obstacle exploration](docs/post_block_exploration.md).
 
 
+**Offline replay studio:** Inspect completed real RGB-D trajectories, model
+requests/responses, observation sessions, tools and atomic actions in a
+read-only browser, without starting Habitat or calling an API:
+
+```bash
+python scripts/serve_agent_replay.py --output-dir /workspace/agent-runs/eval-batch4-30
+# Or: --archive /path/to/diagnostic.zip
+```
+
+Open `http://127.0.0.1:8765` (use SSH port forwarding on a remote server).
+New runs include byte-verified model-input media references; existing sensor
+NPZ frames are reused instead of copied. For a portable *complete* replay
+archive, use `pack_agent_diagnostics.py --frames all`; default critical
+archives intentionally omit some frames. See [Replay Studio](docs/replay_studio.md).
+
 **Compact diagnostics:** Episode tracing now stores one canonical `observations/obs_XXXX.npz`
 per RGB-D frame and references it from `steps.jsonl`, instead of tripling
 the data with `input-NNN.npz` and `post-NNN.npz`. Model requests are logged

@@ -1,5 +1,6 @@
 """Public environment I/O, six-component runtime and official action export."""
 from collections import Counter
+from dataclasses import asdict
 import json
 from pathlib import Path
 import time
@@ -10,6 +11,7 @@ from .api_client import APIError, BudgetExceeded
 from .habitat_adapter import read_current_observation
 from .perception import Observation, adapt_observation
 from .runtime import AgentRuntime
+from .replay_capture import ReplayRecorder
 from .scheduler import request, run
 from scripts.export_cma_submission import atomic_json, check_rows
 
@@ -36,7 +38,16 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
                  'safety', 'progress', 'state', 'events'):
         (directory / (name+'.jsonl')).write_text('')
     client.begin_episode(episode_id, config['api_budget'], directory / 'api.jsonl')
+    client.replay_recorder = ReplayRecorder(directory, camera)
     started = time.monotonic()
+    event_log_index = 0
+
+    def replay_event(kind, **refs):
+        try:
+            client.replay_recorder.event(kind, **refs)
+        except OSError:
+            # Diagnostics cannot block a real simulator action.
+            pass
     environment_done = False
 
     def append(name, record):
@@ -60,6 +71,10 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         feedback = runtime.memory.actions[record['step']]['result']
         record.update(canonical_step_frame_refs(directory, feedback))
         append('steps', record)
+        try:
+            client.replay_recorder.action(record)
+        except OSError:
+            pass
         append('safety', dict(step=record['step'], tool_call_id=record['tool_call_id'], **record['safety']))
 
     def record_observation(record, observation):
@@ -68,6 +83,10 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         np.savez_compressed(directory / filename, rgb=observation.rgb, depth=observation.depth,
                             pitch_deg=observation.pitch_deg)
         record['input_file'] = filename
+        try:
+            client.replay_recorder.observation(record['observation_id'])
+        except OSError:
+            pass
 
     def load_observation(record):
         with np.load(directory / record['input_file']) as saved:
@@ -76,6 +95,10 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
 
     def record_tool(record):
         append('tools', record)
+        try:
+            client.replay_recorder.tool(record)
+        except OSError:
+            pass
         if record['call']['tool'] in ('analyze_scene', 'compare_views', 'ground_landmark', 'assess_entry'):
             append('visual_perception', dict(tool_call_id=record['call_id'],
                 requester=record['actor'],
@@ -85,7 +108,15 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
                            record_observation, load_observation)
 
     def record_event(record):
+        nonlocal event_log_index
         append('events', record)
+        if record.get('event') in (
+                'navigation_decision', 'api_error',
+                'navigation_mode_changed', 'observation_visual_reused',
+                'navigation_inference_budget_exhausted'):
+            replay_event('runtime_event', event_index=event_log_index,
+                         name=record.get('event'), step=record.get('step'))
+        event_log_index += 1
         if record['event'] in ('navigation_decision', 'task_plan', 'finish_verdict',
                                'navigation_mode_changed'):
             append('state', runtime.state_view())
@@ -100,7 +131,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         runtime.accept_observation(observation)
         atomic_json(directory/'episode.json',
             dict(episode_id=episode_id,instruction=observation.instruction,
-                 architecture='mission_narrative_v2'))
+                 architecture='mission_narrative_v2', camera=asdict(camera)))
         run(runtime,append)
         if not environment_done:
             raise ValueError('Environment did not terminate after the executed STOP/budget')

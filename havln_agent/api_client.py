@@ -288,6 +288,7 @@ class APIClient:
         self.trace_context = {}
         self.completion_requests = 0
         self.by_endpoint = {}
+        self.replay_recorder = None
 
     def availability(self):
         if self.calls >= self.budget:
@@ -353,8 +354,14 @@ class APIClient:
                 line = line.replace(key, '[REDACTED]')
             with Path(self.log_path).open('a') as handle:
                 handle.write(line + '\n')
-            # api.jsonl already includes role, purpose and complete request
-            # evidence; redundant per-role files consumed most text-log space.
+            recorder = getattr(self, 'replay_recorder', None)
+            if recorder is not None:
+                try:
+                    recorder.api_logged(dict(self.trace_context, **record))
+                except OSError:
+                    # Replay is a passive diagnostic, not an execution gate.
+                    pass
+            # api.jsonl stays the single API ledger: no duplicate API dumps.
 
     def _inflight(self, record, status):
         """Small, secret-free live marker for requests not yet in api.jsonl."""
@@ -506,6 +513,16 @@ class APIClient:
                     temperature=config['temperature'], max_tokens=config['max_tokens'])
         if 'thinking' in config:
             body['thinking'] = {'type': config['thinking']}
+        # Capture the assembled multi-turn wire input without Base64 in logs.
+        # Recorder failure must never change the model's actual request.
+        replay = None
+        recorder = getattr(self, 'replay_recorder', None)
+        if recorder is not None:
+            try:
+                replay = recorder.request_snapshot(messages, context, body)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                replay = dict(version=1, incomplete=True,
+                              error='capture_' + type(error).__name__)
         signature = dict(version=PROMPT_VERSION, role=role, endpoint=config['base_url'], request=body)
         if cache and cache_context is not None:
             cached_body = json.loads(canonical(body))
@@ -537,7 +554,8 @@ class APIClient:
                            cache_key=digest, cache_hit=True,
                            messages=logged_messages, result=result, model=config['model'],
                            endpoint_id=endpoint_id,endpoint_index=endpoint_index,base_url=config['base_url'],
-                           completion_request_id=request_id,success=True, seconds=0.0))
+                           completion_request_id=request_id,success=True, seconds=0.0,
+                           replay=replay))
             return result
         retries = config['max_retries']
         timeout = config['timeout_seconds'] if timeout_seconds is None else min(config['timeout_seconds'], timeout_seconds)
@@ -559,7 +577,7 @@ class APIClient:
                           endpoint_id=endpoint_id,endpoint_index=endpoint_index,base_url=config['base_url'],
                           max_attempts=retries+1,retry_safe=retry_safe,
                           format_retry=format_retry,
-                          model=config['model'], messages=logged_messages, request_type=purpose,
+                          model=config['model'], messages=logged_messages, replay=replay, request_type=purpose,
                           repair_attempt=attempt,
                           validation_error_type=None, validation_field=[], repair_result='not_needed',
                           fallback_reason=(previous_endpoint_failures[-1]['error']
