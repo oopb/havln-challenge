@@ -186,16 +186,17 @@ class ForwardPreflightV9(unittest.TestCase):
         self.assertGreaterEqual(g.central_forward_obstruction.call_count,2)
 
     def test_tilted_forward_does_not_spend_budget_on_auto_look(self):
-        r,actions=test_runtime()
+        r,actions=test_runtime(changed_forwards=True)
         r.config['max_steps']=2  # Only one non-STOP action remains.
         r.motion_controller.pitch_deg=-30
         r.refresh()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
         result=r._navigate_relative('NONE',0,.25)
-        self.assertEqual(result['status'],'BUDGET_LIMIT')
-        self.assertEqual(actions,[])
+        self.assertEqual(result['status'],'ACTIONS_COMPLETED')
+        self.assertEqual(actions,['MOVE_FORWARD'])
         self.assertEqual(r.pitch_deg,-30)
-        self.assertFalse(any(a=='MOVE_FORWARD' for a in actions))
+        self.assertEqual(result['forward_actions_executed'],1)
+        self.assertFalse(any(a in ('LOOK_UP','LOOK_DOWN') for a in actions))
 
     def test_stall_is_not_silently_treated_as_collision(self):
         r,actions=test_runtime()

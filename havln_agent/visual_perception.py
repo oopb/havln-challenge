@@ -65,6 +65,17 @@ _ADVICE_FIELDS=dict(
     distance_m_hint=dict(anyOf=[
         dict(type='number',minimum=0.25,maximum=3.0),dict(type='null')]))
 SCAN_GUIDANCE_SCHEMA['properties'].update(copy.deepcopy(_ADVICE_FIELDS))
+# The VLM also produces its camera choice last. Do not lead a model with
+# next_action/turn_deg before it has reported visual facts and its reason.
+_VLM_OUTPUT_ORDER=(
+    'observation_summary','evidence','target_visible','target_type',
+    'target_kind','confidence','box','uncertainty',
+    'navigation_suggestion','reason','expected_progress','distance_m_hint',
+    'candidate_approach','next_action','turn_deg')
+SCAN_GUIDANCE_SCHEMA['properties']={
+    key:SCAN_GUIDANCE_SCHEMA['properties'][key] for key in _VLM_OUTPUT_ORDER}
+SCAN_GUIDANCE_SCHEMA['required']=[
+    key for key in _VLM_OUTPUT_ORDER if key in SCAN_GUIDANCE_SCHEMA['required']]
 
 SCAN_GUIDANCE_PROMPT=(
     'You are Observation Agent helping NavigationAgent execute ONE entire '
@@ -132,6 +143,14 @@ SCAN_GUIDANCE_PROMPT=(
     'Keep uncertainty explicit, and distinguish sensed obstacles from '
     'historical model guesses. NavigationAgent owns all movement and final '
     'mission completion. '
+    'Generate the JSON in this order: describe observed RGB-D evidence '
+    'and target facts FIRST (observation_summary, evidence, target fields, '
+    'box, uncertainty); then give the short visual interpretation and '
+    'navigation suggestion (navigation_suggestion, reason, '
+    'expected_progress); finally set candidate_approach and choose '
+    'next_action plus turn_deg LAST. Camera choice must follow the '
+    'observations instead of preceding them. '
+
     'Return ONE JSON object with EACH field name occurring exactly once; '
     'do not append a correction by repeating target_visible, uncertainty, '
     'or any other field. Do not emit explanatory text outside JSON.'

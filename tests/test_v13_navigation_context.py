@@ -261,7 +261,15 @@ class SimpleNavigationContractTests(unittest.TestCase):
     def test_prompt_protocol_is_simple(self):
         protocol=compact_navigation_protocol(registry(camera(),10))
         self.assertIn('tool and args',protocol)
+        self.assertIn('observed_evidence',protocol)
+        self.assertIn('decision_analysis',protocol)
         self.assertNotIn('direction_intent',protocol)
+        nav_schema=navigation_schema(registry(camera(),10))
+        props=list(nav_schema['oneOf'][0]['properties'])
+        self.assertEqual(props[0],'observed_evidence')
+        self.assertEqual(props[-3:],['decision_analysis','tool','args'])
+        self.assertEqual(nav_schema['oneOf'][0]['required'],
+                         ['observed_evidence','decision_analysis','tool','args'])
         self.assertNotIn('ALIGN_VISIBLE_TARGET',MISSION_PROMPT)
         self.assertNotIn('EXPLORE_ALTERNATIVE',MISSION_PROMPT)
 

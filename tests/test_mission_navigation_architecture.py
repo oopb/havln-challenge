@@ -74,14 +74,15 @@ class MissionContracts(unittest.TestCase):
         tools=navigation_tool_menu(registry(camera(),3))
         schema=navigation_schema(tools)
         Draft7Validator.check_schema(schema)
-        message=dict(observed_evidence=['Current RGB shows a passage.'],
-            tool='navigate_relative',
-            decision_analysis='Choose the visible passage after checking current Depth.',
-            args=dict(turn_direction='RIGHT',turn_degrees=45,distance_m=.5),
-            progress_narrative='I have descended the stairs, but have not located the piano.',
+        message=dict(
+            observed_evidence=['Current RGB shows a passage.'],
+            progress_narrative='I may have descended stairs; not verified.',
             navigation_intent='Find the hall and cross it toward the piano.',
             uncertainties=['Hall entry not yet localized.'],
-            evidence_observation_ids=['obs_0000'])
+            evidence_observation_ids=['obs_0000'],
+            decision_analysis='Choose the visible passage after checking current Depth.',
+            tool='navigate_relative',
+            args=dict(turn_direction='RIGHT',turn_degrees=45,distance_m=.5))
         self.assertTrue(Draft7Validator(schema).is_valid(message))
         self.assertFalse(Draft7Validator(schema).is_valid({
             'tool':'verify_subgoal','args':{'subgoal_index':0}}))
