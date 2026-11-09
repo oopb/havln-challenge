@@ -1,3 +1,56 @@
+# v18 — bounded output recovery, continuous cruise, and local visual passages
+
+The eval-batch4-31 (2026-11-09T140359Z) run made 20 forwards but stopped
+technically after the navigation model emitted
+`navigate_relative(turn=RIGHT 30°, distance_m=0)`. Other replies exceeded
+the 220-character per-evidence limit.
+
+## Changes
+
+1. `observed_evidence` length is now 600 chars per entry (still 1–5
+   source-grounded entries). The same evidence → short analysis → final
+   `tool, args` ordering is retained.
+2. `turn_and_observe` is explicitly the pure turn/LOOK tool. Distance zero
+   remains **invalid** for `navigate_relative` and is never silently
+   rounded to 0.25m. Argument validation produces field-specific feedback
+   before the generic tagged-union schema error.
+3. Each decision gets up to three *fresh* role regenerations for formatting
+   errors, with concrete field feedback. If still invalid, the scheduler
+   permits up to two further decision cycles with newly refreshed sensor
+   evidence. Invalid model output never reaches the motor executor; after
+   the bounded limit the episode can still fail with an explicit api_error.
+   Transport, authorization and budget errors are not reinterpreted as
+   regenerable format failures.
+4. NavigationAgent can choose 0.25–3m finite segments, and is reminded that
+   it may choose 0.5–1m when a visible corridor is stable. This is **advice,
+   not a hard-coded minimum**. The existing atomic forward depth and RGB-D
+   stall checks remain active.
+5. The VLM receives the specific visual question from NavigationAgent and
+   is told to compare candidate **floor/entry corridors** around people,
+   rails, stairs and doorways instead of targeting the centroid of a broad
+   semantic-object box. Hypotheses never authorize motion.
+6. The `last_motion_decision` context is projected from canonical receipts
+   into a compact, source-bound summary rather than copied with unused
+   command arguments and duplicated raw action events.
+
+All v17 behavior remains: actual camera pitch is preserved on each forward;
+no automatic LOOK_UP; central Depth blockage is still checked. No forced
+forward, automatic observer invocation, direction_intent or validator agent.
+
+## Regression
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v18_navigation_recovery.py' -v
+python -m unittest discover -s tests -v
+```
+
+A comparable `val_seen` run should use the same episode, model and 128-step
+budget as eval-batch4-31. Compare abort type, observed evidence length errors,
+valid pure turns, measured blocks, actual forwards and locally useful VLM calls.
+
+---
+
 # v16 — complete observation evidence and model-owned route continuity
 
 Addresses the eval-batch4-29 (2026-11-08T151735Z) failure mode of
