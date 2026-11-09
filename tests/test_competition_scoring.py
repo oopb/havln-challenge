@@ -66,6 +66,15 @@ class FormulaTests(unittest.TestCase):
         self.assertEqual(aggregate['TCR'],1)
         self.assertAlmostEqual(aggregate['NE'],3.75)
 
+    def test_official_simulator_shaped_episode_record(self):
+        row=dict(episode_id='11', distance_to_goal=2.5, success=1.0,
+                 collisions=dict(count=3), expected_collisions=2)
+        metrics, details, _=aggregate_episodes([row], 'val_seen')
+        self.assertEqual(details[0]['TCR'], 1)
+        self.assertEqual(details[0]['SR'], 0,
+                         'A visually near goal is not collision-free success')
+        self.assertEqual(metrics['NE'], 2.5)
+
     def test_duplicate_episodes_rejected(self):
         row=dict(episode_id='a',navigation_error_m=0,success=1,
                  adjusted_collision_count=0)
