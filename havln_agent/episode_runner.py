@@ -1,5 +1,6 @@
 """Public environment I/O, six-component runtime and official action export."""
 from collections import Counter
+from dataclasses import asdict
 import json
 from pathlib import Path
 import time
@@ -130,7 +131,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         runtime.accept_observation(observation)
         atomic_json(directory/'episode.json',
             dict(episode_id=episode_id,instruction=observation.instruction,
-                 architecture='mission_narrative_v2'))
+                 architecture='mission_narrative_v2', camera=asdict(camera)))
         run(runtime,append)
         if not environment_done:
             raise ValueError('Environment did not terminate after the executed STOP/budget')
