@@ -143,15 +143,20 @@ class ReplayRecorder:
     def media(self, url, candidates):
         raw, digest = _image_parts(url)
         previous = self.by_hash.get(digest)
-        if previous is not None:
+        if previous is not None and (
+                previous.get('kind') != 'observation'
+                or previous.get('observation_id') in candidates):
             return previous
-        # Only consider IDs actually mentioned by this request. The model
-        # never receives an invented frame association.
+        # An identical rendered PNG may come from a different observation ID.
+        # Prefer this request's verified source frame, not an older matching
+        # pixel buffer; do not manufacture provenance from image similarity.
         for ident in candidates[:48]:
             for expected, ref in self._observation_renditions(ident):
                 self.by_hash.setdefault(expected, ref)
-            if digest in self.by_hash:
-                return self.by_hash[digest]
+                if expected == digest:
+                    return ref
+        if previous is not None:
+            return previous
         # Unmatched media is saved exactly once; never duplicate it per call.
         self.media_dir.mkdir(exist_ok=True)
         filename = digest + '.png'
