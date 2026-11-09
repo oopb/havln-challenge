@@ -260,7 +260,8 @@ class SimpleNavigationContractTests(unittest.TestCase):
 
     def test_prompt_protocol_is_simple(self):
         protocol=compact_navigation_protocol(registry(camera(),10))
-        self.assertIn('tool and args',protocol)
+        self.assertIn('FINAL executable decision',protocol)
+        self.assertIn('Put tool parameters directly inside args',protocol)
         self.assertIn('observed_evidence',protocol)
         self.assertIn('decision_analysis',protocol)
         self.assertNotIn('direction_intent',protocol)
