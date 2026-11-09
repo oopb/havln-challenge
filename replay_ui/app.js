@@ -329,6 +329,80 @@ function renderDetail(detail) {
     }
   }
 }
+function scoreNumber(value, decimals = 4) {
+  return typeof value === 'number' && Number.isFinite(value) ?
+    value.toFixed(decimals) : '—';
+}
+function scoreRate(value) {
+  return typeof value === 'number' && Number.isFinite(value) ?
+    (value * 100).toFixed(2) + '%' : '—';
+}
+function renderScoring(scoring) {
+  const scored = scoring && scoring.status === 'scored';
+  const metrics = scored ? scoring.metrics : {};
+  $('officialScore').textContent = scored ? scoreNumber(scoring.score, 5) : '—';
+  $('scoreStatus').textContent = scored ? '离线复算 · 非官方成绩' :
+    scoring?.status === 'invalid_metrics' ? '评测数据无效' : '缺少评测数据';
+  $('scoreStatus').classList.toggle('warning', !scored);
+  $('scoreSR').textContent = scoreRate(metrics?.SR);
+  $('scoreNE').textContent = scoreNumber(metrics?.NE, 3);
+  $('scoreCR').textContent = scoreRate(metrics?.CR);
+  $('scoreTCR').textContent = scoreNumber(metrics?.TCR, 3);
+  $('scoreNavigation').textContent = scored ? scoreNumber(scoring.navigation, 6) : '—';
+  $('scoreSocial').textContent = scored ? scoreNumber(scoring.social, 6) : '—';
+  $('scoreFactor').textContent = scored ? scoreNumber(scoring.social_factor, 6) : '—';
+  $('scoreProvenance').textContent = scored ?
+    '评分来源：' + (scoring.imported_from || '导入评测结果') +
+      ' · ' + (scoring.scope === 'imported_split_metrics' ? '聚合指标' : '逐 Episode 评测') +
+      ' · 不是 CodaBench 官方排行榜成绩' :
+    '没有独立评测的目标距离、成功状态和人体碰撞记录，不会将模型预测当作真实评分。';
+  $('scoreCoverage').textContent =
+    (scoring?.split || state.data?.scoring_split || '') +
+    (scoring?.evaluated_episodes ?
+      ' · 已评测 ' + scoring.evaluated_episodes + ' / ' +
+        scoring.expected_split_episodes : ' · 无已验证样本数');
+  $('scoringLimitations').textContent = (scoring?.limitations || [
+    '仅保存动作与 RGB-D 的运行轨迹无法直接计算 SR、NE、CR、TCR。'
+  ]).join('；');
+  const evidence = $('episodeMetricEvidence');
+  evidence.replaceChildren();
+  const one = scoring?.per_episode;
+  if (one && typeof one === 'object') {
+    const header = node('strong','','本 Episode 的独立评测依据');
+    const table = node('div','single-metric-row');
+    [['是否无碰撞成功', one.SR ? '是' : '否'],
+      ['终点误差', scoreNumber(one.NE,3)+' m'],
+      ['调整后人体碰撞', scoreNumber(one.TCR,2)],
+      ['是否发生额外碰撞', one.CR ? '是' : '否']].forEach(([key,value]) => {
+        const item = node('div');
+        item.append(node('small','',key), node('strong','',value));
+        table.append(item);
+      });
+    evidence.append(header,table);
+  } else {
+    evidence.append(node('p','muted',
+      '本 Episode 没有独立的真实评测记录；不能从 STOP 或图像变化推断是否成功。'));
+  }
+}
+async function calculateScorePreview() {
+  const values = ['SR','NE','CR','TCR'].map(key => $('calc'+key).value.trim());
+  if (values.some(v => v === '')) {
+    $('calcResult').textContent = '请填写全部四项指标，空值不能当作 0。';
+    return;
+  }
+  const params = new URLSearchParams();
+  ['sr','ne','cr','tcr'].forEach((key,i) => params.set(key, values[i]));
+  $('calcResult').textContent = '计算中…';
+  try {
+    const response = await json('/api/score/calculate?' + params.toString());
+    const c = response.calculation;
+    $('calcResult').textContent = '试算 Score = ' + scoreNumber(c.score, 6) +
+      ' · Navigation ' + scoreNumber(c.navigation, 5) +
+      ' · Social ' + scoreNumber(c.social, 5) + '（非官方）';
+  } catch(e) {
+    $('calcResult').textContent = '计算失败：' + e.message;
+  }
+}
 async function loadEpisode(id) {
   state.episode = id; state.selected = -1; state.detail = null;
   state.requestSeq++;
@@ -336,6 +410,7 @@ async function loadEpisode(id) {
   try {
     state.data = await json(pathFor(id,'timeline'));
     const meta = state.data.metadata || {}, sum = state.data.summary || {};
+    renderScoring(state.data.scoring);
     $('instruction').textContent = meta.instruction || '该 episode 未记录任务文本';
     $('totalActions').textContent = '动作 '+state.data.counts.actions;
     $('totalApis').textContent = 'API '+state.data.counts.api;
@@ -354,6 +429,7 @@ async function init() {
     if (!found.episodes.length) throw new Error('没有找到 episode');
     select.addEventListener('change', () => loadEpisode(select.value));
     $('modeSelect').addEventListener('change', filterItems);
+    $('calcButton').addEventListener('click', calculateScorePreview);
     $('searchBox').addEventListener('input', filterItems);
     $('scrubber').addEventListener('input', () => {
       if (state.filtered.length) selectIndex(state.filtered[Number($('scrubber').value)]);
