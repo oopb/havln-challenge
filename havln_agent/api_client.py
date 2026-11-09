@@ -357,7 +357,7 @@ class APIClient:
             recorder = getattr(self, 'replay_recorder', None)
             if recorder is not None:
                 try:
-                    recorder.api_logged(record)
+                    recorder.api_logged(dict(self.trace_context, **record))
                 except OSError:
                     # Replay is a passive diagnostic, not an execution gate.
                     pass
