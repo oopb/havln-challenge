@@ -516,7 +516,7 @@ class MemoryRecords:
             self.active_attempt['actions'].append(entry)
         self.event('action_executed', action=action, result=feedback)
 
-    def route_progress_summary(self):
+    def route_progress_summary(self, max_successful_segments=8):
         """Reconstruct changed-RGBD action segments and historical blocks.
 
         Never label a changed image as verified displacement or a traversed
@@ -598,7 +598,8 @@ class MemoryRecords:
                 viewpoint_generation=pose.get('viewpoint_generation'),
                 reason=result.get('reason'),
                 evidence='observed_block_at_stance_not_historical_route_veto'))
-        return dict(successful_segments=segments[-8:],
+        return dict(successful_segments=(segments if max_successful_segments is None
+                                        else segments[-max_successful_segments:]),
             blocked_at_prior_stances=blocked[-6:],
             latest_exact_blocked_at=copy.deepcopy(
                 self.evidence.obstacle_blocks[-4:]),

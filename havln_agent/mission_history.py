@@ -9,6 +9,7 @@ import json
 import math
 from .heading import same_local_stance, relative_bearing
 from .evidence_ledger import physical_view_key
+from .navigation_evidence import route_continuity, recent_look_evidence
 
 def _view(record, observation):
     pose=observation.get('pose') or {}
@@ -353,7 +354,9 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             suggested_next_step='model_selects_another_valid_action'))
         if len(camera_limits)>=3:
             break
-    route=memory.route_progress_summary()
+    # Read the complete episode's authentic changed-RGBD forward receipts,
+    # then choose a small, source-linked subset for model input.
+    route=memory.route_progress_summary(max_successful_segments=None)
     # Keep a compact, source-linked route candidate pool independent of the
     # last three observation sessions. A missing box never becomes a bearing.
     route_candidates=[]
@@ -442,6 +445,9 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         recent_camera_pitch_limits=camera_limits,
         recent_views_at_current_stance=recent_views_at_stance(memory,pose),
         observed_forward_action_segments=(route.get('successful_segments') or [])[-5:],
+        route_continuity=route_continuity(
+            memory,pose,route.get('successful_segments') or []),
+        recent_look_evidence=recent_look_evidence(memory,pose),
         forward_action_segments_are_not_verified_translation=True,
         metric_pose_available=False,
         bearing_convention=dict(

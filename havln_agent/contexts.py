@@ -115,6 +115,31 @@ def _project_navigation_memory(memory, live_depth):
             displacement_verified=False)
         for item in segments[-3:]]
 
+    # Compact a factual long-route anchor and earlier MODEL interpretations.
+    # The latest progress narrative may contradict these older assessments;
+    # preserve their source IDs rather than silently replacing history.
+    continuity=memory.get('route_continuity')
+    if isinstance(continuity,dict):
+        history=continuity.get('model_assessment_snapshots') or []
+        continuity['model_assessment_snapshots']=[
+            _small(item,('phase','source_observation_id','action_step',
+                'source_heading_deg','model_visual_description',
+                'model_progress_claim','interpretation_unverified'),
+                {'model_visual_description':145,'model_progress_claim':115})
+            for item in history[:4]]
+    else:
+        memory.pop('route_continuity',None)
+    looks=memory.get('recent_look_evidence')
+    if isinstance(looks,dict) and looks.get('sampled_recent_look_decisions'):
+        looks['latest_questions_and_model_descriptions']=[
+            _small(item,('look','question','source_observation_id',
+                'first_time_camera_yaw_pitch_view',
+                'following_model_visual_description'),
+                {'question':95,'following_model_visual_description':145})
+            for item in (looks.get('latest_questions_and_model_descriptions') or [])[-2:]]
+    else:
+        memory.pop('recent_look_evidence',None)
+
     # Historical physical blocks, unverified post-move frame stalls and
     # pre-decision Depth blocks have DIFFERENT semantics. Keep those
     # distinctions, drop duplicate hashes, wide nested geometry and flags.
