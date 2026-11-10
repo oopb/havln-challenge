@@ -106,12 +106,16 @@ class Eval37RouteEvidence(unittest.TestCase):
         self.assertTrue(all(s['interpretation_unverified'] for s in snapshots))
         self.assertTrue(summary['executed_steps_do_not_prove_stair_descent_or_metric_displacement'])
 
-    def test_selects_prior_forward_before_after_not_generic_origin(self):
+    def test_selects_prior_forward_pair_without_repeating_current_view(self):
         memory=fixture()
         selected=navigation_visual_anchors(memory,'obs_0052',max_pairs=3)
-        self.assertEqual([x['observation_id'] for x in selected],
-            ['obs_0012','obs_0019','obs_0050'])
-        self.assertNotIn('obs_0000',[v['observation_id'] for v in selected])
+        ids=[x['observation_id'] for x in selected]
+        self.assertEqual(ids[:2],['obs_0012','obs_0019'])
+        # The old third candidate obs_0050 is the SAME current executed
+        # stance/yaw/pitch as obs_0052; it is not another useful image.
+        self.assertNotIn('obs_0050',ids)
+        self.assertNotIn('obs_0052',ids)
+        self.assertEqual(len(ids),len(set(ids)))
         self.assertEqual(selected[0]['selection_reason'],
             'prior_forward_start_visual_evidence')
         self.assertEqual(selected[1]['selection_reason'],
