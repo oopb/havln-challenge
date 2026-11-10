@@ -7,7 +7,7 @@ the robot or treats a historical Depth frame as current clearance.
 import copy
 import json
 import math
-from .heading import same_local_stance, relative_bearing
+from .heading import same_local_stance, relative_bearing, direction_from_bearing
 from .evidence_ledger import physical_view_key
 from .navigation_evidence import route_continuity, recent_look_evidence
 
@@ -376,6 +376,11 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             round(relative_bearing(absolute,
                  math.degrees(pose.get('heading',0))%360),2)
             if fresh and isinstance(absolute,(int,float)) else None)
+        bearing=item['relative_bearing_deg_from_current']
+        if bearing is not None:
+            side,amount=direction_from_bearing(bearing)
+            item['relative_side_from_current']=side
+            item['relative_turn_deg_from_current']=amount
         item['historical_only_not_live_clearance']=True
         route_candidates.append(item)
         if len(route_candidates)>=6:

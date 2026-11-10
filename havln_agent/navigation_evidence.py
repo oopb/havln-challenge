@@ -4,6 +4,7 @@ No new persistent state, odometry, scene semantics or movement constraints.
 The model decides how to interpret competing visual hypotheses.
 """
 import math
+from .heading import same_local_stance
 
 
 def _yaw(pose):
@@ -55,6 +56,48 @@ def _assessment(turn, phase):
         model_visual_description=_excerpt(observed,175),
         model_progress_claim=_excerpt(decision.get('progress_narrative'),155),
         interpretation_unverified=True)
+
+
+def _endpoint_obstacle(memory, segment):
+    """Link an actual later front block to the end of a finished MOVE span.
+
+    A pre-decision BLOCKED view is NOT a rejected past MOVE, and its source
+    bearing/stance must agree with the completed segment endpoint.
+    """
+    records={o['observation_id']: (i,o)
+             for i,o in enumerate(memory.observations)}
+    finish=records.get(segment.get('end_observation_id'))
+    if not finish:
+        return None
+    index,end=finish
+    end_pose=end.get('pose') or {}
+    yaw=segment.get('heading_deg')
+    limit=max(.1,float(memory.camera.turn_angle)/2)
+    for kind,items in (
+            ('FRONT_BLOCK_OBSERVED_NO_FORWARD_ATTEMPT',
+             memory.evidence.predecision_front_obstacles),
+            ('NEXT_FORWARD_REJECTED',memory.evidence.obstacle_blocks)):
+        for item in items:
+            reference=records.get(item.get('observation_id'))
+            if not reference or reference[0]<index:
+                continue
+            source=reference[1]
+            bearing=item.get('heading_deg')
+            if (not isinstance(bearing,(int,float)) or
+                    not isinstance(yaw,(int,float))
+                    or _difference(bearing,yaw)>limit
+                    or not same_local_stance(source.get('pose'),end_pose)):
+                continue
+            return dict(
+                kind=kind,source_observation_id=item['observation_id'],
+                heading_deg=round(bearing,1),
+                pitch_deg=(source.get('pose') or {}).get('pitch_deg'),
+                same_executed_forward_stance_as_segment_end=True,
+                measured_at_segment_endpoint_after_executed_forwards=True,
+                attempted_subsequent_forward=kind=='NEXT_FORWARD_REJECTED',
+                previously_executed_forwards_not_rejected=True,
+                measured_block_does_not_prove_earlier_route_failed=True)
+    return None
 
 
 def route_continuity(memory, pose, segments):
@@ -112,6 +155,7 @@ def route_continuity(memory, pose, segments):
     return dict(
         selected_historical_forward=segment(anchor),
         latest_forward=(segment(recent) if recent is not anchor and recent else None),
+        endpoint_front_obstacle=_endpoint_obstacle(memory,anchor),
         current_heading_deg=round(heading,1),
         separation_from_historical_forward_deg=difference,
         opposing_camera_heading=bool(difference>=150),

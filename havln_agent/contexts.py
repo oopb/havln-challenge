@@ -120,6 +120,8 @@ def _project_navigation_memory(memory, live_depth):
     # preserve their source IDs rather than silently replacing history.
     continuity=memory.get('route_continuity')
     if isinstance(continuity,dict):
+        if continuity.get('endpoint_front_obstacle') is None:
+            continuity.pop('endpoint_front_obstacle',None)
         history=continuity.get('model_assessment_snapshots') or []
         continuity['model_assessment_snapshots']=[
             _small(item,('phase','source_observation_id','action_step',
@@ -156,6 +158,8 @@ def _project_navigation_memory(memory, live_depth):
         for item in (memory.get('stalled_forward_at_source_stances') or [])[:2]]
     blocks=memory.get('observed_front_blocks') or []
     current_source=(live_depth or {}).get('source_observation_id')
+    endpoint_source=((continuity or {}).get('endpoint_front_obstacle') or {}).get(
+        'source_observation_id')
     memory['observed_front_blocks']=[
         dict(_small(item,('kind','source_observation_id',
                 'heading_deg','source_stance_matches_current',
@@ -164,7 +168,7 @@ def _project_navigation_memory(memory, live_depth):
                 'central_support_pixels','nearest_along_m',
                 'focus_region_xyxy_norm')))
         for item in blocks
-        if item.get('source_observation_id')!=current_source
+        if item.get('source_observation_id') not in (current_source,endpoint_source)
     ][:2]
 
     # Completed turn_and_observe receipts are already represented in the
@@ -211,7 +215,8 @@ def _project_navigation_memory(memory, live_depth):
             'candidate_id','source_observation_id','target_type',
             'target_kind','confidence','route_status',
             'bearing_region_role','source_stance_matches_current',
-            'absolute_heading_deg','relative_bearing_deg_from_current',
+            'relative_bearing_deg_from_current','relative_side_from_current',
+            'relative_turn_deg_from_current',
             'historical_bearing_in_source_record_only',
             'evidence','navigation_suggestion','uncertainty'),
             {'evidence':155,'navigation_suggestion':210,'uncertainty':120})

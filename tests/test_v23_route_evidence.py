@@ -113,9 +113,9 @@ class Eval37RouteEvidence(unittest.TestCase):
             ['obs_0012','obs_0019','obs_0050'])
         self.assertNotIn('obs_0000',[v['observation_id'] for v in selected])
         self.assertEqual(selected[0]['selection_reason'],
-            'prior_opposing_forward_start_visual_evidence')
+            'prior_forward_start_visual_evidence')
         self.assertEqual(selected[1]['selection_reason'],
-            'prior_opposing_forward_end_visual_evidence')
+            'prior_forward_end_visual_evidence')
 
     def test_recent_look_evidence_includes_real_result_not_only_repeat_count(self):
         memory=fixture()

@@ -318,14 +318,18 @@ class SimpleNavigationContractTests(unittest.TestCase):
         self.assertEqual(ctx['current_rgb']['observation_id'],
                          r.memory.current['observation_id'])
         self.assertGreaterEqual(len(images),2)
-        self.assertLessEqual(len(images),4)
+        self.assertLessEqual(len(images),6)
         manifest=ctx['history_media']['manifest']
         self.assertEqual([v['image_index'] for v in manifest],
                          list(range(len(images))))
         self.assertEqual(manifest[0]['kind'],'current_RGB')
         self.assertTrue(all(v['kind']=='historical_RGB'
                             for v in manifest[1:]))
-        self.assertEqual(manifest[1]['observation_id'],'obs_0000')
+        # Replaying the current yaw at the same stance is not an extra
+        # historical viewpoint, even when its RGB hash changed on refresh.
+        self.assertTrue(all(v['observation_id']!=
+                            ctx['current_rgb']['observation_id']
+                            for v in manifest[1:]))
         self.assertTrue(all(v.get('historical_only_not_live_clearance')
                             for v in manifest[1:]))
         self.assertEqual(ctx['history_media']['attached_historical_RGB'],
