@@ -83,6 +83,18 @@ class ToolExecutor:
                 semantic_source_age_seconds=max(0,time.monotonic()-scene['source']['captured_at']),
                 validated_rgbd_captured_at=self.observation.captured_at,
                 evidence='exact_current_rgb_and_pose_match_with_current_depth')
+        # Never apply model person regions beyond their authentic RGB & pose.
+        hint=getattr(self,'_active_person_hint',None)
+        if (hint and hint.get('boxes')
+                and (self.memory.current or {}).get('rgb_hash')==hint.get('rgb_hash')
+                and self.motion_controller.pose()==hint.get('pose')):
+            geometry.set_humans(dict(
+                humans=[dict(box=tuple(box)) for box in hint['boxes']],
+                uncertain_humanoids=[]))
+            geometry.human_status.update(
+                semantic_source_observation_id=hint.get('observation_id'),
+                human_boxes_same_current_RGB_and_pose=True,
+                identity_is_model_hypothesis=True)
         return geometry
 
     def accept_observation(self, observation):
@@ -687,7 +699,7 @@ class ToolExecutor:
                     path,checked,result['status'],result.get('reason'),
                     **{k:result[k] for k in (
                         'safety','obstacle_observation','blocked_at',
-                        'information_options')
+                        'human_safety','information_options')
                         if k in result})
             if action=='MOVE_FORWARD':
                 attempt=self.memory.active_attempt
@@ -701,6 +713,22 @@ class ToolExecutor:
                     return self._navigation_feedback(
                         path,checked,'REQUIRES_ATTENTION',
                         alert['reason'],motion_alert=alert)
+                if (getattr(self,'_person_refresh_needed',False)
+                        and attempt['forward_actions']<
+                                attempt['forward_action_horizon']):
+                    # The source image's person box is stale after movement.
+                    # Ask the model for a fresh camera-grounded choice only
+                    # when the measured person was within the near range.
+                    return self._navigation_feedback(
+                        path,checked,'REQUIRES_ATTENTION',
+                        'fresh_person_RGBD_required_after_forward',
+                        human_safety=dict(
+                            previous_person_observation_id=(
+                                getattr(self,'_active_person_hint',{}) or {}
+                                ).get('observation_id'),
+                            current_observation_id=self.memory.current['observation_id'],
+                            previous_person_box_not_reused=True,
+                            model_decides_next_relative_direction=True))
             if self.done:
                 return self._navigation_feedback(
                     path,checked,'INTERRUPTED','environment_done')

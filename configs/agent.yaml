@@ -35,7 +35,9 @@ runtime:
   max_unchanged_evidence_decisions: 8  # Diagnostic only; it does not impose verification or steering.
   # Optional: max_model_decisions: 300. Default is 2 * effective max_steps.
   waypoint_distance: 1.25
-  safety_margin: 0.05  # 5 cm beyond the actual 10 cm radius; saved smoke-8 sweep regression.
+  safety_margin: 0.05  # Ordinary physical body/Depth margin; NOT human spacing.
+  human_clearance_margin_m: 0.45  # Extra measured current-RGB person buffer only.
+  human_recheck_range_m: 3.0  # Re-observe fresh people during close-range motion.
   tool_max_actions: 3  # Legacy config compatibility; forward motion has no per-call atomic-action cap.
   max_scene_age_seconds: 20  # Current scene semantics, independent of visual_perception.timeout_seconds.
   max_static_landmark_age_seconds: 300  # Retain static spatial clues; revalidate geometry before movement.

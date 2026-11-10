@@ -128,7 +128,9 @@ def run(runtime,append):
                 # observation ID sampled before inference.
                 binding.update(
                     observation_id=runtime.memory.current['observation_id'],
-                    actor='navigation_agent')
+                    actor='navigation_agent',
+                    current_rgb_hash=runtime.memory.current.get('rgb_hash'),
+                    visible_people_boxes=proposal.get('visible_people_boxes') or [])
                 return proposal
             proposal=request(runtime,'navigation_agent',decide,append)
             runtime.decisions+=1
