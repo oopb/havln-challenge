@@ -70,7 +70,7 @@ def registry(camera, max_actions, pitch_deg=0.):
         'navigate_relative':(
             'Move along one model-chosen finite relative segment (up to 3m). '
             'For a numerical absolute goal bearing, provide ONLY target_heading_deg '
-            '(0..360, using the current reported pose heading): the executor 
+            '(0..360, using the current reported pose heading): the executor '
             'computes the shortest calibrated LEFT/RIGHT turn from CURRENT yaw. '
             'For a directly visible relative turn, instead provide ONLY '
             'turn_direction LEFT/RIGHT/NONE and nonnegative turn_degrees '
@@ -95,7 +95,7 @@ def registry(camera, max_actions, pitch_deg=0.):
             'turn_degrees=0, look=up or look=down. Check lower stairs/floor '
             'versus upper doorway/distant path when their evidence is missing. '
             'Never express pure turning as navigate_relative(distance_m=0). '
-            'The LOOK enum is 
+            'The LOOK enum is '
             'always none/up/down. Camera limits (-60..60 degrees) are checked '
             'at execution; out-of-range LOOK returns recoverable CAMERA_PITCH_LIMIT '
             'with the current allowed_look choices and NO atomic actions. '
