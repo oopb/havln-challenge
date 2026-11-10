@@ -16,6 +16,7 @@ on:
       - "tests/test_v16_observation_continuity.py"
       - "tests/test_v20_direction_depth.py"
       - "tests/test_v21_compact_navigation_context.py"
+      - "tests/test_v22_active_pitch_heading.py"
       - "tests/test_replay_studio.py"
       - "tests/test_competition_scoring.py"
       - "replay_ui/**"
@@ -69,6 +70,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v20_direction_depth.py' -v
       - name: Verify retained PR 91 compact canonical Memory projection and scan telemetry
         run: python -m unittest discover -s tests -p 'test_v21_compact_navigation_context.py' -v
+      - name: Verify v22 absolute-yaw math, exclusive tool args, and active pitch observation
+        run: python -m unittest discover -s tests -p 'test_v22_active_pitch_heading.py' -v
       - name: Verify replay capture, deduplicated images, timeline and ZIP compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
       - name: Verify official Track 2 formula, adjusted collision metrics and missing-score semantics

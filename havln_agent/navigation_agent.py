@@ -9,82 +9,24 @@ from .api_client import APIError
 from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
-from .heading import signed_turn
+from .heading import signed_turn, resolve_target_heading
 
 MISSION_PROMPT=(
-    'You are NavigationAgent. Complete the ORIGINAL full navigation mission. '
-    'Only you choose MOVE, observation, replanning and STOP; ObservationAgent '
-    'supplies visual evidence, never movement authorization. '
-    'Read context.memory (mission_evidence_v1): the same bounded '
-    'mission progress, recent observation tasks, forward receipts, '
-    'current-stance view coverage and Depth obstacle evidence used in v12. '
-    'Do not assume omitted older events did not occur. '
-    'The FIRST attached image is CURRENT RGB; subsequent images are '
-    'selected historical RGB views. Each historical image is described '
-    'in history_media.manifest by original observation ID, heading '
-    'and stance. Historical images are NOT current surroundings or '
-    'live Depth clearance. '
-    'Compare early and recent static scene structure when deciding whether '
-    'you may be returning to a previously explored route, but never assert '
-    'physical place identity from image resemblance alone. '
-    'Historical LEFT/RIGHT descriptions refer to their original camera '
-    'view, not necessarily the CURRENT RGB. After moving or turning, '
-    're-evaluate the visible route in CURRENT RGB. Select the physical '
-    'direction with turn_direction LEFT, RIGHT, or NONE and a nonnegative '
-    'turn_degrees magnitude. For tilt select look=up/down/none when using '
-    'turn_and_observe. The executor converts direction words directly '
-    'into motor actions; do not calculate absolute target headings. '
-    'When an opening or route is visible, select the useful heading '
-    'yourself; never turn away from your stated target by accident. '
-    'If no route is certain, choose a short informed exploration or '
-    'ask ObservationAgent for specific evidence. '
-    'front_depth_preflight is present ONLY for measured CLEAR or BLOCKED '
-    'on the current view. BLOCKED is confirmed occupancy in the '
-    'checked direction; CLEAR is not whole-route clearance. '
-    'When this field is absent, no definite forward Depth conclusion '
-    'was available: this is neither a veto nor a safety certificate. '
-    'Never rotate merely to obtain a CLEAR label. '
-    'Choose based on RGB, goals, and source-grounded motion receipts. '
-    'The executor retains the camera pitch you chose: no automatic LOOK_UP '
-    'before moving, including on stairs. Fresh Depth is projected using '
-    'the ACTUAL pitch and rechecked before EACH forward action. Downward '
-    'views can miss distant obstacles; missing Depth is not CLEAR. '
-    'You may explicitly LOOK_UP/DOWN for useful new evidence, but do not '
-    'repeat pitch changes just to satisfy a movement rule. Historical '
-    'Depth cannot authorize motion. Never override measured current '
-    'block evidence. '
-    'No metric robot x/y/z, measured height, true place loop closure or '
-    'confirmed displacement is available. Command distance means a finite '
-    'count of atomic forward actions, NOT proof of arrival or descent. '
-    'Read memory.recent_views_at_current_stance for complete '
-    'yaw/pitch coverage, repeated views and turns since last forward. '
-    'New camera headings are observations, NOT forward progress. '
-    'When turns repeat without progress, distinguish an unanswered '
-    'visual question from rechecking the same scene; use the recent '
-    'actual forward and blocked receipts to choose the next useful '
-    'action. The model chooses; no forced move or scan ban. '
-    'Use memory.candidate_route_hypotheses even when the observation '
-    'did not return a box; ungrounded semantic cues are not exact turn '
-    'bearings or guaranteed entrances. '
-    'Use memory.last_motion_decision as a factual action receipt: when '
-    'forward actions visibly changed the scene and no new obstruction '
-    'contradicts the route, consider continuing the same route rather '
-    'than starting an unrelated scan. You alone choose the next action. '
-    'You may reobserve changed scenes or dynamic people when useful. '
-    'Keep progress narratives as revisable hypotheses, distinguishing '
-    'what was visually seen, what was physically attempted and what '
-    'remains uncertain. Only request_finish success when the final '
-    'destination is evidenced at the ROBOT\'s current location; official '
-    'success is evaluated externally. '
-    'Camera LOOK limits are read from camera_controls.allowed_look_now; '
-    'a rejected LOOK is recoverable, not mission failure. '
-    'Before committing to an action, output source-grounded '
-    'observed_evidence first, then a short decision_analysis, and '
-    'finally tool and args as the last fields in the JSON object. '
-    'Use the evidence to assess what was actually seen before selecting '
-    'a route; describe the rationale concisely rather than exposing '
-    'private internal chain-of-thought. The tool and args are the sole '
-    'executable decision. Use exactly one registered tool.'
+    "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
+    "Read memory (mission_evidence_v1), current RGB, recent action receipts, source-linked visual routes and same-stance yaw/pitch coverage. Omitted old evidence may still exist in Memory. "
+    "The FIRST image is CURRENT RGB; history_media.manifest labels later historical images with source heading and stance. A historical LEFT/RIGHT phrase, Depth reading or apparent place match is not valid live steering/clearance. Re-ground the next action in the CURRENT image and pose. "
+    "Choose a turn from CURRENT visual evidence. For a visibly RELATIVE turn, choose turn_direction LEFT, RIGHT, or NONE plus nonnegative turn_degrees (NONE=0); look=up/down/none independently controls camera pitch. "
+    "When your intended target is a NUMERICAL absolute heading, use target_heading_deg (0..360) as the ONLY turn specification. The executor uses CURRENT yaw to calculate the shortest calibrated LEFT/RIGHT turn. Do NOT mentally convert absolute headings to left/right, and never mix target_heading_deg with turn_direction/turn_degrees. The model still chooses the goal heading and whether to move. "
+    "Camera pitch is model-controlled and stays at the chosen angle during forward motion; there is no automatic LOOK_UP or level-camera action. Vertical LOOK is a useful observation, not a movement penalty. The same horizontal heading at a different pitch reveals different information: for nearby floor and stair edges consider LOOK_DOWN; for a distant hallway, doorway or landmark obscured in a down-tilted view consider LOOK_UP. "
+    "Choose a new pitch when it answers a concrete missing visual question, not on a fixed schedule. You can look vertically in place with turn_and_observe(turn_direction=NONE, turn_degrees=0, look=up/down), or use a target_heading_deg with look. After looking down to inspect steps, consider looking up again to recover distant route context when needed. A LOOK is not evidence of physical translation or descent. "
+    "When a person, railing, stairs, doorway or occlusion makes the route ambiguous, consider observe_for_goal with a focused request to compare near-floor structure, far passage, left/right gaps and useful pitch views from live RGB-D. ObservationAgent may look and turn within its session; it cannot authorize motion. "
+    "Current front_depth_preflight appears ONLY for measured CLEAR or BLOCKED. BLOCKED means measured current occupancy in that direction; CLEAR is not a full-path certificate. If absent, there is no conclusive result: neither a movement veto nor guaranteed clearance. Never rotate merely to obtain CLEAR. Every actual forward action gets its own fresh calibrated Depth check at the current pitch; historical Depth cannot authorize motion. "
+    "Use memory.recent_views_at_current_stance.full_coverage_by_pitch and turn_actions_since_last_forward to distinguish genuinely new yaw/pitch views from repeated horizontal scanning. A 360-degree yaw sweep at one pitch does NOT mean other pitches were observed. New camera angles are observations, NOT forward progress; do not repeatedly revisit an unchanged view without an unanswered question. There is no forced scan or forced forward rule. "
+    "Route hypotheses and passage regions are visual clues, never clearance proof; a human/object box is not an entry. The current source and latest actual motion or obstacle receipts outrank stale bearings. If prior forward visibly changed the scene and the route still appears viable, consider continuing it rather than restarting a scan. "
+    "Commanded distance (0.25..3m) is a finite set of atomic forward steps, NOT measured displacement, stair descent or arrival. In stable visible corridors the model may choose a longer short cruise; in crowds, steps or uncertainty choose a shorter move or purposeful observation. There is no metric x/y/z, proven loop closure or confirmed height change. "
+    "Use turn_and_observe for a pure TURN and/or LOOK; navigate_relative requires positive distance_m (never 0). Both support an absolute target heading OR relative direction and magnitude, not both. A camera pitch limit is recoverable; consult camera_controls.allowed_look_now and select useful legal LOOK actions. "
+    "Keep progress narratives revisable: distinguish visual evidence, actions actually executed and uncertainty. Only request_finish success when CURRENT evidence supports arriving at the FINAL mission destination; scoring is external. "
+    "Output source-grounded observed_evidence first, concise decision_analysis next, and tool and args LAST. They alone execute. Return one legal registered tool; describe the short evidence and action rationale, not private internal chain-of-thought."
 )
 
 class NavigationAgent:
@@ -218,12 +160,41 @@ class NavigationAgent:
             if value['tool'] in ('navigate_relative','turn_and_observe'):
                 args=value['args']
                 try:
-                    signed_turn(args['turn_direction'],args['turn_degrees'])
+                    if 'target_heading_deg' in args:
+                        resolve_target_heading(args['target_heading_deg'],
+                            math.degrees(r.motion_controller.pose()['heading']),
+                            r.camera.turn_angle)
+                    else:
+                        signed_turn(args['turn_direction'],args['turn_degrees'])
                 except ValueError as error:
                     raise APIError(str(error),category='structured_field') from None
-        return r.client.complete(
+        proposal=r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
             schema,validate=validate,image_url=images,
             format_retry=int(bool(format_feedback)),retry_safe=True,
             protocol=compact_navigation_protocol(tools),
             validation_schema=navigation_envelope(tools))
+        # A target yaw is model intent, but left/right conversion must NEVER
+        # depend on LLM heading arithmetic. Normalize before existing dispatch,
+        # so the physical executor and all legacy relative tools stay intact.
+        if (proposal['tool'] in ('navigate_relative','turn_and_observe')
+                and 'target_heading_deg' in proposal['args']):
+            args=dict(proposal['args'])
+            target=args.pop('target_heading_deg')
+            source=r.motion_controller.pose()
+            current=math.degrees(source['heading'])%360
+            direction,degrees=resolve_target_heading(
+                target,current,r.camera.turn_angle)
+            args['turn_direction']=direction
+            args['turn_degrees']=degrees
+            r.event('navigation_absolute_heading_resolved',
+                source='deterministic_heading',
+                source_observation_id=r.memory.current['observation_id'],
+                current_heading_deg=round(current,3),
+                model_target_heading_deg=target,
+                resolved_turn_direction=direction,
+                resolved_turn_degrees=degrees,
+                expected_heading_deg=round((current+signed_turn(
+                    direction,degrees))%360,3))
+            proposal=dict(proposal,args=args)
+        return proposal

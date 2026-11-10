@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-v17-policy-plus-v20-direction-depth-v21-compact-memory'
+PROMPT_VERSION = 'havln-v22-active-pitch-absolute-yaw-resolution'
 ROLES = ('navigation_agent', 'visual_perception')
 
 
