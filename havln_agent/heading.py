@@ -29,6 +29,34 @@ def direction_from_bearing(bearing_deg):
             else 'NONE'),abs(bearing_deg)
 
 
+
+def resolve_target_heading(target_heading_deg, current_heading_deg, step_deg):
+    """Map a model-chosen ABSOLUTE yaw onto the shortest calibrated turn.
+
+    The model owns the heading choice. Only the executor-side arithmetic
+    chooses LEFT/RIGHT/NONE and rounds to legal Habitat turn increments.
+    This is neither semantic route validation nor collision authorization.
+    """
+    for name, value in (('target_heading_deg', target_heading_deg),
+                        ('current_heading_deg', current_heading_deg),
+                        ('turn_step_deg', step_deg)):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)):
+            raise ValueError('invalid_' + name)
+    if not 0 <= target_heading_deg <= 360:
+        raise ValueError('target_heading_deg_out_of_range')
+    if not 0 < step_deg <= 180:
+        raise ValueError('invalid_turn_step_deg')
+    relative = relative_bearing(target_heading_deg % 360,
+                                current_heading_deg % 360)
+    count = math.floor(abs(relative) / step_deg + 0.5 + 1e-9)
+    # Round to a legal number of atomic TURNs; never request >180 degrees.
+    count = min(count, math.floor(180 / step_deg + 1e-9))
+    degrees = round(count * step_deg, 8)
+    if not count:
+        return 'NONE', 0.
+    return ('LEFT' if relative > 0 else 'RIGHT'), degrees
+
 def box_center_bearing(box, horizontal_fov_deg):
     """Calibrated camera-horizontal ray to target box center (positive LEFT).
 

@@ -38,8 +38,24 @@ def registry(camera, max_actions, pitch_deg=0.):
     # Direction and magnitude are separate: no signed-angle ambiguity.
     direction=dict(enum=['LEFT','RIGHT','NONE'])
     turn=dict(type='number',minimum=0,maximum=180)
-    motion=object_schema(dict(turn_direction=direction,
-        turn_degrees=turn,distance_m=dict(type='number',minimum=0.25,maximum=3.0)))
+    # Two EXCLUSIVE model-facing turn forms; normalize absolute targets to
+    # the existing relative LEFT/RIGHT actuator contract before dispatch.
+    # No new tool or semantic movement validator is introduced.
+    heading=dict(type='number',minimum=0,maximum=360)
+    def with_heading_choice(schema):
+        schema['oneOf']=[
+            dict(required=['target_heading_deg'],
+                 **{'not':dict(anyOf=[
+                     dict(required=['turn_direction']),
+                     dict(required=['turn_degrees'])])}),
+            dict(required=['turn_direction','turn_degrees'],
+                 **{'not':dict(required=['target_heading_deg'])})]
+        return schema
+    motion=with_heading_choice(_optional(dict(
+        turn_direction=direction,turn_degrees=turn,
+        target_heading_deg=heading,
+        distance_m=dict(type='number',minimum=0.25,maximum=3.0)),
+        ('distance_m',)))
     observe=_optional(dict(
         objective=dict(TEXT,minLength=1,maxLength=1500),
         sweep_degrees=dict(type='integer',enum=[30,60,90,120,180,270,360])),
@@ -53,12 +69,13 @@ def registry(camera, max_actions, pitch_deg=0.):
             observe),
         'navigate_relative':(
             'Move along one model-chosen finite relative segment (up to 3m). '
-            'Choose turn_direction LEFT, RIGHT, or NONE and a NONNEGATIVE '
-            'turn_degrees magnitude. NONE requires 0; LEFT/RIGHT require '
-            'a magnitude greater than 0. E.g. turn right 30 degrees '
-            '=> RIGHT,30; turn left 60 degrees => LEFT,60. '
-            'The executor converts words into motor actions. '
-            'Do not calculate absolute target headings. '
+            'For a numerical absolute goal bearing, provide ONLY target_heading_deg '
+            '(0..360, using the current reported pose heading): the executor 
+            'computes the shortest calibrated LEFT/RIGHT turn from CURRENT yaw. '
+            'For a directly visible relative turn, instead provide ONLY '
+            'turn_direction LEFT/RIGHT/NONE and nonnegative turn_degrees '
+            '(NONE=0). Never combine the two turn formats or mentally convert '
+            'an absolute heading into LEFT/RIGHT yourself. '
             'distance_m is a NOMINAL command length quantized into a finite '
             'number of forward action receipts, NOT measured robot displacement. '
             'Distance MUST be at least 0.25m; for a pure turn without forward '
@@ -71,17 +88,23 @@ def registry(camera, max_actions, pitch_deg=0.):
             'safety/sensor interruption; no milestone authorization.',
             motion),
         'turn_and_observe':(
-            'Use for a turn with ZERO forward motion, e.g. RIGHT 30 degrees with '
-            'look=none. Never represent pure turning as navigate_relative '
-            'with distance_m=0. Turn and optionally LOOK for a purposeful '
-            'view. The LOOK enum is '
+            'Use for TURN and/or LOOK with ZERO forward motion. Choose EITHER '
+            'target_heading_deg (absolute yaw; executor resolves shortest turn) '
+            'OR turn_direction plus nonnegative turn_degrees (relative), not both. '
+            'For a new vertical view at the same yaw use turn_direction=NONE, '
+            'turn_degrees=0, look=up or look=down. Check lower stairs/floor '
+            'versus upper doorway/distant path when their evidence is missing. '
+            'Never express pure turning as navigate_relative(distance_m=0). '
+            'The LOOK enum is 
             'always none/up/down. Camera limits (-60..60 degrees) are checked '
             'at execution; out-of-range LOOK returns recoverable CAMERA_PITCH_LIMIT '
             'with the current allowed_look choices and NO atomic actions. '
             'Read camera_controls.allowed_look_now before choosing.',
-            _optional(dict(turn_direction=direction,turn_degrees=turn,
+            with_heading_choice(_optional(dict(
+                turn_direction=direction,turn_degrees=turn,
+                target_heading_deg=heading,
                 look=dict(enum=list(LOOK_ACTIONS)),purpose=TEXT),
-                ('turn_direction','turn_degrees','look'))),
+                ('look',)))),
         'navigate_local':(
             'Resume a previously selected, still-active local motion command.',
             object_schema(dict(waypoint_id=TEXT))),
@@ -157,8 +180,14 @@ def compact_navigation_protocol(tools):
     for name,spec in tools.items():
         args=spec['parameters'].get('properties',{})
         req=set(spec['parameters'].get('required',[]))
-        result.append(name+'('+', '.join(k+('' if k in req else '?')+':'+signature(v)
-            for k,v in args.items())+')')
+        if name in ('navigate_relative','turn_and_observe'):
+            turn_args='(target_heading_deg:0..360 OR turn_direction:LEFT|RIGHT|NONE + turn_degrees:0..180)'
+            tail=(', distance_m:0.25..3m' if name=='navigate_relative'
+                  else ', look:none|up|down, purpose?:string')
+            result.append(name+'('+turn_args+tail+')')
+        else:
+            result.append(name+'('+', '.join(k+('' if k in req else '?')+':'+signature(v)
+                for k,v in args.items())+')')
     return ('Return EXACTLY one JSON object. Generate its fields in this '
         'reasoning-friendly order: (1) observed_evidence: 1..5 short '
         'source-grounded observations from CURRENT RGB, history, Depth and '
@@ -175,15 +204,17 @@ def compact_navigation_protocol(tools):
         'Put tool parameters directly inside args, not another wrapper. '
         'Do not put any fields after args. '
         'Historical left/right text is NOT a current camera bearing. '
-        'Choose turn_direction LEFT/RIGHT/NONE as a WORD, and set '
-        'turn_degrees to a NONNEGATIVE magnitude (NONE=0). The executor '
-        'maps these words to motor directions. For camera tilt use '
-        'look=up/down/none; the executor handles all conversion. '
-        'For PURE TURN without motion use '
-        'turn_and_observe with look=none; e.g. right 30deg means '
-        '{"tool":"turn_and_observe","args":{"turn_direction":"RIGHT",'
-        '"turn_degrees":30,"look":"none"}}. For TURN + MOVE, use '
-        'navigate_relative with distance_m between 0.25 and 3.0. '
+        'For a numerical ABSOLUTE goal yaw use target_heading_deg:0..360 '
+        'alone as the turn form; executor resolves shortest LEFT/RIGHT. '
+        'For a visually relative turn use turn_direction:LEFT/RIGHT/NONE '
+        'and nonnegative turn_degrees (NONE=0). Never mix turn forms. '
+        'For camera tilt use look=up/down/none; no pitch change is automatic. '
+        'Stationary LOOK_UP example: {"tool":"turn_and_observe","args":'
+        '{"turn_direction":"NONE","turn_degrees":0,"look":"up"}}. '
+        'Goal yaw example: {"tool":"turn_and_observe","args":'
+        '{"target_heading_deg":90,"look":"none"}}. '
+        'For MOVE use navigate_relative(distance_m:0.25..3m); '
+        'a pure TURN/LOOK must use turn_and_observe. '
         'Optional progress fields are '
         'model assessments, not sensor proof. '
         'Tools: '+'; '.join(result))

@@ -104,6 +104,8 @@ normal motor actions no longer call a depth-body safety shield automatically. Se
 
 **Active navigation variant:** The eval-32/v17 mission strategy is retained with requested PR #90 (model-chosen LEFT/RIGHT/LOOK actions; conclusive-only front Depth in NavigationAgent requests) and PR #91 (read-only deduplicated compact navigation evidence). The factual same-stance TURN/LOOK counters are restored without any forced-motion rule. Raw Memory, per-atomic Depth safety, visual passage grounding, Replay Studio and Score remain intact. See [rollback and retention notes](docs/eval35_rollback_v17.md).
 
+**Eval-36 observation + heading repair (v22):** NavigationAgent actively weighs informative LOOK_UP/LOOK_DOWN at existing yaw (near stair/floor geometry versus distant routes); ObservationAgent gets matching pitch-view guidance. For a numerical goal yaw, the model can now select `target_heading_deg` in either navigation tool while the executor deterministically resolves shortest legal LEFT/RIGHT; older relative commands remain valid. This is model-owned choice, not forced scanning or hardcoded route verification. The #90 confirmed Depth-only input, #91 compact Memory, atomic Depth veto and official scoring are unchanged. See [v22 design and regression notes](docs/eval36_pitch_heading_repair.md).
+
 **Offline replay studio:** Inspect completed real RGB-D trajectories, model
 requests/responses, observation sessions, tools and atomic actions in a
 read-only browser, without starting Habitat or calling an API:
