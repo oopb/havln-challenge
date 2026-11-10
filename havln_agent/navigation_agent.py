@@ -10,13 +10,14 @@ from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
 from .heading import signed_turn
+from .model_angles import project_model_angles
 
 MISSION_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
     "Read mission_evidence_v1, current RGB, source-linked history and motion receipts. The latest progress.narrative is a MODEL hypothesis, not verified completion. "
-    "The FIRST image is CURRENT RGB; history_media.manifest identifies historical source yaw/pitch and stance. Past relative directions and Depth are not live steering or clearance; re-ground in the current view. "
+    "The FIRST image is CURRENT RGB; history_media.manifest contains signed view offsets from the CURRENT camera (positive LEFT, negative RIGHT) plus historical source pitch/stance. Past view offsets are NOT movement commands across different stances; always re-ground in current RGB. "
     "Choose turn_direction LEFT, RIGHT, or NONE relative to the CURRENT robot camera plus nonnegative turn_degrees (NONE=0). LEFT means the left side of CURRENT RGB; RIGHT means right. Never calculate an absolute target heading for a motor turn. Pitch uses look=up/down/none separately. "
-    "Stored 0..360 heading fields label sensor/history images only. They are NOT motor commands. To steer toward a visually selected opening, choose LEFT/RIGHT directly in CURRENT RGB, not from an old historical heading; test the effect against returned actual yaw and RGB. "
+    "World-frame yaw is internal and NEVER appears in your input. All supplied horizontal orientations are signed relative offsets from CURRENT forward=0 (LEFT positive, RIGHT negative). Do not try to reconstruct global yaw or convert a historical view offset from another stance into a movement target. Choose relative LEFT/RIGHT from CURRENT RGB. "
     "Camera pitch is model-controlled and stays at the chosen angle during forward motion; there is no automatic LOOK_UP or level-camera action. Vertical LOOK is a useful observation, not a movement penalty. The same horizontal heading at a different pitch reveals different information: for nearby floor and stair edges consider LOOK_DOWN; for a distant hallway, doorway or landmark obscured in a down-tilted view consider LOOK_UP. "
     "Choose informative pitch changes, not on a fixed schedule. Use turn_and_observe with look=up/down and no turn when helpful. After checking near-floor steps, consider LOOK_UP for the distant route; LOOK is not translation. "
     "Call observe_for_goal selectively when a SPECIFIC unresolved visual question would change the route decision (e.g. is the visible stair going up or down, or which side of a person contains the entry). Name the relevant earlier observation IDs in the objective when available. Do not call ObservationAgent merely to repeat a clear view; it may observe, never authorize motion. "
@@ -169,6 +170,11 @@ class NavigationAgent:
                     signed_turn(args['turn_direction'],args['turn_degrees'])
                 except ValueError as error:
                     raise APIError(str(error),category='structured_field') from None
+        # Last-mile model-only projection: keep absolute headings in
+        # canonical Memory and events, NEVER in the actual LLM request.
+        # Projection is read-only and runs AFTER all source frames are linked.
+        context=project_model_angles(
+            context,math.degrees(r.motion_controller.pose()['heading']))
         proposal=r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
             schema,validate=validate,image_url=images,

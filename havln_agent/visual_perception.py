@@ -10,6 +10,7 @@ from .contexts import fields
 from .mission_history import mission_evidence
 from .navigation_history import navigation_visual_anchors
 from .observation import array_hash
+from .model_angles import project_model_angles, project_observation_conversation
 
 # A one-frame, geometry-directed visual description. No model-created pixel box,
 # trajectory, clearance decision or task-completion verdict is accepted.
@@ -92,7 +93,7 @@ SCAN_GUIDANCE_PROMPT=(
     'You inspect the current REAL RGB image and calibrated Depth image '
     '(near black, far white, invalid magenta), plus the FULL dialogue of '
     'all earlier real RGB-D frames in this observation session. Reconcile '
-    'views by recorded camera headings and pitch; do not hallucinate '
+    'views by signed camera offsets relative to the CURRENT view and pitch; do not hallucinate '
     'translation or global localization from a rotation. '
     'The shared mission uses commanded yaw/pitch and conservative '
     'viewpoint_generation stance IDs, NOT a measured robot x/y/z. '
@@ -115,7 +116,7 @@ SCAN_GUIDANCE_PROMPT=(
     'A passage_box is still only visual evidence, not proof of space '
     'for the robot, collision clearance or a physically reachable path. '
     'The horizontal center of passage_box supplies only a source-camera '
-    'bearing. Do not confuse absolute camera heading, off-center '
+    'bearing. Do not confuse historical view orientation with live turn goals, off-center '
     'image regions or past positions. Its metric distance is a hypothesis, not walkability '
     'certificates; walls, glass, rails, drop-offs and people may intervene. '
     'Use view_coverage.session_turn_degrees, turn_direction_reversals '
@@ -160,7 +161,7 @@ SCAN_GUIDANCE_PROMPT=(
     'A broad object box never certifies a navigable centerline; keep '
     'route hypotheses and live human/Depth clearance separate. '
     'Use mission_memory as the shared evidence index: previous observation '
-    'task IDs, real viewpoint headings, and blocked source frames. '
+    'task IDs, camera-relative viewpoint offsets, and blocked source frames. '
     'For a recent central-depth block, read current_front_depth_preflight '
     'and recent_forward_failures. When obstacle_focus is present, answer '
     'its specific visual question using the CURRENT RGB-D, distinguishing '
@@ -222,10 +223,10 @@ PANORAMA_VISUAL_PROMPT = (
     'PANORAMIC VISUAL MEMORY REVIEW. You see saved RGB images captured '
     'at the same estimated robot stance while it turned through a full circle. '
     'The supplied views[] entries align ONE-TO-ONE to the images IN ORDER. '
-    'Each view identifies observation_id, image_index, absolute camera yaw, '
-    'signed relative yaw from the robot CURRENT heading, pitch and historical '
+    'Each view identifies observation_id, image_index, signed view offset '
+    'from the robot CURRENT forward=0 (positive LEFT, negative RIGHT), pitch and historical '
     'front depth state (UNMEASURED when geometry was not explicitly requested). '
-    'Read those actual angles; do NOT infer them from image '
+    'Read those camera-relative offsets; do NOT infer them from image '
     'appearance and do not swap left/right or reinterpret pitch as yaw. '
     'Use the current navigation instruction and failures to identify WHICH '
     'visible corridor, stair entry, door or approach region is the best next '
@@ -284,11 +285,23 @@ class VisualPerception:
         self.runtime=runtime
 
     def complete(self,*args,**kwargs):
-        # Format repair uses the same frozen RGB/question, a new full deadline
-        # and one bounded correction. Conflicting duplicate keys are rejected.
+        # The actual model sees signed offsets from CURRENT camera yaw.
+        # The ORIGINAL ObservationController session stays unchanged; each
+        # stateless wire request rebases the complete raw history again.
         original=list(args)
+        controller=getattr(self.runtime,'motion_controller',None)
+        pose=(controller.pose() if controller is not None
+              and callable(getattr(controller,'pose',None)) else None)
+        heading=(pose or {}).get('heading')
+        if isinstance(heading,(int,float)) and math.isfinite(heading):
+            yaw=math.degrees(heading)%360
+            original[3]=project_model_angles(args[3],yaw)
+            if kwargs.get('conversation_messages'):
+                kwargs['conversation_messages']=project_observation_conversation(
+                    kwargs['conversation_messages'],yaw)
         if kwargs.get('cache'):
-            kwargs['cache_context']=semantic_cache_context(args[3])
+            kwargs['cache_context']=semantic_cache_context(original[3])
+        args=tuple(original)  # FIRST request must also use converted angles.
         for attempt in range(2):
             try:
                 return self.runtime.client.complete(*args,retry_safe=True,format_retry=attempt,**kwargs)
