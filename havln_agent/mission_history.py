@@ -47,9 +47,7 @@ def selected_history_frames(memory, current_id=None, max_frames=3):
             identifier=checkpoint.get('observation_id')
             if identifier not in by_id or identifier==current_id:
                 continue
-            visual=checkpoint.get('visual') or {}
-            score=(2 if visual.get('candidate_approach')
-                   and visual.get('passage_box') is not None else 1)
+            score=2 if (checkpoint.get('visual') or {}).get('candidate_approach') else 1
             candidates.append((score,by_id[identifier],checkpoint))
     # Store references to real action endpoints as a fallback when the model
     # has made progress without opening a full visual session.
@@ -124,18 +122,6 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
             relative_bearing_deg_from_current=relative_bearing(
                 yaw,math.degrees(pose.get('heading',0))%360),
             observed_only=True)
-    # Factual scan-cost information at the current executed-forward stance.
-    # There is deliberately no Python intervention or chosen heading.
-    actions_without_forward=[]
-    for action in reversed(memory.actions):
-        if action.get('action')=='MOVE_FORWARD':
-            break
-        actions_without_forward.append(action.get('action'))
-    actions_without_forward.reverse()
-    yaws={key[0] for key in unique}
-    full_horizontal_sweep=(
-        len(yaws)>=math.ceil(360/yaw_step)
-        if yaw_step<=180 else False)
     # 24 bins at a 15-degree actuator step, independent of episode duration.
     full_coverage=[dict(
         pitch_deg=round(pitch,2),
@@ -151,13 +137,6 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
         full_coverage_by_pitch=full_coverage,
         full_coverage_includes_old_views=True,
         repeated_same_RGBD_heading_pitch_views=repeat_rgbd,
-        turn_actions_since_last_forward=sum(
-            a in ('TURN_LEFT','TURN_RIGHT') for a in actions_without_forward),
-        look_actions_since_last_forward=sum(
-            a in ('LOOK_UP','LOOK_DOWN') for a in actions_without_forward),
-        distinct_horizontal_heading_bins=len(yaws),
-        horizontal_360_coverage_observed=full_horizontal_sweep,
-        coverage_is_information_not_progress_or_stall_proof=True,
         action_guidance_only_no_hard_view_ban=True,
         historical_depth_does_not_authorize_move=True)
 
@@ -191,11 +170,6 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
                 item['relative_bearing_deg_from_current']=relative_bearing(
                     item['absolute_heading_deg'],math.degrees(pose['heading'])%360)
             else:
-                # A past camera heading was never a current directional
-                # instruction after an executed translation.
-                item['historical_bearing_in_source_record_only']=bool(
-                    item.get('absolute_heading_deg') is not None)
-                item['absolute_heading_deg']=None
                 item['relative_bearing_deg_from_current']=None
             waypoints.append(item)
         searches.append(dict(
@@ -364,25 +338,9 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
     # Keep a compact, source-linked route candidate pool independent of the
     # last three observation sessions. A missing box never becomes a bearing.
     route_candidates=[]
-    repeated_unlocalized={}
     for candidate in reversed(getattr(memory,'route_candidates',[])):
         original=by_id.get(candidate.get('source_observation_id'))
         if not original:
-            continue
-        # Several scans of the same blocked person at one action stance
-        # are distinct source facts, not three independent ROUTES. Keep
-        # complete records queryable; summarize repeated unboxed cues once.
-        unlocalized=not candidate.get('angular_bearing_grounded')
-        cue_key=(
-            str(candidate.get('target_type') or '').casefold(),
-            candidate.get('target_kind'),
-            candidate.get('source_stance_id') or
-                candidate.get('source_observation_id'),
-            candidate.get('objective')) if unlocalized else None
-        if cue_key in repeated_unlocalized:
-            repeated_unlocalized[cue_key][
-                'other_source_observation_ids'].append(
-                    candidate.get('source_observation_id'))
             continue
         fresh=same_local_stance(original.get('pose') or {},pose)
         absolute=candidate.get('absolute_heading_deg')
@@ -390,19 +348,8 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             'candidate_id','source_observation_id','target_type',
             'target_kind','confidence','evidence','navigation_suggestion',
             'uncertainty','target_visible','absolute_heading_deg',
-            'angular_bearing_grounded','route_status',
-            'bearing_region_role')}
-        if unlocalized:
-            item['other_source_observation_ids']=[]
-            item['compact_unlocalized_cue_not_independent_route']=True
-            repeated_unlocalized[cue_key]=item
+            'angular_bearing_grounded','route_status')}
         item['source_stance_matches_current']=fresh
-        item['historical_bearing_in_source_record_only']=bool(
-            not fresh and isinstance(absolute,(int,float)))
-        if not fresh:
-            # Keep the source record for retrieval, but do NOT invite an
-            # old numerical heading to masquerade as today's target.
-            item['absolute_heading_deg']=None
         item['relative_bearing_deg_from_current']=(
             round(relative_bearing(absolute,
                  math.degrees(pose.get('heading',0))%360),2)
@@ -411,22 +358,15 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         route_candidates.append(item)
         if len(route_candidates)>=6:
             break
-    # Compact source-linked receipt rather than repeating raw action logs.
-    raw_motion=getattr(memory,'latest_motion_receipt',None)
-    last_motion=None
-    if raw_motion is not None:
-        last_motion={k:copy.deepcopy(raw_motion.get(k)) for k in (
-            'decision_id','tool','source_observation_id',
-            'end_observation_id','last_heading_deg',
-            'last_stance_id','status','reason',
-            'executed_forward_actions','forward_actions_with_RGBD_change',
-            'last_motion_was_uninterrupted','continuation_is_model_choice')}
+    last_motion=copy.deepcopy(
+        getattr(memory,'latest_motion_receipt',None))
+    if last_motion is not None:
         last_motion['same_camera_as_last_motion']=(
             (memory.current or {}).get('observation_id')==
-            raw_motion.get('end_observation_id'))
+            last_motion.get('end_observation_id'))
         last_motion['motion_is_evidence_not_command']=True
         last_motion['atomic_actions_since_motion']=max(
-            0,len(memory.actions)-raw_motion.get('action_step_finished',0))
+            0,len(memory.actions)-last_motion.get('action_step_finished',0))
         last_motion['current_heading_deg']=round(
             math.degrees(pose.get('heading',0))%360,2)
     anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})
@@ -486,9 +426,8 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         forward_action_segments_are_not_verified_translation=True,
         metric_pose_available=False,
         bearing_convention=dict(
-            model_turn_commands='LEFT/RIGHT/NONE + nonnegative turn_degrees',
-            camera_tilt_commands='look=up/down/none',
-            actuator_conversion_is_executor_only=True,
-            source_bearings_are_historical_references_only=True,
+            absolute_heading_deg='0..360, increases on LEFT turn',
+            model_turn_commands='LEFT or RIGHT + nonnegative degrees; NONE + 0',
+            stored_relative_bearing='positive LEFT, negative RIGHT; internal evidence only',
             coordinate_scope='executed_forward_stance_yaw_pitch_only_no_metric_xyz'),
         historical_clearance_authorizes_move=False)

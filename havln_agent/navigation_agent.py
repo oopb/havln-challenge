@@ -5,7 +5,7 @@ from .contracts import (navigation_schema, compact_navigation_protocol,
                         navigation_envelope)
 from .contexts import navigation_context, compact_navigation_context
 from .tool_menu import navigation_tool_menu
-from .api_client import APIError, specific_schema_error
+from .api_client import APIError
 from .perception import image_url
 from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
@@ -15,67 +15,55 @@ MISSION_PROMPT=(
     'You are NavigationAgent. Complete the ORIGINAL full navigation mission. '
     'Only you choose MOVE, observation, replanning and STOP; ObservationAgent '
     'supplies visual evidence, never movement authorization. '
-    'Read current mission evidence, recent receipts and scan coverage. '
-    'Omitted old records may still exist. '
-    'First image is CURRENT RGB; later images are source-labeled '
-    'historical RGB, never live clearance. '
-    'Historical LEFT/RIGHT descriptions refer to their original camera '
-    'view, not necessarily the CURRENT RGB. After moving or turning, '
-    're-evaluate the visible route in CURRENT RGB. Select the physical '
-    'direction with turn_direction LEFT, RIGHT, or NONE and a nonnegative '
-    'turn_degrees magnitude. For tilt select look=up/down/none when using '
-    'turn_and_observe. The executor converts direction words directly '
-    'into motor actions; do not calculate absolute target headings. '
+    'Read context.memory (mission_evidence_v1): the same bounded '
+    'mission progress, recent observation tasks, forward receipts, '
+    'current-stance view coverage and Depth obstacle evidence used in v12. '
+    'Do not assume omitted older events did not occur. '
+    'The FIRST attached image is CURRENT RGB; subsequent images are '
+    'selected historical RGB views. Each historical image is described '
+    'in history_media.manifest by original observation ID, heading '
+    'and stance. Historical images are NOT current surroundings or '
+    'live Depth clearance. '
+    'Compare early and recent static scene structure when deciding whether '
+    'you may be returning to a previously explored route, but never assert '
+    'physical place identity from image resemblance alone. '
+    'Historical relative left/right phrases are valid ONLY at their original '
+    'source observation and camera heading; progress.prior_navigation_intent '
+    'explicitly marks freshness. After turning or moving, reevaluate any '
+    'old direction against the CURRENT RGB, pose and live Depth preflight. '
+    'Choose each turn from CURRENT RGB, recent tool evidence and the '
+    'task goal. A past left/right phrase is not a current direction. '
     'When an opening or route is visible, select the useful heading '
     'yourself; never turn away from your stated target by accident. '
     'If no route is certain, choose a short informed exploration or '
     'ask ObservationAgent for specific evidence. '
-    'front_depth_preflight is present ONLY for measured CLEAR or BLOCKED '
-    'on the current view. BLOCKED is confirmed occupancy in the '
-    'checked direction; CLEAR is not whole-route clearance. '
-    'When this field is absent, no definite forward Depth conclusion '
-    'was available: this is neither a veto nor a safety certificate. '
-    'Never rotate merely to obtain a CLEAR label. '
-    'Choose based on RGB, goals, and source-grounded motion receipts. '
-    'Camera pitch is retained during motion, no automatic LOOK_UP. '
-    'Fresh Depth uses current pitch before EACH forward. Downward '
-    'views may miss distant obstacles; historical Depth cannot '
-    'authorize motion. Explicit LOOK is model-owned. '
-    'No measured metric pose, loop closure or confirmed translation. '
-    'Command distance counts atomic steps, not arrival proof. '
-    'Read memory.recent_views_at_current_stance for complete '
-    'yaw/pitch coverage, repeated views and turns since last forward. '
-    'New camera headings are observations, NOT forward progress. '
-    'When turns repeat without progress, distinguish an unanswered '
-    'visual question from rechecking the same scene; use the recent '
-    'actual forward and blocked receipts to choose the next useful '
-    'action. The model chooses; no forced move or scan ban. '
-    'A visual semantic object box (e.g. HUMAN) is never a passage '
-    'waypoint. Use only a separately grounded passage_box for numerical '
-    'route bearings; unboxed route ideas remain prose. Stale bearings '
-    'from a prior forward stance require current-frame re-grounding. '
-    'Do not follow a past figure location as an entrance. '
+    'The current front_depth_preflight is calibrated, live, directional '
+    'Depth evidence; BLOCKED confirms a measured front obstruction, '
+    'UNKNOWN is not a veto, CLEAR does not guarantee physical passage. '
+    'The executor retains the camera pitch you chose: no automatic LOOK_UP '
+    'before moving, including on stairs. Fresh Depth is projected using '
+    'the ACTUAL pitch and rechecked before EACH forward action. Downward '
+    'views can miss distant obstacles; UNKNOWN is uncertainty, not CLEAR. '
+    'You may explicitly LOOK_UP/DOWN for useful new evidence, but do not '
+    'repeat pitch changes just to satisfy a movement rule. Historical '
+    'Depth cannot authorize motion. Never override measured current '
+    'block evidence. '
+    'No metric robot x/y/z, measured height, true place loop closure or '
+    'confirmed displacement is available. Command distance means a finite '
+    'count of atomic forward actions, NOT proof of arrival or descent. '
+    'Use memory.recent_views_at_current_stance.full_coverage_by_pitch '
+    'as complete same-stance scan history, even when detailed example '
+    'views are truncated. Before another scan, compare prior evidence '
+    'and identify the unanswered visual question; avoid spending actions '
+    'on byte-identical views without new context. '
+    'Use memory.candidate_route_hypotheses even when the observation '
+    'did not return a box; ungrounded semantic cues are not exact turn '
+    'bearings or guaranteed entrances. '
     'Use memory.last_motion_decision as a factual action receipt: when '
     'forward actions visibly changed the scene and no new obstruction '
     'contradicts the route, consider continuing the same route rather '
-    'than starting an unrelated scan. When a visibly continuous corridor '
-    'supports it, you MAY choose a finite 0.5–1m (or longer) segment '
-    'instead of only 0.25m per decision: each 0.25m atomic move still '
-    'gets fresh Depth and interrupts on a measured block or unchanged RGB-D. '
-    'In narrow stairs, close furniture, uncertain human passages, prefer '
-    'a short segment or ask for specific new visual evidence; choose based '
-    'on the actual scene, not a fixed distance rule. '
-    'You alone choose the next action. '
+    'than starting an unrelated scan. You alone choose the next action. '
     'You may reobserve changed scenes or dynamic people when useful. '
-    'When a person, railing or doorway makes the local passage ambiguous, '
-    'consider observe_for_goal with a specific question comparing the '
-    'visible LEFT/RIGHT walkable corridors, foreground blockage and '
-    'occluded floor; do not assume a pedestrian is static. Avoid repeated '
-    'LOOK pitch switches when no new visual question would be answered. '
-    'Pure turn or turn+LOOK without forward motion MUST use '
-    'turn_and_observe, e.g. RIGHT 30 degrees, look=none. '
-    'navigate_relative ALWAYS means execute positive forward distance '
-    '(0.25..3m); do not use distance_m=0 to express a pure turn. '
     'Keep progress narratives as revisable hypotheses, distinguishing '
     'what was visually seen, what was physically attempted and what '
     'remains uncertain. Only request_finish success when the final '
@@ -102,16 +90,11 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
-        # Compute and log the same live preflight on every decision, but
-        # attach it to NavigationAgent ONLY when the measured result is
-        # conclusive. UNKNOWN and any other non-confirmed state are
-        # deliberately omitted (not misrepresented as CLEAR/BLOCKED).
-        # Atomic MOVE_FORWARD still performs its own fresh depth veto.
+        # Build the compact v12 context after the current Depth preflight,
+        # so the attached current RGB and tool execution use one source ID.
         preflight=r.forward_preflight(stage='navigation_decision')
-        state=navigation_context(r)
-        if preflight.get('status') in ('CLEAR','BLOCKED'):
-            state['front_depth_preflight']=preflight
-        context=compact_navigation_context(state)
+        context=compact_navigation_context(navigation_context(r))
+        context['front_depth_preflight']=preflight
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
         if format_feedback:
@@ -220,13 +203,9 @@ class NavigationAgent:
                             ('navigation_invalid_tool_argument:'+
                              value['tool']+'.'+field+':'+detail)[:300],
                             category='structured_field')
-            issue=next(Draft7Validator(schema).iter_errors(value),None)
-            if issue is not None:
-                issue=specific_schema_error(issue)
-                field='.'.join(map(str,issue.absolute_path)) or 'response'
-                raise APIError(
-                    ('navigation_invalid_output_field:'+field+':'+
-                     issue.message)[:350],category='structured_field')
+            if not Draft7Validator(schema).is_valid(value):
+                raise APIError('navigation_tool_arguments_violate_registered_schema',
+                               category='structured_field')
             if value['tool'] in ('navigate_relative','turn_and_observe'):
                 args=value['args']
                 try:
