@@ -486,8 +486,9 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         forward_action_segments_are_not_verified_translation=True,
         metric_pose_available=False,
         bearing_convention=dict(
-            absolute_heading_deg='0..360, increases on LEFT turn',
-            model_turn_commands='LEFT or RIGHT + nonnegative degrees; NONE + 0',
-            stored_relative_bearing='positive LEFT, negative RIGHT; internal evidence only',
+            model_turn_commands='LEFT/RIGHT/NONE + nonnegative turn_degrees',
+            camera_tilt_commands='look=up/down/none',
+            actuator_conversion_is_executor_only=True,
+            source_bearings_are_historical_references_only=True,
             coordinate_scope='executed_forward_stance_yaw_pitch_only_no_metric_xyz'),
         historical_clearance_authorizes_move=False)

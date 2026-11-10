@@ -10,7 +10,7 @@ from unittest.mock import Mock
 from jsonschema import Draft7Validator
 
 from havln_agent.active_observation import ObservationController
-from havln_agent.contexts import heading_turn_reference,navigation_context
+from havln_agent.contexts import navigation_context
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.mission_history import (
     mission_evidence,recent_views_at_stance,selected_history_frames)
@@ -114,16 +114,13 @@ class PassageGrounding(unittest.TestCase):
 
 
 class HeadingAndHistory(unittest.TestCase):
-    def test_turn_table_matches_actual_habitat_convention(self):
-        table=heading_turn_reference(
-            {'heading':math.radians(150)},camera())
-        by_angle={a['turn_deg']:a for a in table['action_results']}
-        self.assertEqual(by_angle[60]['right_result_deg'],90)
-        self.assertEqual(by_angle[45]['right_result_deg'],105)
-        self.assertEqual(by_angle[60]['left_result_deg'],210)
-        self.assertTrue(table['reference_only_model_chooses_motion'])
+    def test_turn_sign_conversion_remains_internal(self):
+        from havln_agent.heading import signed_turn
+        self.assertEqual(signed_turn('RIGHT',60),-60)
+        self.assertEqual(signed_turn('LEFT',45),45)
+        self.assertEqual(signed_turn('NONE',0),0)
         r,_=test_runtime()
-        self.assertIn('turn_heading_reference',navigation_context(r))
+        self.assertNotIn('turn_heading_reference',navigation_context(r))
 
     def test_stale_passage_heading_hidden_but_source_record_kept(self):
         m=MemoryRecords(camera())

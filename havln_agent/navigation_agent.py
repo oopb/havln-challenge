@@ -19,22 +19,24 @@ MISSION_PROMPT=(
     'Omitted old records may still exist. '
     'First image is CURRENT RGB; later images are source-labeled '
     'historical RGB, never live clearance. '
-    'Historical relative left/right phrases are valid ONLY at their original '
-    'source observation and camera heading; progress.prior_navigation_intent '
-    'explicitly marks freshness. After turning or moving, reevaluate any '
-    'old direction against the CURRENT RGB, pose and live Depth preflight. '
-    'Choose each turn from CURRENT RGB, recent tool evidence and the '
-    'task goal. A past left/right phrase is not a current direction. '
-    'Use turn_heading_reference.action_results to check the ACTUAL '
-    'absolute yaw after LEFT/RIGHT before choosing args. '
-    'For example heading 150° -> goal 90° requires RIGHT 60°, '
-    'not LEFT 60°. The reference is math, NOT a prescribed route. '
+    'Historical LEFT/RIGHT descriptions refer to their original camera '
+    'view, not necessarily the CURRENT RGB. After moving or turning, '
+    're-evaluate the visible route in CURRENT RGB. Select the physical '
+    'direction with turn_direction LEFT, RIGHT, or NONE and a nonnegative '
+    'turn_degrees magnitude. For tilt select look=up/down/none when using '
+    'turn_and_observe. The executor converts direction words directly '
+    'into motor actions; do not calculate absolute target headings. '
     'When an opening or route is visible, select the useful heading '
     'yourself; never turn away from your stated target by accident. '
     'If no route is certain, choose a short informed exploration or '
     'ask ObservationAgent for specific evidence. '
-    'Current front_depth_preflight: BLOCKED is measured occupancy; '
-    'UNKNOWN is not a veto; CLEAR is not a passage guarantee. '
+    'front_depth_preflight is present ONLY for measured CLEAR or BLOCKED '
+    'on the current view. BLOCKED is confirmed occupancy in the '
+    'checked direction; CLEAR is not whole-route clearance. '
+    'When this field is absent, no definite forward Depth conclusion '
+    'was available: this is neither a veto nor a safety certificate. '
+    'Never rotate merely to obtain a CLEAR label. '
+    'Choose based on RGB, goals, and source-grounded motion receipts. '
     'Camera pitch is retained during motion, no automatic LOOK_UP. '
     'Fresh Depth uses current pitch before EACH forward. Downward '
     'views may miss distant obstacles; historical Depth cannot '
@@ -68,8 +70,7 @@ MISSION_PROMPT=(
     'consider observe_for_goal with a specific question comparing the '
     'visible LEFT/RIGHT walkable corridors, foreground blockage and '
     'occluded floor; do not assume a pedestrian is static. Avoid repeated '
-    'LOOK pitch switches if Depth stayed UNKNOWN without new evidence. '
-    'UNKNOWN is neither a measured blocker nor guaranteed safety. '
+    'LOOK pitch switches when no new visual question would be answered. '
     'Pure turn or turn+LOOK without forward motion MUST use '
     'turn_and_observe, e.g. RIGHT 30 degrees, look=none. '
     'navigate_relative ALWAYS means execute positive forward distance '
@@ -100,11 +101,15 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
-        # Build the compact v12 context after the current Depth preflight,
-        # so the attached current RGB and tool execution use one source ID.
+        # Compute and log the same live preflight on every decision, but
+        # attach it to NavigationAgent ONLY when the measured result is
+        # conclusive. UNKNOWN and any other non-confirmed state are
+        # deliberately omitted (not misrepresented as CLEAR/BLOCKED).
+        # Atomic MOVE_FORWARD still performs its own fresh depth veto.
         preflight=r.forward_preflight(stage='navigation_decision')
         context=compact_navigation_context(navigation_context(r))
-        context['front_depth_preflight']=preflight
+        if preflight.get('status') in ('CLEAR','BLOCKED'):
+            context['front_depth_preflight']=preflight
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
         if format_feedback:
