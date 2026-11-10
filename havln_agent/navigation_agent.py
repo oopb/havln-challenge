@@ -108,9 +108,10 @@ class NavigationAgent:
         # deliberately omitted (not misrepresented as CLEAR/BLOCKED).
         # Atomic MOVE_FORWARD still performs its own fresh depth veto.
         preflight=r.forward_preflight(stage='navigation_decision')
-        context=compact_navigation_context(navigation_context(r))
+        state=navigation_context(r)
         if preflight.get('status') in ('CLEAR','BLOCKED'):
-            context['front_depth_preflight']=preflight
+            state['front_depth_preflight']=preflight
+        context=compact_navigation_context(state)
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
         if format_feedback:

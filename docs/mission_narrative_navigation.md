@@ -1,3 +1,57 @@
+# v21 — reuse existing state, trim redundant NavigationAgent evidence
+
+The already-implemented `mission_evidence_v1` projection contains complete
+same-stance yaw/pitch coverage, repeated observations, actual TURN/LOOK
+counts and last successful-forward receipts. v21 does **not** add any new
+persisted navigation state, novel task phases, forced forward, arbitrary
+navigation lock, recovery policy or a second validator.
+
+Observed eval-batch4-34 API trace (194 NavigationAgent messages):
+- context characters: first 6,444; median 24,118.5; last 37,451
+- `memory` characters: first ~3,358; median ~19,490; last ~33,231
+- the `recent_forward_failures` list exactly repeats the separately
+  supplied `blocked_at_source_stances` and
+  `stalled_forward_at_source_stances`. Multiple other fields repeat
+  the same Depth ROI and motion receipts. This made prior input growth
+  expensive and diluted the useful causal signal.
+
+The new `compact_navigation_context` keeps the canonical `memory`
+contract and essential existing field names, but copies only the
+*NavigationAgent* model request and projects a bounded set of:
+- complete, exact same-stance yaw/pitch heading bins, repeat count,
+  actual TURN and LOOK since last executed forward, 2 recent view IDs;
+- 3 recent changed-RGB-D forward segments, model-selected last motion
+  status and actual motion receipts (never claim measured translation);
+- 2 distinct executed Depth blocks, 2 actual unchanged-RGB-D stalls,
+  2 passive front-block observations, and at most 2 exceptional tool
+  receipts; current live BLOCKED ROI takes precedence over duplicate
+  passive blocks;
+- 2 recent concise VLM observation sessions, 3 provenance-rich route
+  candidate hypotheses and 3 lightweight historical frame descriptors;
+- full original mission instruction and source-anchored progress.
+
+It removes redundant `recent_forward_failures`, repeated standard
+TURN tools, long `purpose` strings in old tool calls, duplicate VLM
+checkpoint prose, irrelevant source hashes in historical obstacle
+summaries, and verbose constant flags. The full Memory, VLM raw session,
+original tool receipts, replay logs, and RGB-D images are unchanged and
+remain individually retrievable.
+
+This is only an input projection change: no new format requirements for
+model output; no changes to tilted forward, Depth safety, VLM passage
+segmentation, user-selected routes or agent control. The prompt now
+explicitly distinguishes observed camera rotation from executed forward
+progress without requiring a fixed threshold or full-circle scan.
+
+Regression:
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v21_compact_navigation_context.py' -v
+python -m unittest discover -s tests -v
+```
+
+---
+
 # v20 — direction-word decisions and confirmed Depth evidence only
 
 v20 only implements the two approved changes from the eval-batch4-34
