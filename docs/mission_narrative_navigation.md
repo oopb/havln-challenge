@@ -1,3 +1,60 @@
+# v19 — source-grounded passage regions, exact turn references and scan receipts
+
+eval-batch4-33 had 367 turns and 109 atomic forwards, including 119
+actions without forward at one executed-forward stance. In three VLM
+answers at obs_0222/0224/0225, `box` marked the *human blocking the
+centerline*, while the prose suggested passing to the human's LEFT.
+The old harness computed ~72-degree waypoints from the human boxes.
+
+## Behavior changes
+
+- The VLM's `box` remains the semantic object region. A separate,
+  optional `passage_box` is exclusively the visible potential floor /
+  doorway / stair passage region. Only `passage_box` can ground an
+  angle through calibrated image-HFOV projection. No passage region
+  => natural-language route hypothesis only, **no numeric bearing**.
+  A passage box still does not certify physical clearance. Existing
+  boxed target models remain valid; their legacy object boxes no
+  longer turn into route headings.
+- ObservationSession keeps source `semantic_target_region` and
+  `passage_region` distinct; memory stores both and labels the numeric
+  source as `visually_proposed_passage_not_obstacle`. Exact observation
+  ID/stance is preserved.
+- Following an actual forward stance change, the *compact*
+  navigation memory no longer exposes historical absolute candidate
+  headings as if they were current targets. Source records remain
+  retrievable. The model must re-ground old sightings in CURRENT RGB-D.
+- NavigationAgent sees a deterministic, model-only table of executed
+  LEFT/RIGHT turn results from the current yaw (all 15-degree increments
+  on the competition's calibrated camera), including explicit 150→90
+  RIGHT 60 not LEFT 60. There is NO direction_intent wrapper and the
+  runtime never rewrites or vetoes a syntactically valid model turn.
+- The same-stance coverage summary now adds actual atomic TURN/LOOK
+  counts since the last forward and a measured complete horizontal
+  360-degree sweep flag. It **does not** automatically choose a direction
+  or impose a scan cap. The prompt asks the model to reconsider stale
+  candidates/actual forward receipts before revisiting identical views.
+- Selected historical images no longer prioritize an obstacle-only
+  `candidate_approach` when no passage region was grounded.
+
+Retains v17 camera pitch during forward, per-atomic live Depth,
+v18 format recovery, and the existing tool+args movement authority.
+
+## Regression
+
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v19_passage_heading.py' -v
+python -m unittest discover -s tests -v
+```
+
+A real eval-batch4-34 run should compare forward progress, same-stance
+turn loops, VLM person/passages, heading arithmetic and measured blocks.
+No official success is inferred from action count or the presence of a
+semantic target in an image.
+
+---
+
 # v18 — bounded output recovery, continuous cruise, and local visual passages
 
 The eval-batch4-31 (2026-11-09T140359Z) run made 20 forwards but stopped
