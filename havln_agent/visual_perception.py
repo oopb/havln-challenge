@@ -7,7 +7,9 @@ from .api_client import TEXT,object_schema,APIError,BudgetExceeded
 from .grounding import ground
 from .perception import Geometry,image_url,depth_image_url,perceive,perceive_views
 from .contexts import fields
-from .mission_history import mission_evidence, selected_history_frames
+from .mission_history import mission_evidence
+from .navigation_history import navigation_visual_anchors
+from .observation import array_hash
 
 # A one-frame, geometry-directed visual description. No model-created pixel box,
 # trajectory, clearance decision or task-completion verdict is accepted.
@@ -475,21 +477,28 @@ class VisualPerception:
         if not session:
             by_id={v['observation_id']:v for v in
                    self.runtime.memory.observations}
-            for descriptor in selected_history_frames(
-                    self.runtime.memory,source['observation_id'],max_frames=3):
+            for descriptor in navigation_visual_anchors(
+                    self.runtime.memory,source['observation_id'],max_pairs=3):
                 item=by_id.get(descriptor['observation_id'])
                 if item is None:continue
                 try:
                     frame=(self.runtime.load_observation(item)
                         if self.runtime.load_observation else
                         self.runtime.frames[item['observation_id']])
+                    # Same immutable image identity rules as NavigationAgent:
+                    # do not attach a historical frame under a stale label.
+                    if (array_hash(frame.rgb)!=item.get('rgb_hash')
+                            or array_hash(frame.depth)!=item.get('depth_hash')):
+                        continue
+                    saved_pose=item.get('pose') or {}
                     historical.append(dict(
                         observation_id=item['observation_id'],
-                        heading_deg=descriptor['heading_deg'],
-                        pitch_deg=descriptor['pitch_deg'],
-                        motion_epoch=descriptor['motion_epoch'],
-                        place_id=descriptor['place_id'],
-                        observation_summary=descriptor['observation_summary'],
+                        heading_deg=round(math.degrees(
+                            saved_pose.get('heading',0))%360,2),
+                        pitch_deg=saved_pose.get('pitch_deg'),
+                        motion_epoch=saved_pose.get('motion_epoch'),
+                        place_id=item.get('place_id'),
+                        selection_reason=descriptor.get('selection_reason'),
                         historical_only=True,
                         image_indices=[len(images),len(images)+1]))
                     images.append(image_url(frame,max_edge=640))

@@ -217,7 +217,21 @@ def navigation_episode_history(memory, pose):
         rgbd_observation_catalog=catalog)
 
 
-def navigation_visual_anchors(memory, current_id, max_pairs=4):
+def _same_camera_view(first, second, camera):
+    """One view slot per executed-forward stance and calibrated yaw/pitch."""
+    a=(first or {}).get('pose') or {}
+    b=(second or {}).get('pose') or {}
+    yaw_a,yaw_b=_heading(a),_heading(b)
+    pa,pb=a.get('pitch_deg'),b.get('pitch_deg')
+    return bool(same_local_stance(a,b) and
+        yaw_a is not None and yaw_b is not None and
+        abs(relative_bearing(yaw_a,yaw_b))<
+            max(1.,camera.turn_angle/2) and
+        isinstance(pa,(int,float)) and isinstance(pb,(int,float)) and
+        abs(pa-pb)<max(1.,camera.tilt_angle/2))
+
+
+def navigation_visual_anchors(memory, current_id, max_pairs=5):
     """Select real source-backed RGB-D pairs from distinct trajectory phases.
 
     This selection does NOT remove historical events from the text timeline.
@@ -231,23 +245,26 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
     def offer(identifier,reason):
         if identifier in by_id and identifier!=current_id:
             options.append((identifier,reason))
-    # Select for the CURRENT decision rather than reserving an image slot
-    # for episode origin on almost every request. A substantial past forward
-    # segment viewed from an opposing yaw deserves before/after RGB evidence.
-    # Opposing headings are NOT proof of occupying or retracing one route.
-    for match in (current.get('revisit_matches') or []):
-        offer(match.get('observation_id'),
-              'possible_cross_stance_visual_revisit')
+    # Reserve the most valuable pair BEFORE revisit suggestions consume slots.
+    # Earlier repeated views at one yaw are not an alternative to the actual
+    # before/after pictures of an executed forward trajectory segment.
     yaw=_heading(current.get('pose') or {})
     if yaw is not None:
         all_segments=memory.route_progress_summary(
             max_successful_segments=None).get('successful_segments') or []
         anchor=salient_forward_segment(all_segments,yaw)
-        if (anchor and abs(relative_bearing(anchor['heading_deg'],yaw))>=135):
+        endpoint=by_id.get(anchor.get('end_observation_id')) if anchor else None
+        relevant=bool(anchor and (
+            abs(relative_bearing(anchor['heading_deg'],yaw))>=105
+            or (endpoint and same_local_stance(
+                endpoint.get('pose'),current.get('pose')))))
+        if relevant:
             offer(anchor['start_observation_id'],
-                  'prior_opposing_forward_start_visual_evidence')
+                  'prior_forward_start_visual_evidence')
             offer(anchor['end_observation_id'],
-                  'prior_opposing_forward_end_visual_evidence')
+                  'prior_forward_end_visual_evidence')
+    # One recent changed-forward image, then meaningful route candidates.
+    # If it is already the important endpoint, dedup below removes it.
     for action in reversed(memory.actions):
         if action.get('action')=='MOVE_FORWARD':
             feedback=action.get('result') or {}
@@ -264,6 +281,15 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
             offer(candidates[-1].get('observation_id'),
                   'recent_route_candidate')
             break
+    # Prefer a recent representative of a possible visual revisit. Camera
+    # pose bins are deduped below, even when regenerated RGB hashes differ.
+    order={o['observation_id']:i for i,o in enumerate(memory.observations)}
+    matches=sorted(current.get('revisit_matches') or [],
+                   key=lambda m:order.get(m.get('observation_id'),-1),
+                   reverse=True)
+    for match in matches[:3]:
+        offer(match.get('observation_id'),
+              'possible_cross_stance_visual_revisit')
     if memory.observations:
         offer(memory.observations[0].get('observation_id'),
               'episode_origin_reference')
@@ -287,11 +313,12 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
     for identifier,reason in options:
         record=by_id[identifier]
         pose=record.get('pose') or {}
-        # Preserve cross-stance reference images; dedup only effectively
-        # identical camera views at the SAME action stance.
-        if any(other.get('rgb_hash')==record.get('rgb_hash')
-               and other.get('depth_hash')==record.get('depth_hash')
-               and same_local_stance(other.get('pose'),pose)
+        # The CURRENT RGB is already attached. Older captures at the same
+        # stance/yaw/pitch are not additional viewpoints, even if their
+        # hashes differ slightly due to sensor refresh or a moving person.
+        if _same_camera_view(record,current,memory.camera):
+            continue
+        if any(_same_camera_view(record,other,memory.camera)
                for other in selected):
             continue
         selected.append(dict(record,selection_reason=reason))
