@@ -19,6 +19,7 @@ on:
       - "tests/test_v22_active_pitch_heading.py"
       - "tests/test_v23_route_evidence.py"
       - "tests/test_v26_eval39_route_quality.py"
+      - "tests/test_v27_model_relative_angles.py"
       - "tests/test_replay_studio.py"
       - "tests/test_competition_scoring.py"
       - "replay_ui/**"
@@ -78,6 +79,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v23_route_evidence.py' -v
       - name: Verify eval-39 forward-then-endpoint-block, source-image diversity and relative turn evidence
         run: python -m unittest discover -s tests -p 'test_v26_eval39_route_quality.py' -v
+      - name: Verify v27 model-facing camera-relative angles and VLM session rebase
+        run: python -m unittest discover -s tests -p 'test_v27_model_relative_angles.py' -v
       - name: Verify replay capture, deduplicated images, timeline and ZIP compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
       - name: Verify official Track 2 formula, adjusted collision metrics and missing-score semantics

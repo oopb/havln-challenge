@@ -5,6 +5,7 @@ receives the model's semantic assessment PLUS the exact relative yaw for each
 image. Historical pictures never authorize current forward travel.
 """
 from .api_client import APIError
+from .model_angles import project_model_angles
 from .contracts import navigation_schema, compact_navigation_protocol, navigation_envelope
 
 
@@ -18,15 +19,17 @@ PANORAMA_NAVIGATION_PROMPT = (
     'positive LEFT, negative RIGHT, always from CURRENT heading. '
     'The pitch_deg values are historical CAMERA TILT, not robot turn commands. '
     'Use the current task, visual evidence, navigation history, previous failures '
-    'and frame-specific absolute/relative headings to CHOOSE the most plausible '
-    'near-term approach direction. Select your own bearing and travel distance. '
-    'Submit only one navigate_relative(turn_deg, distance_m) with '
-    '-180 <= turn_deg <= 180 and 0.25 <= distance_m <= 3.0. '
+    'and frame-specific CURRENT-camera-relative view offsets to CHOOSE the most plausible '
+    'near-term approach direction. Old-stance view offsets are not current targets. '
+    'Submit only navigate_relative(turn_direction LEFT/RIGHT/NONE, '
+    'turn_degrees nonnegative, distance_m 0.25..3.0). '
     'The executor will perform all needed turns then attempt forward and '
-    'use RGB-D only to estimate motion after each forward action; automatic geometry, terrain and human collision probes are disabled. '
+    'use fresh RGB-D observations and the existing per-atomic Depth preflight; '
+    'a view is not a verified metric displacement. '
     'Past EXECUTABLE does not mean currently safe; past BLOCKED might be stale. '
     'UNKNOWN/NEEDS_VIEW means unconfirmed, not a physical barrier. Only '
-    'geometry checks are performed only when NavigationAgent explicitly requests an inspection tool. '
+    'Automatic verified central obstacles may block an atomic forward; UNKNOWN '
+    'alone is not a veto. '
     'Distinguish a visible staircase/railing from its WALKABLE ENTRY; their '
     'bearings may differ. Compare approach_candidates and prior successful '
     'forward/downward movements before choosing a direction. A successful '
@@ -148,7 +151,8 @@ def decide_with_panorama(agent, context, signature, validate, offered_tools):
     response=runtime.client.complete(
         'navigation_agent','panorama_navigation_commit',
         PANORAMA_NAVIGATION_PROMPT,
-        nav_context,navigation_schema(offered_tools),
+        project_model_angles(nav_context,current_heading),
+        navigation_schema(offered_tools),
         validate=validate,
         format_retry=int('format_feedback' in context),
         retry_safe=True,
