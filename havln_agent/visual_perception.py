@@ -49,6 +49,10 @@ SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     uncertainty=dict(type='string',maxLength=300),
     target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
     candidate_approach=dict(type='boolean'),
+    # Object detection box (box) and the optional visually continuous
+    # passage REGION must never share a bearing. Old answers may omit this.
+    passage_box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
+        items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
     next_action=dict(enum=['turn_left','turn_right','look_up','look_down','finish']),
     turn_deg=dict(enum=[0,15,30,45,60,90]),
     reason=dict(type='string',maxLength=250),
@@ -69,7 +73,7 @@ SCAN_GUIDANCE_SCHEMA['properties'].update(copy.deepcopy(_ADVICE_FIELDS))
 # next_action/turn_deg before it has reported visual facts and its reason.
 _VLM_OUTPUT_ORDER=(
     'observation_summary','evidence','target_visible','target_type',
-    'target_kind','confidence','box','uncertainty',
+    'target_kind','confidence','box','passage_box','uncertainty',
     'navigation_suggestion','reason','expected_progress','distance_m_hint',
     'candidate_approach','next_action','turn_deg')
 SCAN_GUIDANCE_SCHEMA['properties']={
@@ -98,11 +102,19 @@ SCAN_GUIDANCE_PROMPT=(
     'language. If a useful local direction is visible, optionally mark '
     'candidate_approach=true and give distance_m_hint (0.25..3m) only when '
     'there is a reasoned, locally measured distance; otherwise omit it. '
-    'A candidate with a visible pixel box is localized by the box CENTER; '
-    'a box to the RIGHT of image center is right of camera centerline, and '
-    'a box to the LEFT is left. A camera heading is not automatically the '
-    'bearing of an off-center object. A missing box gives no precise target '
-    'bearing. Its metric distance is a hypothesis, not walkability '
+    'The box field identifies the observed OBJECT (possibly a person, '
+    'wall or railing), never automatically a route. Provide passage_box '
+    'ONLY when you can actually see a distinct, continuous FLOOR/ENTRY '
+    'region the robot might approach; it must cover the possible free '
+    'passage, NOT the person/rail/wall being avoided. If no passage '
+    'region is visually localized, use passage_box=null or omit it and '
+    'provide natural-language navigation_suggestion; a candidate '
+    'without passage_box has NO numerical navigation bearing. '
+    'A passage_box is still only visual evidence, not proof of space '
+    'for the robot, collision clearance or a physically reachable path. '
+    'The horizontal center of passage_box supplies only a source-camera '
+    'bearing. Do not confuse absolute camera heading, off-center '
+    'image regions or past positions. Its metric distance is a hypothesis, not walkability '
     'certificates; walls, glass, rails, drop-offs and people may intervene. '
     'Use view_coverage.session_turn_degrees, turn_direction_reversals '
     'and inspected_viewpoints together with mission_memory.'
@@ -125,8 +137,11 @@ SCAN_GUIDANCE_PROMPT=(
     'Identify stairs, rooms, crowds and landmarks from actual pixels '
     'without using hardcoded stair-specific completion rules. '
     'For a doorway, stairs or a moving person, locate the visually '
-    'continuous FLOOR/ENTRY corridor rather than the center of a large '
-    'semantic object box containing handrails, legs or walls. Compare '
+    'continuous FLOOR/ENTRY corridor in passage_box rather than '
+    'the center of a large box containing handrails, legs or walls. '
+    'When the object is a person blocking the way, box should locate '
+    'the PERSON, passage_box should locate a separate possible GAP; '
+    'if gap visibility/width is unclear leave passage_box=null. Compare '
     'visible passages to the left and right of a blocker, note which '
     'side is occluded, and identify evidence needed for another look. '
     'A broad object box never certifies a navigable centerline; keep '
@@ -152,7 +167,7 @@ SCAN_GUIDANCE_PROMPT=(
     'mission completion. '
     'Generate the JSON in this order: describe observed RGB-D evidence '
     'and target facts FIRST (observation_summary, evidence, target fields, '
-    'box, uncertainty); then give the short visual interpretation and '
+    'box, passage_box, uncertainty); then give the short visual interpretation and '
     'navigation suggestion (navigation_suggestion, reason, '
     'expected_progress); finally set candidate_approach and choose '
     'next_action plus turn_deg LAST. Camera choice must follow the '
@@ -506,8 +521,10 @@ class VisualPerception:
                     for u in images)
             session.append(dict(role='user',content=msg))
             answer=copy.deepcopy(result)
-            if answer.get('box') is not None:
-                answer['box']=[int(round(v*1000)) for v in answer['box']]
+            for region in ('box','passage_box'):
+                if answer.get(region) is not None:
+                    answer[region]=[int(round(v*1000))
+                                    for v in answer[region]]
             answer['coordinate_space']='image_1000_xyxy'
             session.append(dict(role='assistant',content=json.dumps(
                 answer,ensure_ascii=False)))

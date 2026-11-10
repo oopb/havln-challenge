@@ -140,7 +140,8 @@ class MissionContracts(unittest.TestCase):
             observation_summary='A hallway entrance is ahead to the right.',
             navigation_suggestion='Approach the entrance cautiously.',
             candidate_approach=True,target_visible=True,confidence='medium',
-            target_type='hall',box=[.7,.3,.9,.7],
+            target_type='hall',box=[.6,.25,.95,.75],
+            passage_box=[.7,.3,.9,.7],
             evidence='Hallway visible',uncertainty='Distance uncertain',
             reason='Visible entrance'))
         r=SimpleNamespace(memory=m,camera=camera(),done=False,
@@ -156,7 +157,7 @@ class MissionContracts(unittest.TestCase):
         self.assertLess(out['waypoints'][0]['relative_bearing_deg_from_current'],0)
         self.assertEqual(out['waypoints'][0]['recommended_turn_direction'],'RIGHT')
         self.assertEqual(out['waypoints'][0]['bearing_source'],
-            'source_RGB_target_box_center_and_calibrated_HFOV')
+            'source_RGB_passage_box_center_and_calibrated_HFOV')
         self.assertEqual(m.task.evidence_observation_ids,['obs_0000'])
         self.assertEqual(out['waypoints'][0]['traversability'],'UNCONFIRMED')
         self.assertFalse(out['motion_authorized'])

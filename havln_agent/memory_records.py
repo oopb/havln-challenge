@@ -250,8 +250,9 @@ class MemoryRecords:
     def note_visual_route_candidate(self, value):
         """Remember a visual route hypothesis even when no target box exists.
 
-        Only actual RGB-D source IDs are accepted. A box can supply a
-        source-relative angular bearing; prose without a box never acquires
+        Only actual RGB-D source IDs are accepted. The optional PASSAGE
+        box, not a semantic target/object box, supplies a source-relative
+        bearing. Prose or an obstacle's semantic box never acquires
         a fabricated precise heading, distance or walkability certificate.
         """
         if not isinstance(value,dict):
@@ -297,12 +298,21 @@ class MemoryRecords:
             uncertainty=str(value.get('uncertainty') or '')[:300],
             target_visible=bool(value.get('target_visible')),
             target_box=copy.deepcopy(value.get('target_box')),
+            passage_box=copy.deepcopy(value.get('passage_box')),
+            semantic_target_box=copy.deepcopy(
+                value.get('semantic_target_box')),
+            bearing_region_role=value.get('bearing_region_role') or (
+                'legacy_unclassified_box' if absolute is not None else
+                'unlocalized_semantic_route_hypothesis'),
             absolute_heading_deg=round(absolute%360,2)
                 if absolute is not None else None,
             angular_bearing_grounded=absolute is not None,
             distance_m_hint=value.get('distance_m_hint')
                 if absolute is not None else None,
-            route_status='VISUAL_HYPOTHESIS_NOT_VERIFIED_TRAVERSABILITY',
+            route_status=(
+                'VISUAL_PASSAGE_REGION_NOT_VERIFIED_TRAVERSABILITY'
+                if absolute is not None else
+                'SEMANTIC_VISUAL_CUE_WITHOUT_LOCALIZED_PASSAGE'),
             motion_authorized=False)
         self.route_candidates.append(item)
         self.event('visual_route_candidate_recorded',
