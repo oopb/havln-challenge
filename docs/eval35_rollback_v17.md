@@ -16,3 +16,12 @@
 This is the v17 decision POLICY with narrow robustness fixes, not byte-identical v17. It has not yet been validated on the Habitat simulator. Replay the same val_seen episode. Compare first-forward index, longest turn-only streak, motion and RGB-D direction, whether stair descent truly happens, and externally measured score. Agent frame changes alone are not verified displacement.
 
 Suggested smoke tests: python -m compileall -q havln_agent ; python -m unittest discover -s tests -p 'test_mission_navigation_architecture.py' -v
+
+## Follow-up: retain PR #90 and #91 (2026-11-10)
+
+The subsequent user request explicitly retains both changes on top of the previously merged policy rollback.
+
+- PR #90: the NavigationAgent chooses LEFT/RIGHT/NONE, nonnegative turn_degrees and look=up/down/none; the executor owns signed motor conversion. Keep logging fresh pre-decision Depth, but send front_depth_preflight only if the actual measured state is CLEAR or BLOCKED. Absent field is inconclusive, not guaranteed clearance or a veto. Atomic forward still rechecks live calibrated Depth.
+- PR #91: project existing mission_evidence_v1 into a bounded, source-linked NavigationAgent request without mutating canonical Memory, manufacturing translation or adding a second summary. Retain 360-degree yaw/pitch coverage, distinct real action TURN/LOOK counts since last executed forward, block/stall event distinction, last motion receipts, and historical frame identifiers. For this requirement, only v19's factual scan-count measurement is ported back to v17; no v19 heading arithmetic table, automatic scan rule, new verifier or forced movement.
+- v17 mission strategy remains, with v18 malformed JSON recovery, v19 visual object/passage isolation, Replay Studio and score visualization retained. Tests for both PR #90 and #91 are reintroduced in the CI workflow.
+- This is not byte-identical eval-32; same-episode Habitat validation is required.

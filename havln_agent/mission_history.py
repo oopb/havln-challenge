@@ -122,6 +122,18 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
             relative_bearing_deg_from_current=relative_bearing(
                 yaw,math.degrees(pose.get('heading',0))%360),
             observed_only=True)
+    # Factual scan-cost information at the current executed-forward stance.
+    # There is deliberately no Python intervention or chosen heading.
+    actions_without_forward=[]
+    for action in reversed(memory.actions):
+        if action.get('action')=='MOVE_FORWARD':
+            break
+        actions_without_forward.append(action.get('action'))
+    actions_without_forward.reverse()
+    yaws={key[0] for key in unique}
+    full_horizontal_sweep=(
+        len(yaws)>=math.ceil(360/yaw_step)
+        if yaw_step<=180 else False)
     # 24 bins at a 15-degree actuator step, independent of episode duration.
     full_coverage=[dict(
         pitch_deg=round(pitch,2),
@@ -137,6 +149,13 @@ def recent_views_at_stance(memory, pose, max_views=16, window=80):
         full_coverage_by_pitch=full_coverage,
         full_coverage_includes_old_views=True,
         repeated_same_RGBD_heading_pitch_views=repeat_rgbd,
+        turn_actions_since_last_forward=sum(
+            a in ('TURN_LEFT','TURN_RIGHT') for a in actions_without_forward),
+        look_actions_since_last_forward=sum(
+            a in ('LOOK_UP','LOOK_DOWN') for a in actions_without_forward),
+        distinct_horizontal_heading_bins=len(yaws),
+        horizontal_360_coverage_observed=full_horizontal_sweep,
+        coverage_is_information_not_progress_or_stall_proof=True,
         action_guidance_only_no_hard_view_ban=True,
         historical_depth_does_not_authorize_move=True)
 
