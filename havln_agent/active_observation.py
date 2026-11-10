@@ -180,7 +180,7 @@ class ObservationController:
                         source_pose=copy.deepcopy(here),
                         heading_at_capture_deg=round(heading,2),
                         pitch_at_capture_deg=r.pitch_deg,
-                        target_box_center_offset_deg=image_offset,
+                        passage_box_center_offset_deg=image_offset,
                         absolute_heading_deg=round(goal_heading,2),
                         bearing_source='source_RGB_passage_box_center_and_calibrated_HFOV',
                         bearing_region_role='visually_proposed_passage_not_obstacle',

@@ -66,6 +66,8 @@ class PassageGrounding(unittest.TestCase):
         self.assertFalse(candidate['angular_bearing_grounded'])
         self.assertEqual(candidate['semantic_target_box'],[.52,.04,.82,.9])
         self.assertIsNone(candidate['passage_box'])
+        self.assertEqual(candidate['route_status'],
+                         'SEMANTIC_VISUAL_CUE_WITHOUT_LOCALIZED_PASSAGE')
         self.assertIn('gap is to the left',candidate['navigation_suggestion'])
 
     def test_separate_left_passage_box_guides_left_not_into_person(self):
@@ -86,6 +88,8 @@ class PassageGrounding(unittest.TestCase):
         self.assertEqual(candidate['semantic_target_box'],[.52,.04,.82,.9])
         self.assertEqual(candidate['bearing_region_role'],
             'visually_proposed_passage_not_obstacle')
+        self.assertEqual(candidate['route_status'],
+                         'VISUAL_PASSAGE_REGION_NOT_VERIFIED_TRAVERSABILITY')
 
     def test_legacy_no_passage_field_keeps_prose_not_numeric_route(self):
         old=person_reply()

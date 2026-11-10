@@ -250,7 +250,7 @@ class MemoryRecords:
     def note_visual_route_candidate(self, value):
         """Remember a visual route hypothesis even when no target box exists.
 
-        Only actual RGB-D source IDs are accepted. The optional PASSSAGE
+        Only actual RGB-D source IDs are accepted. The optional PASSAGE
         box, not a semantic target/object box, supplies a source-relative
         bearing. Prose or an obstacle's semantic box never acquires
         a fabricated precise heading, distance or walkability certificate.
@@ -309,7 +309,10 @@ class MemoryRecords:
             angular_bearing_grounded=absolute is not None,
             distance_m_hint=value.get('distance_m_hint')
                 if absolute is not None else None,
-            route_status='VISUAL_HYPOTHESIS_NOT_VERIFIED_TRAVERSABILITY',
+            route_status=(
+                'VISUAL_PASSAGE_REGION_NOT_VERIFIED_TRAVERSABILITY'
+                if absolute is not None else
+                'SEMANTIC_VISUAL_CUE_WITHOUT_LOCALIZED_PASSAGE'),
             motion_authorized=False)
         self.route_candidates.append(item)
         self.event('visual_route_candidate_recorded',
