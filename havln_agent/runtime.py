@@ -186,6 +186,19 @@ class AgentRuntime(ToolExecutor):
             # New sensor data invalidates geometry authorization, not the semantic
             # intent. Motion tools independently recheck current Depth per step.
         moving = call['tool'] in ('navigate_local','navigate_relative','navigate_to_pixel')
+        self._active_person_hint=None
+        self._person_refresh_needed=False
+        boxes=decision.get('visible_people_boxes') or []
+        if moving and boxes and decision.get('current_rgb_hash'):
+            original=next((record for record in self.memory.observations
+                if record['observation_id']==decision['observation_id']),None)
+            if original and original.get('rgb_hash')==decision['current_rgb_hash']:
+                self._active_person_hint=dict(
+                    boxes=copy.deepcopy(boxes),
+                    rgb_hash=original['rgb_hash'],
+                    pose=copy.deepcopy(original['pose']),
+                    observation_id=original['observation_id'],
+                    near_person_measured=False)
         if moving:
             self.set_navigation_mode('MOVE', 'model_selected_motion',
                                      waypoint_id=call['args'].get('waypoint_id'))
@@ -197,6 +210,8 @@ class AgentRuntime(ToolExecutor):
             return result
         finally:
             self._authorized_action = False
+            self._active_person_hint=None
+            self._person_refresh_needed=False
             if not self.done:
                 self.phase = 'NAVIGATING'
             if moving:
@@ -269,9 +284,17 @@ class AgentRuntime(ToolExecutor):
                         source_observation_id=None,
                         camera_pitch_deg=self.pitch_deg)
         source=self.source()
-        result=sense_forward(self.geometry(),source)
+        result=sense_forward(self.geometry(),source,
+            human_margin_m=float(self.config.get('human_clearance_margin_m',.45)))
         result['stage']=stage
         result['camera_pitch_deg']=self.pitch_deg
+        if ((result.get('near_field_proximity') or {}).get('status')==
+                'MEASURED_NEAR_OCCUPANCY'):
+            self.event('live_near_field_occupancy',
+                source='fresh_RGBD',stage=stage,
+                observation_id=source['observation_id'],
+                measured=result['near_field_proximity'],
+                human_identity_confirmed=False)
         # Keep measured pre-decision obstacles even when the model chooses
         # TURN/OBSERVE and no forward was ever requested. This is not a
         # physical collision receipt or a globally forbidden bearing.
@@ -315,13 +338,44 @@ class AgentRuntime(ToolExecutor):
         result=self.forward_preflight(stage='atomic_forward')
         self._last_forward_depth_probe=dict(result,
             check_mode='live_same_schema_decision_and_atomic_forward')
+        hint=getattr(self,'_active_person_hint',None)
+        if hint and hint.get('boxes'):
+            same_pose=(self.motion_controller.pose()==hint.get('pose'))
+            same_rgb=(self.memory.current or {}).get('rgb_hash')==hint.get('rgb_hash')
+            if not (same_pose and same_rgb):
+                # Re-acquire human visual evidence if the camera turned or
+                # the previous source contained measured nearby people.
+                if (hint.get('near_person_measured')
+                        or self.motion_controller.pose().get('viewpoint_generation')==
+                            hint['pose'].get('viewpoint_generation')):
+                    self.event('human_safety_reobserve_required',
+                        source='source_frame_stale',same_pose=same_pose,
+                        same_RGB=same_rgb,
+                        original_observation_id=hint.get('observation_id'),
+                        current_observation_id=(self.memory.current or {}).get('observation_id'))
+                    return dict(status='REQUIRES_ATTENTION',
+                        reason='person_regions_stale_after_camera_or_motion',
+                        human_safety=dict(
+                            source_observation_id=hint.get('observation_id'),
+                            current_observation_id=(self.memory.current or {}).get('observation_id'),
+                            no_forward_executed=True,
+                            model_chooses_next_relative_direction=True),
+                        information_options=['turn_and_observe','observe_for_goal','navigate_relative'])
+                self._active_person_hint=None
+            else:
+                person=result.get('human_forward_clearance') or {}
+                distance=person.get('nearest_person_depth_m')
+                hint['near_person_measured']=bool(
+                    isinstance(distance,(int,float))
+                    and distance <=float(self.config.get('human_recheck_range_m',3.0)))
+                self._person_refresh_needed=hint['near_person_measured']
         if result['status']!='BLOCKED':
             return None
         source=self.source()
         block=result['blocker']
         blocked_at=self.memory.evidence.blocked_forward(
             source,self.motion_controller.pose(),
-            reason='measured_centerline_obstacle',
+            reason=result['reason'],
             center=block,place_id=self.memory.current.get('place_id'))
         repeat=blocked_at['repeat_count_at_recording']
         # Structure and ROI are identical in model predecision, tool feedback,
@@ -330,7 +384,8 @@ class AgentRuntime(ToolExecutor):
             source_observation_id=source['observation_id'],
             depth=dict(block,wide_probe_state=result['raw_probe_state'],
                        clearance_m=result['clearance_m'],
-                       body_step_m=self.camera.forward_step),
+                       body_step_m=self.camera.forward_step,
+                       human_forward_clearance=result.get('human_forward_clearance')),
             visual=dict(status='DEFERRED_TO_OBSERVATION_AGENT',
                 description='',uncertainty='look_at_real_RGBD_and_depth_ROI'),
             visual_reused_for_identical_frame=False,
@@ -342,12 +397,13 @@ class AgentRuntime(ToolExecutor):
         self.event('pre_forward_obstacle_reported',
             source='live_depth_for_navigation_agent',
             depth_observation_id=source['observation_id'],
-            central_support_pixels=block['central_support_pixels'],
+            central_support_pixels=block.get('central_support_pixels',0),
+            human_buffer_support_pixels=block.get('support_pixels',0),
             focus_region_xyxy_norm=block.get('focus_region_xyxy_norm'),
             atomic_move_not_executed=True,
             repeated_same_RGBD_stance_heading=repeat,
             navigation_choice_unchanged=True)
-        return dict(status='BLOCKED',reason='measured_centerline_obstacle',
+        return dict(status='BLOCKED',reason=result['reason'],
             blocked_at=blocked_at,
             repeated_same_RGBD_stance_heading=repeat,
             blockage_interpretation=(
@@ -358,10 +414,14 @@ class AgentRuntime(ToolExecutor):
             safety=dict(path_state=result['path_state'],
                 clearance=result['clearance_m'],
                 required_forward_step=result['required_forward_step_m'],
-                center_confirmed=True,
-                center_support_pixels=block['central_support_pixels'],
-                geometry_invocation='automatic_live_central_depth_only'),
-            information_options=['observe_for_goal','navigate_relative'])
+                center_confirmed=result['center_confirmed'],
+                human_buffer_confirmed=result.get('human_buffer_confirmed',False),
+                center_support_pixels=block.get('central_support_pixels',0),
+                human_buffer_support_pixels=block.get('support_pixels',0),
+                geometry_invocation=('automatic_current_person_RGBD_buffer'
+                    if result.get('human_buffer_confirmed')
+                    else 'automatic_live_central_depth_only')),
+            information_options=['observe_for_goal','navigate_relative','turn_and_observe'])
 
     def _observe_for_goal(self, objective, sweep_degrees=180):
         """Delegate a natural-language request to full-session RGB-D observation."""
