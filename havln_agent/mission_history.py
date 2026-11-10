@@ -364,9 +364,25 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
     # Keep a compact, source-linked route candidate pool independent of the
     # last three observation sessions. A missing box never becomes a bearing.
     route_candidates=[]
+    repeated_unlocalized={}
     for candidate in reversed(getattr(memory,'route_candidates',[])):
         original=by_id.get(candidate.get('source_observation_id'))
         if not original:
+            continue
+        # Several scans of the same blocked person at one action stance
+        # are distinct source facts, not three independent ROUTES. Keep
+        # complete records queryable; summarize repeated unboxed cues once.
+        unlocalized=not candidate.get('angular_bearing_grounded')
+        cue_key=(
+            str(candidate.get('target_type') or '').casefold(),
+            candidate.get('target_kind'),
+            candidate.get('source_stance_id') or
+                candidate.get('source_observation_id'),
+            candidate.get('objective')) if unlocalized else None
+        if cue_key in repeated_unlocalized:
+            repeated_unlocalized[cue_key][
+                'other_source_observation_ids'].append(
+                    candidate.get('source_observation_id'))
             continue
         fresh=same_local_stance(original.get('pose') or {},pose)
         absolute=candidate.get('absolute_heading_deg')
@@ -376,6 +392,10 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             'uncertainty','target_visible','absolute_heading_deg',
             'angular_bearing_grounded','route_status',
             'bearing_region_role')}
+        if unlocalized:
+            item['other_source_observation_ids']=[]
+            item['compact_unlocalized_cue_not_independent_route']=True
+            repeated_unlocalized[cue_key]=item
         item['source_stance_matches_current']=fresh
         item['historical_bearing_in_source_record_only']=bool(
             not fresh and isinstance(absolute,(int,float)))

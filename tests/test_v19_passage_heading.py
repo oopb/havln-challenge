@@ -173,6 +173,28 @@ class HeadingAndHistory(unittest.TestCase):
         self.assertNotEqual(by_id.get('person',{}).get('selection_reason'),
                             'recent_route_candidate')
 
+    def test_repeated_unboxed_person_is_one_route_cue_not_three_paths(self):
+        m=MemoryRecords(camera())
+        m.reset('e','Descend past the person')
+        m.observations=[observed('person_%d'%i,i*15)
+                        for i in range(3)]
+        m.current=m.observations[-1]
+        for i in range(3):
+            m.note_visual_route_candidate(dict(
+                source_observation_id='person_%d'%i,
+                target_type='dark figure',
+                target_kind='TARGET',objective='How can we pass?',
+                evidence='Possible gap to the left of figure',
+                absolute_heading_deg=None))
+        self.assertEqual(len(m.route_candidates),3)
+        compressed=mission_evidence(m,stance_pose(0))[
+            'candidate_route_hypotheses']
+        self.assertEqual(len(compressed),1)
+        self.assertEqual(len(compressed[0]['other_source_observation_ids']),2)
+        self.assertTrue(compressed[0][
+            'compact_unlocalized_cue_not_independent_route'])
+        self.assertIsNone(compressed[0]['absolute_heading_deg'])
+
     def test_full_turn_coverage_and_turn_cost_are_factual_not_forced(self):
         m=MemoryRecords(camera())
         m.reset('e','Find passage')
