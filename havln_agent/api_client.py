@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-v24-relative-only-live-human-buffer'
+PROMPT_VERSION = 'havln-v25-eval39-rollback-relative-only'
 ROLES = ('navigation_agent', 'visual_perception')
 
 

@@ -118,11 +118,6 @@ def registry(camera, max_actions, pitch_deg=0.):
 _EVIDENCE=dict(
     observed_evidence=dict(type='array',minItems=1,maxItems=5,
         items=dict(type='string',minLength=1,maxLength=600)),
-    # Optional current-RGB hypotheses. Depth is checked independently on
-    # the same source image before treating a box as a person safety cue.
-    visible_people_boxes=dict(type='array',maxItems=4,
-        items=dict(type='array',minItems=4,maxItems=4,
-            items=dict(type='number',minimum=0,maximum=1))),
 )
 _DECISION_ANALYSIS=dict(
     decision_analysis=dict(type='string',minLength=1,maxLength=700),
@@ -187,9 +182,6 @@ def compact_navigation_protocol(tools):
         'Put tool parameters directly inside args, not another wrapper. '
         'Do not put any fields after args. '
         'Historical left/right text is NOT a current camera bearing. '
-        'If CURRENT RGB contains people, optionally report '
-        'visible_people_boxes as normalized [left,top,right,bottom] boxes '
-        '(0..1) for the CURRENT image only; do not use historic boxes. '
         'ALL turn tools take turn_direction LEFT/RIGHT/NONE RELATIVE to '
         'the current image and nonnegative turn_degrees (NONE=0); '
         'LEFT means robot left; RIGHT means robot right. '
