@@ -82,7 +82,7 @@ Both phases use the same six-action JSON contract and Score. Phase 1 and Phase
 | 💡 **Best Innovative Solution** | Certificate recognizing outstanding creativity and technical innovation |
 | 🎤 **Oral Presentations** | Selected top-performing teams will be invited to give oral presentations at the **RoboPAD Workshop @ NeurIPS 2026** |
 
-> **Active implementation (v19):** [Continuous natural-language mission navigation](docs/mission_narrative_navigation.md) distinguishes VLM-observed obstacle boxes from proposed passage regions, gives NavigationAgent exact model-facing LEFT/RIGHT heading reference data, and preserves historical route provenance. It retains v17 pitched-camera movement, live atomic Depth preflight, and the evidence → analysis → final tool + args decision order. Earlier detailed notes below are historical.
+> **Active implementation (v21):** [Continuous natural-language mission navigation](docs/mission_narrative_navigation.md) preserves canonical Memory while compacting NavigationAgent evidence: complete view coverage, forward receipts and source-linked obstacles without duplicate history. It retains v20 direction-word output and conclusive-only Depth injection, v19 passage-region grounding, and v17 pitched-camera atomic Depth safety. Earlier detailed notes below are historical.
 
 For the API-driven HA-VLN Agent, see [evidence-grounded multimodal
 navigation](docs/evidence_grounded_navigation.md) and

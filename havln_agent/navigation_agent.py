@@ -43,12 +43,13 @@ MISSION_PROMPT=(
     'authorize motion. Explicit LOOK is model-owned. '
     'No measured metric pose, loop closure or confirmed translation. '
     'Command distance counts atomic steps, not arrival proof. '
-    'Read memory.recent_views_at_current_stance for full same-stance '
-    'yaw/pitch coverage, turn actions since the last forward and repeated '
-    'RGB-D views. If full 360° is already seen, merely scanning the same '
-    'angles again is not progress: reassess route, past successful '
-    'forward evidence and actual barriers before choosing what to do. '
-    'Model retains the next action; no forced move or scan ban. '
+    'Read memory.recent_views_at_current_stance for complete '
+    'yaw/pitch coverage, repeated views and turns since last forward. '
+    'New camera headings are observations, NOT forward progress. '
+    'When turns repeat without progress, distinguish an unanswered '
+    'visual question from rechecking the same scene; use the recent '
+    'actual forward and blocked receipts to choose the next useful '
+    'action. The model chooses; no forced move or scan ban. '
     'A visual semantic object box (e.g. HUMAN) is never a passage '
     'waypoint. Use only a separately grounded passage_box for numerical '
     'route bearings; unboxed route ideas remain prose. Stale bearings '
@@ -107,9 +108,10 @@ class NavigationAgent:
         # deliberately omitted (not misrepresented as CLEAR/BLOCKED).
         # Atomic MOVE_FORWARD still performs its own fresh depth veto.
         preflight=r.forward_preflight(stage='navigation_decision')
-        context=compact_navigation_context(navigation_context(r))
+        state=navigation_context(r)
         if preflight.get('status') in ('CLEAR','BLOCKED'):
-            context['front_depth_preflight']=preflight
+            state['front_depth_preflight']=preflight
+        context=compact_navigation_context(state)
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
         if format_feedback:
