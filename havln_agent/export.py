@@ -79,12 +79,10 @@ def load_config(path):
     # config whitelist. Keep these settings OPTIONAL for older agent.yaml
     # files, while continuing to reject misspelled or unknown runtime keys.
     optional_integers = {'max_unchanged_evidence_decisions', 'max_model_decisions'}
-    optional_safety_numbers = {'human_clearance_margin_m','human_recheck_range_m'}
     if not isinstance(limits, dict):
         raise ValueError('Expected a runtime mapping')
     missing = sorted(required - set(limits))
-    unexpected = sorted(set(limits) - required - optional_integers
-                        - optional_safety_numbers)
+    unexpected = sorted(set(limits) - required - optional_integers)
     if missing or unexpected:
         raise ValueError('Unexpected runtime fields: missing=%s, unknown=%s' %
                          (missing, unexpected))
@@ -98,17 +96,6 @@ def load_config(path):
     for name in required - {'max_steps', 'api_budget', 'tool_max_actions'}:
         if type(limits[name]) not in (int, float) or not math.isfinite(limits[name]):
             raise ValueError('Invalid runtime.%s=%r: expected a finite number' % (name,limits[name]))
-    for name in sorted(optional_safety_numbers & set(limits)):
-        if (type(limits[name]) not in (int,float)
-                or not math.isfinite(limits[name])):
-            raise ValueError('Invalid runtime.%s=%r: expected a finite number'
-                             % (name,limits[name]))
-    if ('human_clearance_margin_m' in limits and
-            not 0.1 <= limits['human_clearance_margin_m'] <= 1.0):
-        raise ValueError('human_clearance_margin_m must be in [0.1,1.0]')
-    if ('human_recheck_range_m' in limits and
-            not 0.5 <= limits['human_recheck_range_m'] <= 5.0):
-        raise ValueError('human_recheck_range_m must be in [0.5,5.0]')
     checks = (
         ('max_steps', limits['max_steps'] <= 500, 'an integer in [1, 500]'),
         ('tool_max_actions', limits['tool_max_actions'] <= 3, 'an integer in [1, 3]'),

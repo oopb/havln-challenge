@@ -74,26 +74,26 @@ class RelativeDirectionOnly(unittest.TestCase):
         self.assertEqual(self.actions,['LOOK_DOWN'])
         self.assertEqual(self.r.pitch_deg,-15)
 
-    def test_people_regions_are_optional_current_image_evidence(self):
+    def test_no_model_person_region_contract_after_rollback(self):
         schema=navigation_schema(self.tools)
         Draft7Validator.check_schema(schema)
-        decision=dict(observed_evidence=['Two people on the right.'],
-            visible_people_boxes=[[.6,.2,.9,.95]],
-            decision_analysis='Steer left after assessing body clearance.',
-            tool='navigate_relative',
-            args=dict(turn_direction='LEFT',turn_degrees=15,distance_m=.25))
+        decision=dict(observed_evidence=['A person is visible.'],
+            decision_analysis='Choose a relative turn after observing.',
+            tool='turn_and_observe',
+            args=dict(turn_direction='LEFT',turn_degrees=15,look='none'))
         self.assertTrue(Draft7Validator(schema).is_valid(decision))
-        decision['visible_people_boxes']=[[1.2,.2,.9,.95]]
+        decision['visible_people_boxes']=[[.6,.2,.9,.95]]
         self.assertFalse(Draft7Validator(schema).is_valid(decision))
-        self.assertIn('visible_people_boxes',compact_navigation_protocol(self.tools))
 
     def test_prompt_carries_pitch_and_relative_steering_without_look_quota(self):
         for phrase in ('turn_direction LEFT, RIGHT, or NONE',
                        'look=up/down/none','consider LOOK_UP','consider LOOK_DOWN',
                        'no automatic LOOK_UP','not on a fixed schedule',
-                       'no forced scan','visible_people_boxes','observe_for_goal'):
+                       'no forced scan','observe_for_goal'):
             self.assertIn(phrase,MISSION_PROMPT)
         self.assertNotIn('target_heading_deg',MISSION_PROMPT)
+        self.assertNotIn('near_field_proximity',MISSION_PROMPT)
+        self.assertNotIn('visible_people_boxes',MISSION_PROMPT)
         self.assertIn('LOOK_UP',SCAN_GUIDANCE_PROMPT)
         self.assertIn('LOOK_DOWN',SCAN_GUIDANCE_PROMPT)
         self.assertLess(len(MISSION_PROMPT),5000)

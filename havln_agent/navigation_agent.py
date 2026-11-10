@@ -19,8 +19,8 @@ MISSION_PROMPT=(
     "Stored 0..360 heading fields label sensor/history images only. They are NOT motor commands. To steer toward a visually selected opening, choose LEFT/RIGHT directly in CURRENT RGB, not from an old historical heading; test the effect against returned actual yaw and RGB. "
     "Camera pitch is model-controlled and stays at the chosen angle during forward motion; there is no automatic LOOK_UP or level-camera action. Vertical LOOK is a useful observation, not a movement penalty. The same horizontal heading at a different pitch reveals different information: for nearby floor and stair edges consider LOOK_DOWN; for a distant hallway, doorway or landmark obscured in a down-tilted view consider LOOK_UP. "
     "Choose informative pitch changes, not on a fixed schedule. Use turn_and_observe with look=up/down and no turn when helpful. After checking near-floor steps, consider LOOK_UP for the distant route; LOOK is not translation. "
-    "For nearby people, plan a walkable gap around their FULL body instead of aiming at the visible floor immediately beside them. Current RGB person silhouettes are not proof of metric width. Optionally return visible_people_boxes normalized [left,top,right,bottom] (0..1) for people in CURRENT RGB only, even if a tool call follows; each box is only a visual hypothesis. Live Depth establishes current range. Prefer a deliberate new viewpoint or one short forward step near people; do not blindly cruise through a crowd. Ask observe_for_goal to compare left/right body clearance and occluded floor when needed. "
-    "front_depth_preflight appears only for measured CLEAR/BLOCKED, not UNKNOWN. BLOCKED is current occupancy; CLEAR does not certify a full path. When present, near_field_proximity is measured nearby TALL depth occupancy, not human identification; compare against CURRENT RGB people. An absent Depth result is inconclusive, not a veto. Never chase CLEAR by turning. Every atomic forward rechecks live Depth; a fresh, source-validated human buffer measurement can interrupt a forward step. "
+    "When a person, railing, stairs, doorway or occlusion makes the route ambiguous, consider observe_for_goal with a focused request to compare near-floor structure, far passage, left/right gaps and useful pitch views from live RGB-D. ObservationAgent may look and turn within its session; it cannot authorize motion. "
+    "front_depth_preflight appears only for measured CLEAR/BLOCKED. BLOCKED is current occupancy; CLEAR is not full-path proof. An absent result means inconclusive, not a veto. Never chase CLEAR by turning. Each actual forward step independently rechecks fresh Depth at the current pitch. "
     "Read memory.route_continuity: compare source-linked forward actions with earlier model visual claims before concluding the route was never traversed. Opposing yaw suggests a possible return but does NOT prove the same location, vertical motion or completed descent. Read memory.recent_look_evidence for recent LOOK questions, their follow-up visual answers and repeated yaw/pitch bins; prefer acting on already answered evidence over another duplicate view. Use full_coverage_by_pitch to distinguish novel views; turns and LOOK are observations, not forward progress. There is no forced scan or forward rule. "
     "Passage cues and people boxes are visual hypotheses, not clearance. Past model progress may contradict other model descriptions; compare their observation IDs and current RGB instead of blindly overwriting route history. If a prior forward changed RGB-D and the route remains plausible, consider continuing rather than resetting a scan. "
     "Commanded distance (0.25..3m) is a finite set of atomic forward steps, NOT measured displacement, stair descent or arrival. In stable visible corridors the model may choose a longer short cruise; in crowds, steps or uncertainty choose a shorter move or purposeful observation. There is no metric x/y/z, proven loop closure or confirmed height change. "
@@ -45,18 +45,6 @@ class NavigationAgent:
         state=navigation_context(r)
         if preflight.get('status') in ('CLEAR','BLOCKED'):
             state['front_depth_preflight']=preflight
-        near=preflight.get('near_field_proximity') or {}
-        if near.get('status')=='MEASURED_NEAR_OCCUPANCY':
-            state['near_field_proximity']=dict(
-                source_observation_id=preflight.get('source_observation_id'),
-                heading_deg=preflight.get('heading_deg'),
-                pitch_deg=preflight.get('pitch_deg'),
-                status=near['status'],
-                nearest_forward_m=near.get('nearest_forward_m'),
-                nearest_lateral_m=near.get('nearest_lateral_m'),
-                support_pixels=near.get('support_pixels'),
-                human_identity='UNVERIFIED',
-                evidence='fresh_tall_depth_occupancy_not_human_classification')
         context=compact_navigation_context(state)
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
@@ -168,10 +156,6 @@ class NavigationAgent:
                             category='structured_field')
             if not Draft7Validator(schema).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
-                               category='structured_field')
-            people=value.get('visible_people_boxes') or []
-            if any(b[0]>=b[2] or b[1]>=b[3] for b in people):
-                raise APIError('invalid_current_RGB_person_box_coordinates',
                                category='structured_field')
             if value['tool'] in ('navigate_relative','turn_and_observe'):
                 args=value['args']
