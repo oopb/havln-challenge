@@ -10,6 +10,7 @@ import math
 
 from .heading import same_local_stance, relative_bearing
 from .mission_history import selected_history_frames
+from .navigation_evidence import salient_forward_segment
 
 
 def _heading(pose):
@@ -230,17 +231,30 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
     def offer(identifier,reason):
         if identifier in by_id and identifier!=current_id:
             options.append((identifier,reason))
-    # Only a few historical RGB images are ever sent to navigation.
-    # Prioritize: (1) real possible revisit evidence, (2) episode
-    # origin/early route for long-term orientation, (3) newest route
-    # candidate, (4) a recent changed-forward frame. Do not let every
-    # early candidate consume all image slots before recent evidence.
+    # Select for the CURRENT decision rather than reserving an image slot
+    # for episode origin on almost every request. A substantial past forward
+    # segment viewed from an opposing yaw deserves before/after RGB evidence.
+    # Opposing headings are NOT proof of occupying or retracing one route.
     for match in (current.get('revisit_matches') or []):
         offer(match.get('observation_id'),
               'possible_cross_stance_visual_revisit')
-    if memory.observations:
-        offer(memory.observations[0].get('observation_id'),
-              'episode_origin_reference')
+    yaw=_heading(current.get('pose') or {})
+    if yaw is not None:
+        all_segments=memory.route_progress_summary(
+            max_successful_segments=None).get('successful_segments') or []
+        anchor=salient_forward_segment(all_segments,yaw)
+        if (anchor and abs(relative_bearing(anchor['heading_deg'],yaw))>=135):
+            offer(anchor['start_observation_id'],
+                  'prior_opposing_forward_start_visual_evidence')
+            offer(anchor['end_observation_id'],
+                  'prior_opposing_forward_end_visual_evidence')
+    for action in reversed(memory.actions):
+        if action.get('action')=='MOVE_FORWARD':
+            feedback=action.get('result') or {}
+            if feedback.get('visual_change'):
+                offer(feedback.get('observation_after'),
+                      'recent_forward_changed_view')
+                break
     for session in reversed(memory.observation_searches):
         candidates=[
             cp for cp in session.get('checkpoints') or []
@@ -250,13 +264,9 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
             offer(candidates[-1].get('observation_id'),
                   'recent_route_candidate')
             break
-    for action in reversed(memory.actions):
-        if action.get('action')=='MOVE_FORWARD':
-            feedback=action.get('result') or {}
-            if feedback.get('visual_change'):
-                offer(feedback.get('observation_after'),
-                      'recent_forward_changed_view')
-                break
+    if memory.observations:
+        offer(memory.observations[0].get('observation_id'),
+              'episode_origin_reference')
     # If some slots are still empty, fill them with earlier candidate
     # scenes and diverse checkpoints. All source photos are immutable.
     for session in memory.observation_searches:
