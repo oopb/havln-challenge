@@ -1,3 +1,47 @@
+# v20 — direction-word decisions and confirmed Depth evidence only
+
+v20 only implements the two approved changes from the eval-batch4-34
+review; **no change** is made to the proposed historical/stagnation
+memory redesign (item 2), the observation strategy, or physical motion.
+
+1. The navigator chooses the **direction word** `LEFT`/`RIGHT`/`NONE`
+   plus a nonnegative `turn_degrees`; the separate `look` value is
+   `up`/`down`/`none`. Existing schema, model autonomy, and
+   the `tool+args` executor contract remain stable. The existing
+   `signed_turn()` helper converts direction and magnitude to an
+   internal motor angle. No turn-heading arithmetic reference table
+   is sent to the LLM; prompt and tool descriptions no longer ask it
+   to reason about motor angle signs. `turn_and_observe` still means
+   turn without translating and `navigate_relative` still means turn
+   and execute a *positive-distance* finite segment.
+2. The navigation model receives `front_depth_preflight` only when
+   the current-source state is `CLEAR` or `BLOCKED`. When the state
+   is `UNKNOWN` or any other inconclusive value the **entire field is
+   omitted**; do not insert a substitute string, a fake CLEAR, or
+   extra uncertain-path warnings. The live Depth preflight is still
+   computed for trace/debug data, and the atomic forward executor
+   still runs an independent *fresh* calibrated Depth check and
+   blocks confirmed occupancy. ObservationAgent continues to receive
+   the actual RGB-D and existing independent Depth information.
+3. Current same-stance coverage, route candidate evidence, historical
+   image selection, Memory architecture, and liveness intervention
+   remain as in v19. A proposed solution for the repeated-turn
+   issue is documented for user review separately, **not implemented**.
+
+Run:
+```bash
+python -m compileall -q havln_agent
+python -m unittest discover -s tests -p 'test_v20_direction_depth.py' -v
+python -m unittest discover -s tests -p 'test_v19_passage_heading.py' -v
+python -m unittest discover -s tests -v
+```
+
+Compare a true v20 same-episode 500-action run against eval34; monitor
+`turn_and_observe` count, actual forwards, unknown-status omissions from
+NavigationAgent API input, confirmed blocks, and percent useful observed views.
+
+---
+
 # v19 — source-grounded passage regions, exact turn references and scan receipts
 
 eval-batch4-33 had 367 turns and 109 atomic forwards, including 119

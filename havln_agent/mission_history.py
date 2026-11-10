@@ -488,7 +488,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         bearing_convention=dict(
             model_turn_commands='LEFT/RIGHT/NONE + nonnegative turn_degrees',
             camera_tilt_commands='look=up/down/none',
-            model_does_not_need_signed_angles=True,
+            actuator_conversion_is_executor_only=True,
             source_bearings_are_historical_references_only=True,
             coordinate_scope='executed_forward_stance_yaw_pitch_only_no_metric_xyz'),
         historical_clearance_authorizes_move=False)
