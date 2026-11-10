@@ -160,15 +160,17 @@ class ObservationController:
                       visual.get('evidence') or '').strip()
             if evidence and source['observation_id'] in m.keyframes:
                 m.note_semantics(source,[evidence[:350]])
-            # A missing visual box still produces a semantic route hypothesis,
-            # but never a precise navigable bearing or motion permission.
+            # 'box' is the semantic OBJECT (which can be an obstacle).
+            # Only the separate visible passage_box may ground a route
+            # bearing. Without it, retain VLM prose but never turn a
+            # detected PERSON into a numeric waypoint.
             target_box=visual.get('box')
+            passage_box=visual.get('passage_box')
             image_offset=None
             if (visual.get('candidate_approach') is True
-                    and visual.get('target_visible') is True
-                    and target_box is not None):
+                    and passage_box is not None):
                 try:
-                    image_offset=box_center_bearing(target_box,r.camera.hfov)
+                    image_offset=box_center_bearing(passage_box,r.camera.hfov)
                 except ValueError:
                     image_offset=None
                 if image_offset is not None:
@@ -180,12 +182,15 @@ class ObservationController:
                         pitch_at_capture_deg=r.pitch_deg,
                         target_box_center_offset_deg=image_offset,
                         absolute_heading_deg=round(goal_heading,2),
-                        bearing_source='source_RGB_target_box_center_and_calibrated_HFOV',
+                        bearing_source='source_RGB_passage_box_center_and_calibrated_HFOV',
+                        bearing_region_role='visually_proposed_passage_not_obstacle',
                         relative_bearing_deg_from_current=None,
                         distance_m_hint=visual.get('distance_m_hint'),
                         confidence=visual.get('confidence','low'),
                         target_type=visual.get('target_type'),
-                        target_region=copy.deepcopy(target_box),
+                        target_region=copy.deepcopy(passage_box),
+                        passage_region=copy.deepcopy(passage_box),
+                        semantic_target_region=copy.deepcopy(target_box),
                         observation_summary=evidence[:500],
                         reason=(visual.get('navigation_suggestion') or
                                 visual.get('reason') or '')[:500],
@@ -203,12 +208,18 @@ class ObservationController:
                     navigation_suggestion=visual.get('navigation_suggestion'),
                     uncertainty=visual.get('uncertainty'),
                     target_visible=visual.get('target_visible'),
-                    target_box=(copy.deepcopy(target_box)
+                    target_box=(copy.deepcopy(passage_box)
                                 if image_offset is not None else None),
+                    semantic_target_box=copy.deepcopy(target_box),
+                    passage_box=(copy.deepcopy(passage_box)
+                                 if image_offset is not None else None),
+                    bearing_region_role=(
+                        'visually_proposed_passage_not_obstacle'
+                        if image_offset is not None else
+                        'unlocalized_semantic_route_hypothesis'),
                     absolute_heading_deg=(
                         (heading+image_offset)%360
-                        if image_offset is not None and
-                           visual.get('target_visible') is True else None),
+                        if image_offset is not None else None),
                     distance_m_hint=visual.get('distance_m_hint')))
             action=visual.get('next_action','finish')
             if action=='finish':
