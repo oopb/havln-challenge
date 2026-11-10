@@ -14,6 +14,7 @@ from havln_agent.contexts import heading_turn_reference,navigation_context
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.mission_history import (
     mission_evidence,recent_views_at_stance,selected_history_frames)
+from havln_agent.navigation_history import navigation_visual_anchors
 from havln_agent.vision_protocol import (
     coordinate_schema,normalize_coordinates)
 from havln_agent.visual_perception import SCAN_GUIDANCE_SCHEMA
@@ -144,6 +145,33 @@ class HeadingAndHistory(unittest.TestCase):
         self.assertIsNone(stale['relative_bearing_deg_from_current'])
         self.assertTrue(stale['historical_bearing_in_source_record_only'])
         self.assertEqual(m.route_candidates[0]['absolute_heading_deg'],120)
+
+    def test_object_only_frame_not_prioritized_as_route_anchor(self):
+        m=MemoryRecords(camera())
+        m.reset('e','Navigate past the person toward the hall')
+        m.observations=[
+            observed('origin',0),
+            observed('person',30),
+            observed('hall',90),
+            observed('current',120)]
+        m.current=m.observations[-1]
+        m.observation_searches=[
+            dict(observation_task_id='old',checkpoints=[
+                dict(observation_id='person',visual=dict(
+                    candidate_approach=True,
+                    box=[.5,.1,.8,.9],passage_box=None))]),
+            dict(observation_task_id='recent',checkpoints=[
+                dict(observation_id='hall',visual=dict(
+                    candidate_approach=True,
+                    box=[.1,.3,.9,.8],
+                    passage_box=[.2,.5,.4,.9]))])]
+        anchors=navigation_visual_anchors(m,'current',max_pairs=3)
+        by_id={v['observation_id']:v for v in anchors}
+        self.assertIn('hall',by_id)
+        self.assertEqual(by_id['hall']['selection_reason'],
+                         'recent_route_candidate')
+        self.assertNotEqual(by_id.get('person',{}).get('selection_reason'),
+                            'recent_route_candidate')
 
     def test_full_turn_coverage_and_turn_cost_are_factual_not_forced(self):
         m=MemoryRecords(camera())

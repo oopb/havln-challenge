@@ -85,7 +85,9 @@ def navigation_episode_history(memory, pose):
                 target_type=visual.get('target_type'),
                 target_visible=visual.get('target_visible'),
                 box=visual.get('box'),
+                passage_box=visual.get('passage_box'),
                 candidate_approach=visual.get('candidate_approach'),
+                exact_bearing_requires_passage_box=True,
                 observation_summary=visual.get('observation_summary'),
                 navigation_suggestion=visual.get('navigation_suggestion'),
                 next_action=visual.get('next_action'),
@@ -104,6 +106,8 @@ def navigation_episode_history(memory, pose):
                 source_observation_id=w.get('source_observation_id'),
                 target_type=w.get('target_type'),
                 target_region=w.get('target_region'),
+                semantic_target_region=w.get('semantic_target_region'),
+                bearing_region_role=w.get('bearing_region_role'),
                 absolute_heading_deg=w.get('absolute_heading_deg'),
                 heading_at_capture_deg=w.get('heading_at_capture_deg'),
                 motion_authorized=False)
@@ -240,7 +244,8 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
     for session in reversed(memory.observation_searches):
         candidates=[
             cp for cp in session.get('checkpoints') or []
-            if (cp.get('visual') or {}).get('candidate_approach')]
+            if ((cp.get('visual') or {}).get('candidate_approach')
+                and (cp.get('visual') or {}).get('passage_box') is not None)]
         if candidates:
             offer(candidates[-1].get('observation_id'),
                   'recent_route_candidate')
@@ -256,7 +261,8 @@ def navigation_visual_anchors(memory, current_id, max_pairs=4):
     # scenes and diverse checkpoints. All source photos are immutable.
     for session in memory.observation_searches:
         for cp in session.get('checkpoints') or []:
-            if (cp.get('visual') or {}).get('candidate_approach'):
+            if ((cp.get('visual') or {}).get('candidate_approach')
+                    and (cp.get('visual') or {}).get('passage_box') is not None):
                 offer(cp.get('observation_id'),'historical_route_candidate')
                 break
     for descriptor in selected_history_frames(
