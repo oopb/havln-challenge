@@ -27,23 +27,28 @@ MISSION_PROMPT=(
     'Compare early and recent static scene structure when deciding whether '
     'you may be returning to a previously explored route, but never assert '
     'physical place identity from image resemblance alone. '
-    'Historical relative left/right phrases are valid ONLY at their original '
-    'source observation and camera heading; progress.prior_navigation_intent '
-    'explicitly marks freshness. After turning or moving, reevaluate any '
-    'old direction against the CURRENT RGB, pose and live Depth preflight. '
-    'Choose each turn from CURRENT RGB, recent tool evidence and the '
-    'task goal. A past left/right phrase is not a current direction. '
+    'Historical LEFT/RIGHT descriptions refer to their original camera '
+    'view, not necessarily the CURRENT RGB. After moving or turning, '
+    're-evaluate the visible route in CURRENT RGB. Select the physical '
+    'direction with turn_direction LEFT, RIGHT, or NONE and a nonnegative '
+    'turn_degrees magnitude. For tilt select look=up/down/none when using '
+    'turn_and_observe. The executor converts direction words directly '
+    'into motor actions; do not calculate absolute target headings. '
     'When an opening or route is visible, select the useful heading '
     'yourself; never turn away from your stated target by accident. '
     'If no route is certain, choose a short informed exploration or '
     'ask ObservationAgent for specific evidence. '
-    'The current front_depth_preflight is calibrated, live, directional '
-    'Depth evidence; BLOCKED confirms a measured front obstruction, '
-    'UNKNOWN is not a veto, CLEAR does not guarantee physical passage. '
+    'front_depth_preflight is present ONLY for measured CLEAR or BLOCKED '
+    'on the current view. BLOCKED is confirmed occupancy in the '
+    'checked direction; CLEAR is not whole-route clearance. '
+    'When this field is absent, no definite forward Depth conclusion '
+    'was available: this is neither a veto nor a safety certificate. '
+    'Never rotate merely to obtain a CLEAR label. '
+    'Choose based on RGB, goals, and source-grounded motion receipts. '
     'The executor retains the camera pitch you chose: no automatic LOOK_UP '
     'before moving, including on stairs. Fresh Depth is projected using '
     'the ACTUAL pitch and rechecked before EACH forward action. Downward '
-    'views can miss distant obstacles; UNKNOWN is uncertainty, not CLEAR. '
+    'views can miss distant obstacles; missing Depth is not CLEAR. '
     'You may explicitly LOOK_UP/DOWN for useful new evidence, but do not '
     'repeat pitch changes just to satisfy a movement rule. Historical '
     'Depth cannot authorize motion. Never override measured current '
@@ -51,11 +56,13 @@ MISSION_PROMPT=(
     'No metric robot x/y/z, measured height, true place loop closure or '
     'confirmed displacement is available. Command distance means a finite '
     'count of atomic forward actions, NOT proof of arrival or descent. '
-    'Use memory.recent_views_at_current_stance.full_coverage_by_pitch '
-    'as complete same-stance scan history, even when detailed example '
-    'views are truncated. Before another scan, compare prior evidence '
-    'and identify the unanswered visual question; avoid spending actions '
-    'on byte-identical views without new context. '
+    'Read memory.recent_views_at_current_stance for complete '
+    'yaw/pitch coverage, repeated views and turns since last forward. '
+    'New camera headings are observations, NOT forward progress. '
+    'When turns repeat without progress, distinguish an unanswered '
+    'visual question from rechecking the same scene; use the recent '
+    'actual forward and blocked receipts to choose the next useful '
+    'action. The model chooses; no forced move or scan ban. '
     'Use memory.candidate_route_hypotheses even when the observation '
     'did not return a box; ungrounded semantic cues are not exact turn '
     'bearings or guaranteed entrances. '
@@ -90,11 +97,13 @@ class NavigationAgent:
             raise RuntimeError('navigation_decision_requires_observe_mode')
         r.registry=r.make_registry()
         tools=navigation_tool_menu(r.registry)
-        # Build the compact v12 context after the current Depth preflight,
-        # so the attached current RGB and tool execution use one source ID.
+        # Log live Depth every decision; only conclusive results go to LLM.
+        # Physical movement keeps its independent fresh calibrated preflight.
         preflight=r.forward_preflight(stage='navigation_decision')
-        context=compact_navigation_context(navigation_context(r))
-        context['front_depth_preflight']=preflight
+        state=navigation_context(r)
+        if preflight.get('status') in ('CLEAR','BLOCKED'):
+            state['front_depth_preflight']=preflight
+        context=compact_navigation_context(state)
         # Keep exactly the old v12 bounded mission context; attach at most
         # 3 source-verified historical RGB images as optional extras.
         if format_feedback:

@@ -41,13 +41,196 @@ def navigation_context(runtime):
             getattr(runtime,'navigation_liveness',None)),
         current_rgb_image_attached_separately=True)
 
-def compact_navigation_context(state):
-    """v12 bounded mission_evidence context, without a duplicated episode log.
+def _small(source, names, limits=None):
+    """Retain source-grounded evidence, but never duplicate full trace blobs."""
+    if not isinstance(source, dict):
+        return {}
+    limits=limits or {}
+    result={}
+    for key in names:
+        value=source.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and key in limits:
+            value=value[:limits[key]]
+        if value not in ('', [], {}):
+            result[key]=copy.deepcopy(value)
+    return result
 
-    Full historical source records remain in Memory and query_task_memory,
-    but are not serialised on each navigation decision.
+
+def _project_navigation_memory(memory, live_depth):
+    """Read-only NavigationAgent view of canonical mission_evidence.
+
+    The full shared mission_evidence, complete sensor observations and
+    retrievable Memory are UNCHANGED. This projection replaces duplicate
+    request fields; it never invents progress, a route or motor constraints.
     """
-    return copy.deepcopy(state)
+    memory.pop('recent_forward_failures',None)  # exact block+stall copies
+    memory.pop('bearing_convention',None)  # already in tool protocol
+    memory.pop('forward_action_segments_are_not_verified_translation',None)
+    memory.pop('historical_clearance_authorizes_move',None)
+    memory.pop('metric_pose_available',None)
+
+    coverage=memory.get('recent_views_at_current_stance') or {}
+    if coverage:
+        # The complete all-time heading/pitch bins are preserved. Only
+        # redundant per-view exemplars are shortened, not the coverage.
+        recent=coverage.get('latest_distinct_views') or []
+        memory['recent_views_at_current_stance']={
+            'scope':coverage.get('scope'),
+            'sampled_observations':coverage.get('sampled_observations',0),
+            'turn_actions_since_last_forward':coverage.get(
+                'turn_actions_since_last_forward',0),
+            'look_actions_since_last_forward':coverage.get(
+                'look_actions_since_last_forward',0),
+            'repeated_same_RGBD_heading_pitch_views':coverage.get(
+                'repeated_same_RGBD_heading_pitch_views',0),
+            'distinct_heading_pitch_views':coverage.get(
+                'distinct_heading_pitch_views',0),
+            'horizontal_360_coverage_observed':coverage.get(
+                'horizontal_360_coverage_observed',False),
+            'full_coverage_by_pitch':copy.deepcopy(
+                coverage.get('full_coverage_by_pitch') or []),
+            'latest_distinct_views':[
+                _small(v,('source_observation_id','heading_deg','pitch_deg'))
+                for v in recent[:2]],
+            'coverage_is_information_not_motion':True}
+
+    receipt=memory.get('last_motion_decision')
+    if receipt:
+        memory['last_motion_decision']=_small(receipt,(
+            'source_observation_id','end_observation_id','status','reason',
+            'last_heading_deg','executed_forward_actions',
+            'forward_actions_with_RGBD_change','atomic_actions_since_motion',
+            'last_motion_was_uninterrupted','motion_is_evidence_not_command'),
+            {'reason':130})
+
+    # Forward receipts prove an executed atomic command and changed imagery,
+    # NEVER metric displacement or having reached a stair landing.
+    segments=memory.get('observed_forward_action_segments') or []
+    memory['observed_forward_action_segments']=[
+        dict(_small(item,(
+            'first_step','last_step','heading_deg','forward_steps',
+            'start_observation_id','end_observation_id')),
+            displacement_verified=False)
+        for item in segments[-3:]]
+
+    # Historical physical blocks, unverified post-move frame stalls and
+    # pre-decision Depth blocks have DIFFERENT semantics. Keep those
+    # distinctions, drop duplicate hashes, wide nested geometry and flags.
+    fields=('kind','source_observation_id','after_observation_id',
+            'heading_deg','pitch_deg','source_stance_matches_current',
+            'repeated_same_frame_heading_attempts','central_support_pixels',
+            'nearest_along_m','focus_region_xyxy_norm','last_action_step',
+            'reason')
+    memory['blocked_at_source_stances']=[
+        _small(item,fields,{'reason':125})
+        for item in (memory.get('blocked_at_source_stances') or [])[:2]]
+    memory['stalled_forward_at_source_stances']=[
+        _small(item,fields,{'reason':125})
+        for item in (memory.get('stalled_forward_at_source_stances') or [])[:2]]
+    blocks=memory.get('observed_front_blocks') or []
+    current_source=(live_depth or {}).get('source_observation_id')
+    memory['observed_front_blocks']=[
+        dict(_small(item,('kind','source_observation_id',
+                'heading_deg','source_stance_matches_current',
+                'repeat_observation_count')),
+            blocker=_small(item.get('blocker') or {},(
+                'central_support_pixels','nearest_along_m',
+                'focus_region_xyxy_norm')))
+        for item in blocks
+        if item.get('source_observation_id')!=current_source
+    ][:2]
+
+    # Completed turn_and_observe receipts are already represented in the
+    # stance coverage. Finished forward receipts are represented above.
+    # Only keep exceptional feedback that can change the next decision.
+    receipts=memory.get('recent_tool_receipts') or []
+    exceptions=[]
+    for item in reversed(receipts):
+        status=item.get('status')
+        if status not in ('CAMERA_PITCH_LIMIT','INVALID_ARGUMENTS',
+                          'REQUIRES_ATTENTION','PARTIAL','BLOCKED',
+                          'INVALID_TARGET'):
+            continue
+        if status=='BLOCKED' and item.get('end_observation_id') in {
+                b.get('source_observation_id')
+                for b in memory['blocked_at_source_stances']}:
+            continue
+        exceptions.append(_small(item,(
+            'tool_call_id','tool','status','reason','end_observation_id',
+            'executed_actions'),{'reason':160}))
+        if len(exceptions)==2:
+            break
+    memory['recent_tool_receipts']=list(reversed(exceptions))
+    memory['recent_camera_pitch_limits']=[
+        _small(item,('current_pitch_deg','rejected_look','allowed_look',
+                     'repeated_same_invalid_look'))
+        for item in (memory.get('recent_camera_pitch_limits') or [])[:1]]
+
+    # The visual task's full checkpoints, boxes and all original narrative
+    # remain in Memory. Only a short latest-result summary is presented
+    # in navigation. A source-grounded passage is also in route candidates.
+    tasks=memory.get('observation_tasks') or []
+    memory['observation_tasks']=[
+        _small(item,(
+            'observation_task_id','objective','outcome',
+            'end_observation_id','observation_summary',
+            'navigation_suggestion'),
+            {'objective':180,'observation_summary':220,
+             'navigation_suggestion':240})
+        for item in tasks[-2:]]
+    routes=memory.get('candidate_route_hypotheses') or []
+    memory['candidate_route_hypotheses']=[
+        _small(item,(
+            'candidate_id','source_observation_id','target_type',
+            'target_kind','confidence','route_status',
+            'bearing_region_role','source_stance_matches_current',
+            'absolute_heading_deg','relative_bearing_deg_from_current',
+            'historical_bearing_in_source_record_only',
+            'evidence','navigation_suggestion','uncertainty'),
+            {'evidence':155,'navigation_suggestion':210,'uncertainty':120})
+        for item in routes[:3]]
+    history=memory.get('historical_frames') or []
+    memory['historical_frames']=[
+        _small(item,('observation_id','heading_deg','pitch_deg',
+                     'target_type','observation_summary'),
+               {'observation_summary':130})
+        for item in history[-3:]]
+
+    progress=memory.get('progress') or {}
+    if progress:
+        progress['uncertainties']=(progress.get('uncertainties') or [])[-3:]
+        progress['source_observation_ids']=(
+            progress.get('source_observation_ids') or [])[-6:]
+        if isinstance(progress.get('narrative'),str):
+            progress['narrative']=progress['narrative'][:450]
+        prior=progress.get('prior_navigation_intent') or {}
+        if isinstance(prior,dict):
+            progress['prior_navigation_intent']=_small(prior,(
+                'text','source','relative_direction_valid_for_current_camera',
+                'historical_only'),{'text':240})
+    return memory
+
+
+def compact_navigation_context(state):
+    """Short NavigationAgent request: canonical memory stays fully available.
+
+    No second persistent summary, no arbitrary overall-string truncation,
+    and no new intervention or action validator. Current RGB/mission/Depth
+    remain authoritative; all historical records are still retrievable.
+    """
+    result=copy.deepcopy(state)
+    memory=result.get('memory')
+    if isinstance(memory,dict):
+        _project_navigation_memory(
+            memory,result.get('front_depth_preflight'))
+    # Actionless liveness is a resource diagnostic, not proof that
+    # ordinary turns were progress; omit repeated zero-valued reminders.
+    if not (result.get('liveness_diagnostic') or {}).get(
+            'consecutive_unchanged_decisions'):
+        result.pop('liveness_diagnostic',None)
+    return result
 
 def planner_context(runtime):
     return dict(instruction=runtime.memory.task.instruction)

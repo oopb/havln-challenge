@@ -102,6 +102,8 @@ normal motor actions no longer call a depth-body safety shield automatically. Se
 [post-obstacle exploration](docs/post_block_exploration.md).
 
 
+**Active navigation variant:** The eval-32/v17 mission strategy is retained with requested PR #90 (model-chosen LEFT/RIGHT/LOOK actions; conclusive-only front Depth in NavigationAgent requests) and PR #91 (read-only deduplicated compact navigation evidence). The factual same-stance TURN/LOOK counters are restored without any forced-motion rule. Raw Memory, per-atomic Depth safety, visual passage grounding, Replay Studio and Score remain intact. See [rollback and retention notes](docs/eval35_rollback_v17.md).
+
 **Offline replay studio:** Inspect completed real RGB-D trajectories, model
 requests/responses, observation sessions, tools and atomic actions in a
 read-only browser, without starting Habitat or calling an API:
