@@ -169,8 +169,7 @@ def normalize_navigation_route_update(decision, known_observation_ids=None):
     def choose(*names):
         values=[original.get(k) for k in names
                 if isinstance(original.get(k), str) and original[k].strip()]
-        if not values or len(set(values)) != 1 and len(names)>1 and (
-                names[0] in original and names[1] in original):
+        if not values or len(set(values)) != 1:
             # Conflicting explicit canonical/alias facts are not repairable.
             return None
         return values[0].strip()
