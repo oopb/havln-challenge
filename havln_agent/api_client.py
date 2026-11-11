@@ -221,11 +221,64 @@ def decode_response(content, allow_identical_duplicates=False):
                                              'unique_embedded_json_container')
 
 
+
+REASONING_LEVELS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh'))
+
+
+def reasoning_payload(effort, mode):
+    """Map the canonical effort to one supported Chat Completions extension."""
+    if mode == 'reasoning_effort':
+        return {'reasoning_effort': effort}
+    if mode == 'thinking':
+        # Vendor-specific boolean switch: cannot preserve precise effort.
+        return {'thinking': {'type': 'disabled' if effort == 'none' else 'enabled'}}
+    if mode == 'omit':
+        return {}
+    raise ValueError('Unknown reasoning wire mode')
+
+
+def unsupported_reasoning_parameter(detail, field):
+    """Only negotiate on explicit unsupported FIELD errors, never bad values."""
+    try:
+        data = json.loads(detail)
+        error = data.get('error', data) if isinstance(data, dict) else {}
+        if not isinstance(error, dict):
+            error = {}
+    except (ValueError, TypeError):
+        error = {}
+    message = str(error.get('message', detail)).lower()
+    code = str(error.get('code', '')).lower()
+    param = str(error.get('param', '')).lower()
+    if param and param != field:
+        return False
+    if field not in message and param != field:
+        return False
+    if re.search(r'\b(invalid|unsupported|unknown|unrecognized)\s+(value|effort|level)\b', message):
+        return False
+    return (code in ('unknown_parameter', 'unsupported_parameter', 'extra_forbidden')
+            or bool(re.search(
+                r'\b(unknown parameter|unrecognized parameter|unsupported parameter|'
+                r'not supported|not allowed|unexpected parameter|extra fields not permitted|'
+                r'unexpected keyword|unknown field)\b', message)))
+
+
+def next_reasoning_mode(config, current):
+    if current == 'reasoning_effort':
+        host = urllib.parse.urlsplit(config['base_url']).hostname or ''
+        # Avoid guessing a nonstandard extension on unknown gateways.
+        if 'deepseek' in config['model'].lower() or host == 'api.deepseek.com':
+            return 'thinking'
+        return 'omit'
+    if current == 'thinking':
+        return 'omit'
+    return None
+
+
 def model_endpoints(settings):
     """Only explicitly configured, role-compatible Chat Completions endpoints."""
     required = {'provider','base_url','api_key_env','model','response_format','temperature',
                 'timeout_seconds','max_retries','max_tokens'}
-    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'thinking','fallbacks'}:
+    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'reasoning','fallbacks'}:
         raise ValueError('Unexpected model fields; configure credentials with api_key_env')
     fallbacks = settings.get('fallbacks', [])
     if not isinstance(fallbacks, list):
@@ -234,12 +287,15 @@ def model_endpoints(settings):
     chain = [primary]
     for fallback in fallbacks:
         if (not isinstance(fallback, dict) or not {'base_url','model','api_key_env'} <= set(fallback)
-                or set(fallback)-required-{'thinking'}):
+                or set(fallback)-required-{'reasoning'}):
             raise ValueError('Each fallback requires base_url, model and api_key_env; nested fallbacks are unsupported')
         chain.append(dict(primary, **fallback))
     for config in chain:
-        if config.get('thinking') is None:
-            config.pop('thinking', None)
+        if config.get('reasoning') is None:
+            config.pop('reasoning', None)
+        elif (not isinstance(config['reasoning'], str) or
+              config['reasoning'] not in REASONING_LEVELS):
+            raise ValueError('reasoning must be one of: none, minimal, low, medium, high, xhigh')
         if any(not isinstance(config[name], str) or not config[name].strip()
                for name in ('base_url','model','api_key_env')):
             raise ValueError('Endpoint, model and credential variable must be nonempty strings')
@@ -267,6 +323,8 @@ class APIClient:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.keys = {}
+        # Per-worker capability inference survives episode resets.
+        self.reasoning_modes = {}
         for role in ROLES:
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
