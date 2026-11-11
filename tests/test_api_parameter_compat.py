@@ -192,6 +192,10 @@ class ChatParameterCompatibilityTests(unittest.TestCase):
         self.assertEqual(c.request_modes[
             ('https://api.openai.com/v1','gpt-6-astra')]['omit_response_format'],
             True)
+        self.assertEqual(self.ask(c), {'ok': True})
+        self.assertNotIn('response_format', bodies[2])
+        self.assertIn('Return only JSON satisfying this schema',
+                      bodies[2]['messages'][0]['content'])
 
     def test_format_omission_still_rejects_invalid_response(self):
         c = self.client()
