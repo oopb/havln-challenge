@@ -245,7 +245,20 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
     def offer(identifier,reason):
         if identifier in by_id and identifier!=current_id:
             options.append((identifier,reason))
-    # Reserve the most valuable pair BEFORE revisit suggestions consume slots.
+    # Keep the original junction/stair-exit RGB accessible when returning
+    # from a failed route. Do not infer that the current stance is the same:
+    # this is a HISTORICAL view, never a computed turn or localization result.
+    for reference in reversed(getattr(memory,'route_references',[]) or []):
+        identifier=reference.get('source_observation_id')
+        if identifier in by_id:
+            offer(identifier,'instruction_relative_route_reference')
+            if max_pairs>=5:
+                for attempt in (reference.get('route_attempts') or [])[-1:]:
+                    offer(attempt.get('evidence_observation_id'),
+                          'route_attempt_result_reference')
+            break
+    # Reserve actual before/after photos of executed motion, but do not let
+    # a long kitchen detour displace the source image of a critical junction.
     # Earlier repeated views at one yaw are not an alternative to the actual
     # before/after pictures of an executed forward trajectory segment.
     yaw=_heading(current.get('pose') or {})
