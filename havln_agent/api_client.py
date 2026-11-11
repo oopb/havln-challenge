@@ -616,6 +616,16 @@ class APIClient:
         body = dict(model=config['model'], messages=messages)
         if not learned_params.get('omit_response_format', False):
             body['response_format'] = response_format
+        elif config['response_format'] == 'json_schema':
+            # Once this endpoint rejects native schemas, subsequent requests
+            # still need the full task-specific schema in their system text.
+            addition = ('\nReturn only JSON satisfying this schema: ' +
+                        canonical(wire_schema))
+            messages[0]['content'] += addition
+            logged_messages[0]['content'] += addition
+            request_metrics['system_chars'] = len(messages[0]['content'])
+            request_metrics['schema_channels'] = ['system_fallback']
+            request_metrics['native_schema_chars'] = 0
         if not learned_params.get('omit_temperature', False):
             body['temperature'] = config['temperature']
         body[token_field] = config['max_tokens']
