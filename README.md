@@ -394,6 +394,27 @@ ask a focused visual question only if the evidence is insufficient.
 Older route references remain available through `query_task_memory` and
 `read_memory_record(route_ref_XXXX)`.
 
+### Phase 2: disambiguating multiple rooms by distinctive target evidence
+
+When two or more plausible room entrances are visible and the instruction
+identifies a distinctive occupant or activity (for example someone **reading
+a magazine**), NavigationAgent should compare views from the **entrances**
+instead of choosing the first furnished room. ObservationAgent can rotate
+and look to inspect one doorway, but NavigationAgent decides whether to walk
+to another. An upholstered chair or a visible threshold is evidence of a
+room, **not** the target occupant. "Target not visible" is uncertainty,
+not proof of absence; if another plausible room remains unchecked, it
+deserves a focused look before claiming mission success. No fixed
+straight/left route preference, mandatory per-step scan, or hard STOP
+validator has been added.
+
+The compact NavigationAgent context preserves each ObservationAgent RGB
+checkpoint's `target_type` and `target_visible` verdict. These short,
+source-linked records survive truncation of lengthy floor/doorway narratives,
+preventing a missing reader from silently vanishing from the next decision.
+At the fork, the existing optional `route_reference_update` can keep the
+original comparison view and a later unsuccessful room attempt retrievable.
+
 ### Phase 2: select completed batches, validate, and merge for submission
 
 Run `scripts/merge_phase2_submissions.py` offline after your selected batches
