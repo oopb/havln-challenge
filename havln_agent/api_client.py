@@ -830,6 +830,8 @@ class APIClient:
                     atomic_json(cache_path, result)
                 return result
             if not record['retry_scheduled']:
+                if compatibility_retry and self.availability() != 'available':
+                    raise BudgetExceeded(self.availability())
                 failure = APIError(record['error'], category=record.get('validation_error_type'))
                 failure.endpoint_unavailable = endpoint_unavailable
                 failure.validation_error = {k:record[k] for k in ('validation_field', 'validation_rule',
