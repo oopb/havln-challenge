@@ -249,12 +249,17 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
     # from a failed route. Do not infer that the current stance is the same:
     # this is a HISTORICAL view, never a computed turn or localization result.
     references=getattr(memory,'route_references',[]) or []
+    task=getattr(memory,'task',None)
+    scene_source=(getattr(task,'scene_goal_source_observation_id','')
+                  if getattr(task,'scene_goal','') else '')
     if references:
         # Keep the first instruction-relative route choice and the newest
         # local fork visible together. Historical views are never motor turns.
         root=references[0]
         offer(root.get('source_observation_id'),
               'instruction_relative_route_reference')
+        if scene_source:
+            offer(scene_source,'selected_scene_goal_reference')
         if max_pairs>=3:
             offer(root.get('approach_observation_id'),
                   'stair_exit_approach_view_reference')
@@ -266,11 +271,9 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
             for attempt in (latest.get('route_attempts') or [])[-1:]:
                 offer(attempt.get('evidence_observation_id'),
                       'route_attempt_result_reference')
-    # Preserve the real scene view the model chose as its active spatial
-    # goal. This historical RGB is evidence for matching the room/layout,
-    # never a current heading or guaranteed physical localization.
-    scene_source=getattr(memory.task,'scene_goal_source_observation_id','')
-    if getattr(memory.task,'scene_goal','') and scene_source:
+    # Keep the chosen scene's real RGB alongside the original route root.
+    # The source image is historical, NOT localization or a motor bearing.
+    if not references and scene_source:
         offer(scene_source,'selected_scene_goal_reference')
     # Reserve actual before/after photos of executed motion, but do not let
     # a long kitchen detour displace the source image of a critical junction.
