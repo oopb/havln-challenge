@@ -284,6 +284,8 @@ def _project_navigation_memory(memory, live_depth):
                        {'assessment':175})
                 for a in (item.get('route_attempts') or [])[-1:]])
         for item in references[:2]]
+    if not references:
+        memory.pop('instruction_route_references',None)
     history=memory.get('historical_frames') or []
     memory['historical_frames']=[
         _small(item,('observation_id','heading_deg','pitch_deg',
