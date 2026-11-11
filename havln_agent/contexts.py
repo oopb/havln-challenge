@@ -269,6 +269,19 @@ def _project_navigation_memory(memory, live_depth):
             'evidence','navigation_suggestion','uncertainty'),
             {'evidence':155,'navigation_suggestion':210,'uncertainty':120})
         for item in routes[:3]]
+    references=memory.get('instruction_route_references') or []
+    memory['instruction_route_references']=[
+        dict(_small(item,('reference_id','source_observation_id',
+            'source_heading_deg','source_stance_id','place_description',
+            'instruction_relation','evidence_status',
+            'reference_is_historical_view_not_current_motor_bearing',
+            'completion_verified'),
+            {'place_description':140,'instruction_relation':220}),
+            route_attempts=[
+                _small(a,('evidence_observation_id','assessment','evidence_scope'),
+                       {'assessment':175})
+                for a in (item.get('route_attempts') or [])[-1:]])
+        for item in references[:2]]
     history=memory.get('historical_frames') or []
     memory['historical_frames']=[
         _small(item,('observation_id','heading_deg','pitch_deg',
