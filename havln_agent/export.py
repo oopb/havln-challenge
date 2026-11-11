@@ -480,7 +480,7 @@ def export(args, config):
     import numpy as np
     import PIL
     import jsonschema
-    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, ROOT / 'scripts/export_cma_submission.py',
+    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, 
            ROOT / 'scripts/pack_agent_diagnostics.py']
     try:
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
