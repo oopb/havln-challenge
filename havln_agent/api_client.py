@@ -19,7 +19,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 from scripts.export_cma_submission import atomic_json
 
-PROMPT_VERSION = 'havln-v27-current-camera-relative-angles'
+PROMPT_VERSION = 'havln-v28-grounded-navigation-feedback'
 ROLES = ('navigation_agent', 'visual_perception')
 
 

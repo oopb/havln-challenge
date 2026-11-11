@@ -58,6 +58,34 @@ def _small(source, names, limits=None):
     return result
 
 
+def _same_current_forward_rejection(block, depth):
+    """Match an *actual rejected MOVE* to the live RGB-D/pose evidence.
+
+    An observed-only front obstacle, old stance or different camera pitch
+    never becomes a failed move at the current view.
+    """
+    if not isinstance(depth,dict) or depth.get('status')!='BLOCKED':
+        return False
+    if (block.get('kind')!='BLOCKED_BEFORE_FORWARD' or
+            block.get('source_stance_matches_current') is not True):
+        return False
+    for key in ('rgb_hash','depth_hash'):
+        if (not isinstance(depth.get(key),str) or not depth[key]
+                or block.get(key)!=depth[key]):
+            return False
+    for key in ('heading_deg','pitch_deg'):
+        old,new=block.get(key),depth.get(key)
+        if (isinstance(old,bool) or isinstance(new,bool) or
+                not isinstance(old,(int,float)) or
+                not isinstance(new,(int,float))):
+            return False
+        difference=((old-new+180)%360-180 if key=='heading_deg'
+                    else old-new)
+        if abs(difference)>.01:
+            return False
+    return True
+
+
 def _project_navigation_memory(memory, live_depth):
     """Read-only NavigationAgent view of canonical mission_evidence.
 
@@ -142,6 +170,24 @@ def _project_navigation_memory(memory, live_depth):
     else:
         memory.pop('recent_look_evidence',None)
 
+    # Match the CURRENT preflight to real previously REJECTED forward
+    # requests. The ledger already counts retries at the same sensor view;
+    # attach one compact fact to the live preflight rather than duplicating
+    # it across Memory/tool history. No new navigation state or veto.
+    raw_blocks=memory.get('blocked_at_source_stances') or []
+    matching=[item for item in raw_blocks
+              if _same_current_forward_rejection(item,live_depth)]
+    if matching:
+        count=max(int(item.get('repeated_same_frame_heading_attempts') or 0)
+                  for item in matching)
+        if count:
+            latest=matching[0]
+            live_depth['previous_identical_view_forward_rejections']=count
+            live_depth['previous_rejected_forward_actions_executed']=0
+            live_depth['previous_rejection_observation_id']=latest.get(
+                'source_observation_id')
+            live_depth['rejections_match_current_RGBD_stance_yaw_pitch']=True
+
     # Historical physical blocks, unverified post-move frame stalls and
     # pre-decision Depth blocks have DIFFERENT semantics. Keep those
     # distinctions, drop duplicate hashes, wide nested geometry and flags.
@@ -152,7 +198,9 @@ def _project_navigation_memory(memory, live_depth):
             'reason')
     memory['blocked_at_source_stances']=[
         _small(item,fields,{'reason':125})
-        for item in (memory.get('blocked_at_source_stances') or [])[:2]]
+        for item in raw_blocks
+        if not _same_current_forward_rejection(item,live_depth)
+    ][:2]
     memory['stalled_forward_at_source_stances']=[
         _small(item,fields,{'reason':125})
         for item in (memory.get('stalled_forward_at_source_stances') or [])[:2]]
