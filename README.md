@@ -355,8 +355,48 @@ only eight episodes. Each range uses its **own output directory** and writes
 range in the same directory reuses completed episodes (pass
 `--retry-incomplete` only when intentionally retrying incomplete API work).
 `--assemble-only` reconstructs **one directory's** shards, not several
-independent range runs. Cross-directory Phase 2 submission merging is not
-implemented by the API Agent exporter.
+independent range runs.
+
+### Phase 2: select completed batches, validate, and merge for submission
+
+Run `scripts/merge_phase2_submissions.py` offline after your selected batches
+finish. It does not import Habitat, access model APIs, or execute any actions.
+Pass **any chosen set of completed Agent run directories** with `--run-dirs`;
+the directories do not need to be in order. The script accepts each run's
+`test.diagnostic.json` (or `test.json` for a full run), checks its matching
+`export_metadata.json`, and verifies each stored Episode's action sequence.
+Where retained trace logs are available, they are cross-checked too.
+
+```bash
+# Preview selected runs and report missing Episode IDs without creating files:
+python /toolkit/scripts/merge_phase2_submissions.py \
+  --run-dirs /workspace/agent-runs/phase2-batch-{001..035} \
+  --check-only
+
+# Package the same selected runs into an independent output directory:
+python /toolkit/scripts/merge_phase2_submissions.py \
+  --run-dirs /workspace/agent-runs/phase2-batch-{001..035} \
+  --output-dir /workspace/agent-runs/phase2-submission
+```
+
+The above brace expansion is interpreted by Bash **before** the Python
+command; it names each of the 35 directories explicitly. You can instead
+list arbitrary directories separated by spaces after `--run-dirs` (including
+ones outside the batch numbering scheme).
+
+The merger checks that each run completed, belongs to Phase 2 Test and
+contains exactly its declared original Episode IDs. It rejects repeated
+runs, overlapping IDs, different Test dataset hashes, bad actions, and
+incomplete final coverage. When all 3,408 Episodes are present, it writes
+`test.json` and `submission.zip` to `--output-dir`. The ZIP contains
+**only root-level `test.json`**, and is reopened and checked before publishing.
+Use a fresh output directory, or `--overwrite` to explicitly regenerate the
+outputs. No extra trace/diagnostic data enters the submission ZIP.
+
+This tool is separate from `--assemble-only` (which recovers one run's worker
+shards). If you also have the official Phase 2 Starting Kit, run
+`python3 check_submission.py /workspace/agent-runs/phase2-submission/submission.zip`
+as a second, independent pre-upload check.
 
 
 ## 🚀 Getting Started
