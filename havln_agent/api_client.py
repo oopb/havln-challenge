@@ -825,7 +825,7 @@ class APIClient:
                 # no implicit unlimited output and no silent changes to
                 # model, multimodal input, credentials or message structure.
                 if error.code == 400 and not compatibility_retry:
-                    if (token_field not in negotiated_fields
+                    if ('token_field' not in negotiated_fields
                             and unsupported_chat_parameter(detail, token_field)):
                         compatibility_change = ('token_field',
                             'max_tokens' if token_field == 'max_completion_tokens'
@@ -954,6 +954,7 @@ class APIClient:
                             logged_messages[0]['content'] += addition
                             request_metrics['system_chars'] = len(messages[0]['content'])
                             request_metrics['schema_channels'] = ['system_fallback']
+                            request_metrics['native_schema_chars'] = 0
                 digest, cache_path = cache_identity()
                 if recorder is not None:
                     try:
