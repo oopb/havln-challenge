@@ -51,13 +51,17 @@ def read_run(directory):
     if not receipt.is_file():
         raise ValueError(f'Missing export_metadata.json: {directory}')
     metadata = _read_json(receipt)
-    identity = metadata.get('identity') or {}
+    if not isinstance(metadata, dict) or not isinstance(metadata.get('identity'), dict):
+        raise ValueError(f'Invalid export metadata: {receipt}')
+    identity = metadata['identity']
     if identity.get('phase') != 'phase2' or identity.get('splits') != ['test']:
         raise ValueError(f'Not a Phase 2 Test Agent run: {directory}')
     if metadata.get('complete') is not True:
         raise ValueError(f'Run is not marked complete: {directory}')
     fingerprint = metadata.get('fingerprint')
-    data_hash = (identity.get('datasets') or {}).get('test')
+    if not isinstance(identity.get('datasets'), dict):
+        raise ValueError(f'Missing Test dataset fingerprint in {receipt}')
+    data_hash = identity['datasets'].get('test')
     if not fingerprint or not data_hash:
         raise ValueError(f'Missing run fingerprint or Test dataset hash: {directory}')
 
@@ -75,6 +79,8 @@ def read_run(directory):
     if not result_path.is_file():
         raise ValueError(f'Missing assembled {filename}: {directory}')
     payload = _read_json(result_path)
+    if not isinstance(payload, dict):
+        raise ValueError(f'Invalid Phase 2 result payload: {result_path}')
     if payload.get('format_version') != 1 or payload.get('split') != 'test':
         raise ValueError(f'Invalid Phase 2 Test result header: {result_path}')
     rows = payload.get('episodes')
@@ -84,7 +90,8 @@ def read_run(directory):
         check_rows(rows, expected_ids)
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f'Invalid actions/ID coverage in {result_path}: {exc}') from exc
-    if (metadata.get('episodes') or {}).get('test') != len(expected_ids):
+    if not isinstance(metadata.get('episodes'), dict) or (
+            metadata['episodes'].get('test') != len(expected_ids)):
         raise ValueError(f'Export metadata episode count disagrees with results: {directory}')
 
     # If original traces were retained, independently cross-check the exported
@@ -100,7 +107,8 @@ def read_run(directory):
         if not episode_result.exists():
             continue
         stored = _read_json(episode_result)
-        if stored.get('fingerprint') != fingerprint or stored.get('row') != row:
+        if (not isinstance(stored, dict) or
+                stored.get('fingerprint') != fingerprint or stored.get('row') != row):
             raise ValueError(f'Exported actions differ from saved Episode result: {trace_dir}')
         try:
             executed = [json.loads(line)['action'] for line in steps.read_text().splitlines()]
@@ -110,9 +118,16 @@ def read_run(directory):
             raise ValueError(f'Exported actions differ from executed-action log: {trace_dir}')
         trace_verified += 1
 
+    # Fingerprints differ by episode range even for otherwise identical runs.
+    # Compare just the substantive inference/runtime settings for warnings.
+    stable_keys = ('agent', 'config', 'seed', 'source_revision',
+                   'source_manifest', 'runtime_config', 'human_annotations',
+                   'simulator', 'environment')
+    stable_settings = json.dumps(
+        {key: identity.get(key) for key in stable_keys}, sort_keys=True)
     return dict(directory=directory, rows=rows, data_hash=data_hash,
                 start=start, end=end, traces_verified=trace_verified,
-                fingerprint=fingerprint)
+                stable_settings=stable_settings)
 
 
 def collect_runs(directories):
@@ -150,9 +165,9 @@ def collect_runs(directories):
     else:
         check_rows(rows, ALL_IDS)
         print(f'PASS: exact coverage of all {TOTAL} Episode IDs; actions valid')
-    if len({run['fingerprint'] for run in runs}) > 1:
-        print('Note: selected runs have different run fingerprints; '
-              'their original test dataset is identical.')
+    if len({run['stable_settings'] for run in runs}) > 1:
+        print('WARNING: selected batches have different Agent/model/simulator '
+              'settings. This merge intentionally accepts them; review your choices.')
     return rows, missing, runs
 
 
