@@ -114,7 +114,11 @@ def load_config(path):
     return config
 
 
-def build_jobs(data, splits, manifest, limit, phase='phase1'):
+def build_jobs(data, splits, manifest, limit, phase='phase1', episode_start=1):
+    if phase != 'phase2' and episode_start != 1:
+        raise ValueError('--episode-start is only supported for Phase 2')
+    if phase == 'phase2' and not 1 <= episode_start <= PHASE2_EPISODES:
+        raise ValueError('Phase 2 --episode-start must be between 1 and 3408')
     if phase == 'phase2':
         # The official Phase 2 file contains all IDs 1..3408; no Phase 1
         # manifest or inaccessible scoring-side test manifest is required.
@@ -132,6 +136,10 @@ def build_jobs(data, splits, manifest, limit, phase='phase1'):
         if len(ids) != len(set(ids)) or set(ids) != specs[split]:
             raise ValueError('Input dataset episode IDs do not match the official ' + phase + ' split')
         episodes.sort(key=lambda e: int(e['episode_id']))
+        if phase == 'phase2':
+            # IDs are verified to be exactly 1..3408 above, so this 1-based
+            # offset selects the corresponding original Episode IDs.
+            episodes = episodes[episode_start - 1:]
         if limit is not None:
             episodes = episodes[:limit]
         expected[split] = [str(e['episode_id']) for e in episodes]
@@ -458,7 +466,8 @@ def export(args, config):
     source = args.source_root.resolve()
     get_config, env_class = runtime_imports(source)
     jobs, expected, datasets = build_jobs(data, args.splits, args.manifest,
-                                          args.episode_limit, args.phase)
+                                          args.episode_limit, args.phase,
+                                          args.episode_start)
     import habitat
     import habitat_sim
     import numpy as np
@@ -488,7 +497,9 @@ def export(args, config):
                                  numpy=np.__version__, pillow=PIL.__version__,
                                  jsonschema=getattr(jsonschema, '__version__', 'unknown')),
                     human_annotations=sha256(data / 'Multi-Human-Annotations/human_motion.json'),
-                    data_root=str(data), splits=args.splits, episode_limit=args.episode_limit)
+                    data_root=str(data), splits=args.splits,
+                    episode_start=args.episode_start,
+                    episode_limit=args.episode_limit)
     fingerprint = hashlib.sha256(canonical(identity).encode()).hexdigest()
     receipt = output / 'export_metadata.json'
     if receipt.exists() and json.loads(receipt.read_text())['fingerprint'] != fingerprint:
@@ -499,7 +510,7 @@ def export(args, config):
     verify_existing_run_provenance(output,fingerprint)
     # Validate credentials/config once, before launching any simulator worker.
     APIClient(config, output / 'cache/preflight')
-    diagnostic = (args.episode_limit is not None or
+    diagnostic = (args.episode_limit is not None or args.episode_start != 1 or
                   set(args.splits) != set(PHASE_SPLITS[args.phase]) or
                   config['runtime']['max_steps'] != 500)
     metadata = dict(fingerprint=fingerprint, identity=identity, complete=False, diagnostic=diagnostic)
@@ -642,7 +653,11 @@ def main():
     parser.add_argument('--terminal-log', choices=['on','off'], default='on',
                         help='Show live progress and parent informational messages in the terminal (default on). '
                              'Worker logs, JSON traces, errors and archives are preserved with off.')
-    parser.add_argument('--episode-limit', type=int)
+    parser.add_argument('--episode-start', type=int, default=1,
+                        help='Phase 2 only: first original test Episode ID (1-3408, inclusive)')
+    parser.add_argument('--episode-limit', type=int,
+                        help='Maximum number of episodes from --episode-start '
+                             '(the final batch is truncated at Episode 3408)')
     parser.add_argument('--max-steps', type=int, help='Diagnostic action budget, including executed STOP')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--preflight', action='store_true', help='Read-only checks; no API requests')
@@ -666,6 +681,10 @@ def main():
         args.splits = list(PHASE_SPLITS[args.phase])
     elif any(split not in PHASE_SPLITS[args.phase] for split in args.splits):
         parser.error('--splits must belong to the selected --phase')
+    if args.phase == 'phase1' and args.episode_start != 1:
+        parser.error('--episode-start is only supported for --phase phase2')
+    if args.phase == 'phase2' and not 1 <= args.episode_start <= PHASE2_EPISODES:
+        parser.error('--episode-start must be between 1 and 3408 for Phase 2')
     if args.worker_task:
         try:
             run_worker(args.worker_task)
