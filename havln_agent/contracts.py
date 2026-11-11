@@ -130,6 +130,7 @@ _DECISION_ANALYSIS=dict(
 _PROGRESS=dict(
     progress_narrative=dict(type='string',maxLength=1200),
     navigation_intent=dict(type='string',maxLength=700),
+    scene_goal=dict(type='string',maxLength=350),  # optional semantic spatial target
     uncertainties=dict(type='array',maxItems=8,
                        items=dict(type='string',maxLength=220)),
     evidence_observation_ids=dict(type='array',maxItems=12,uniqueItems=True,
@@ -250,8 +251,12 @@ def compact_navigation_protocol(tools):
         'source-grounded observations from CURRENT RGB, history, Depth and '
         'tool receipts; distinguish seen facts from hypotheses; '
         'each item should be concise (max 600 characters); '
-        '(2) optional progress_narrative/navigation_intent/uncertainties/'
-        'evidence_observation_ids/route_reference_update: revisable model '
+        '(2) optional progress_narrative/navigation_intent/scene_goal/'
+        'uncertainties/evidence_observation_ids/route_reference_update: '
+        'revisable model assessments. scene_goal is a short, durable '
+        'instruction-consistent SPATIAL target (room/entry/area), not a '
+        'person location, camera direction or proof of arrival. Provide it '
+        'when selecting a scene; revise it when spatial evidence warrants; '
         'assessments; optional route_reference_update MUST use JSON keys '
         'source_observation_id (real RGB ID), instruction_relation (the '
         'ORIGINAL instruction-relative direction/landmark), optional '

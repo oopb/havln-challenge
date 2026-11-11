@@ -458,6 +458,10 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
         instruction=task.instruction,
         progress=dict(
             narrative=task.progress_narrative,
+            scene_goal=(task.scene_goal or None),
+            scene_goal_source_observation_id=(
+                task.scene_goal_source_observation_id or None),
+            scene_goal_is_model_selected_not_verified=True,
             navigation_intent=(task.navigation_intent
                 if not anchor or intent_current else None),
             prior_navigation_intent=prior_intent,
