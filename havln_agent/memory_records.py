@@ -124,6 +124,29 @@ class MemoryRecords:
         changed=False
         if reference is None:
             pose=source.get('pose') or {}
+            # Preserve the real APPROACH orientation separately from the
+            # source camera's yaw, which may have turned near the landing.
+            # Only executed forward receipts before the source view qualify;
+            # they do NOT prove actual descent or location.
+            source_step=source.get('step')
+            approach=None
+            if type(source_step) is int:
+                for action in reversed(self.actions):
+                    step=action.get('step')
+                    if (action.get('action')!='MOVE_FORWARD'
+                            or type(step) is not int or step>source_step):
+                        continue
+                    if source_step-step>12:
+                        break
+                    old_pose=action.get('pose') or {}
+                    old_heading=old_pose.get('heading')
+                    if isinstance(old_heading,(int,float)) and math.isfinite(old_heading):
+                        approach=action
+                        break
+            approach_before=(approach.get('result') or {}).get(
+                'observation_before') if approach else None
+            if approach_before not in by_id:
+                approach_before=None
             reference=dict(
                 reference_id='route_ref_%04d'%len(self.route_references),
                 source_observation_id=source_id,
@@ -132,6 +155,10 @@ class MemoryRecords:
                 source_heading_deg=round(
                     math.degrees(pose.get('heading',0))%360,2),
                 source_pitch_deg=pose.get('pitch_deg'),
+                approach_heading_deg=round(math.degrees(
+                    approach['pose']['heading'])%360,2) if approach else None,
+                approach_observation_id=approach_before,
+                approach_direction_is_historical_executed_forward_only=True,
                 place_description=description,
                 instruction_relation=relation,
                 evidence_status=status,
