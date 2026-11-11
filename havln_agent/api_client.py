@@ -221,7 +221,7 @@ def decode_response(content, allow_identical_duplicates=False):
                                              'unique_embedded_json_container')
 
 
-REASONING_LEVELS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh'))
+REASONING_LEVELS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'))
 
 
 def reasoning_payload(effort, mode):
@@ -329,7 +329,7 @@ def model_endpoints(settings):
             config.pop('reasoning', None)
         elif (not isinstance(config['reasoning'], str) or
               config['reasoning'] not in REASONING_LEVELS):
-            raise ValueError('reasoning must be one of: none, minimal, low, medium, high, xhigh')
+            raise ValueError('reasoning must be one of: none, minimal, low, medium, high, xhigh, max')
         if any(not isinstance(config[name], str) or not config[name].strip()
                for name in ('base_url','model','api_key_env')):
             raise ValueError('Endpoint, model and credential variable must be nonempty strings')
