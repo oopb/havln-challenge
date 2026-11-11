@@ -24,6 +24,8 @@ on:
       - "tests/test_v27_model_relative_angles.py"
       - "tests/test_v28_grounded_decisions.py"
       - "tests/test_replay_studio.py"
+      - "tests/test_batch_evaluation.py"
+      - "tests/test_phase2_export.py"
       - "tests/test_competition_scoring.py"
       - "replay_ui/**"
       - "scripts/serve_agent_replay.py"
@@ -52,6 +54,10 @@ jobs:
           name: replay-test-log
           path: replay-test-output.log
           if-no-files-found: ignore
+      - name: Validate Phase 1 batch compatibility and Phase 2 exporter
+        run: |
+          python -m unittest discover -s tests -p 'test_batch_evaluation.py' -v
+          python -m unittest discover -s tests -p 'test_phase2_export.py' -v
       - name: Compile all agent modules
         run: python -m compileall -q havln_agent
       - name: Verify reasoning effort compatibility and safe protocol negotiation
