@@ -110,7 +110,7 @@ class Phase2MergeTests(unittest.TestCase):
                 rows, missing, runs = collect_runs([first, second])
             self.assertEqual(len(rows), 200)
             self.assertEqual(len(missing), TOTAL - 200)
-            self.assertNotEqual(runs[0]['fingerprint'], runs[1]['fingerprint'])
+            self.assertEqual(runs[0]['stable_settings'], runs[1]['stable_settings'])
 
     def test_invalid_actions_and_unexpected_range_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
