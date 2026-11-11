@@ -509,7 +509,7 @@ class APIClient:
     def complete(self, role, purpose, system, context, schema, image_url=None, cache=False, validate=None,
                  normalize=None, timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
                  retry_safe=False, protocol=None, validation_schema=None,
-                 conversation_messages=None):
+                 conversation_messages=None, pre_normalize=None):
         # Only pure inference callers opt in. No environment tool executes until
         # a single response has been returned and independently validated.
         self.completion_requests += 1
@@ -520,6 +520,7 @@ class APIClient:
             try:
                 return self._complete_endpoint(role,purpose,system,context,schema,config,endpoint_index,
                     request_id,request_start,image_url=image_url,cache=cache,validate=validate,normalize=normalize,
+                    pre_normalize=pre_normalize,
                     timeout_seconds=timeout_seconds,format_retry=format_retry,result_schema=result_schema,
                     cache_context=cache_context,retry_safe=retry_safe,protocol=protocol,
                     previous_endpoint_failures=failures,validation_schema=validation_schema,
@@ -540,7 +541,7 @@ class APIClient:
                  request_id, request_start, image_url=None, cache=False, validate=None, normalize=None,
                  timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
                  retry_safe=False, protocol=None, previous_endpoint_failures=None, validation_schema=None,
-                 conversation_messages=None):
+                 conversation_messages=None, pre_normalize=None):
         endpoint_id = 'primary' if endpoint_index==0 else 'fallback_%d' % endpoint_index
         validator = Draft7Validator(validation_schema or schema)
         result_validator = Draft7Validator(result_schema or validation_schema or schema)
@@ -775,21 +776,29 @@ class APIClient:
                         purpose=='vlm_guided_observation'))
                 if normalization:
                     record['response_normalization'] = normalization
-                # A narrowly scoped, pure normalization may repair OPTIONAL
-                # assessment metadata before envelope validation. The final
-                # registered tool schema still validates every executable arg.
-                # Never infer or normalize movement commands.
+                # Pre-normalize only explicitly opted-in, non-executable
+                # wire metadata (e.g. NavigationAgent route reference aliases).
+                # RGB-D coordinates are NOT modified before checking their
+                # declared image_1000_xyxy integer schema.
+                if pre_normalize is not None:
+                    original = result
+                    result = pre_normalize(result)
+                    if result != original:
+                        self.normalizations += 1
+                        record['repair_result'] = 'locally_normalized'
+                        record['pre_validation_metadata_normalized'] = True
+                errors = list(validator.iter_errors(result))
+                if errors:
+                    raise specific_schema_error(errors[0])
+                # Convert already validated wire units to the internal schema:
+                # a normalized [0,1] box must never be rechecked against the
+                # unnormalized integer [0,1000] wire constraints.
                 if normalize is not None:
                     original = result
                     result = normalize(result)
                     if result != original:
                         self.normalizations += 1
                         record['repair_result'] = 'locally_normalized'
-                        record['optional_assessment_normalized'] = (
-                            role == 'navigation_agent')
-                errors = list(validator.iter_errors(result))
-                if errors:
-                    raise specific_schema_error(errors[0])
                 # A navigation-specific validator reports the exact bad
                 # tool parameter before the generic tagged-union schema
                 # produces an unhelpful top-level oneOf error. It still
