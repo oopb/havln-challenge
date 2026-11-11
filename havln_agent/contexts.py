@@ -272,8 +272,10 @@ def _project_navigation_memory(memory, live_depth):
     references=memory.get('instruction_route_references') or []
     memory['instruction_route_references']=[
         dict(_small(item,('reference_id','source_observation_id',
-            'source_heading_deg','source_stance_id','place_description',
-            'instruction_relation','evidence_status',
+            'source_heading_deg','source_stance_id','approach_heading_deg',
+            'approach_observation_id',
+            'approach_direction_is_historical_executed_forward_only',
+            'place_description','instruction_relation','evidence_status',
             'reference_is_historical_view_not_current_motor_bearing',
             'completion_verified'),
             {'place_description':140,'instruction_relation':220}),
