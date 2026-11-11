@@ -26,6 +26,8 @@ on:
       - "tests/test_replay_studio.py"
       - "tests/test_batch_evaluation.py"
       - "tests/test_phase2_export.py"
+      - "tests/test_merge_phase2_submissions.py"
+      - "scripts/merge_phase2_submissions.py"
       - "tests/test_competition_scoring.py"
       - "replay_ui/**"
       - "scripts/serve_agent_replay.py"
@@ -58,6 +60,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_batch_evaluation.py' -v
           python -m unittest discover -s tests -p 'test_phase2_export.py' -v
+          python -m unittest discover -s tests -p 'test_merge_phase2_submissions.py' -v
       - name: Compile all agent modules
         run: python -m compileall -q havln_agent
       - name: Verify reasoning effort compatibility and safe protocol negotiation
