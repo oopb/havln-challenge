@@ -29,6 +29,11 @@ def _view(record, observation):
         navigation_suggestion=(visual.get('navigation_suggestion') or
                                visual.get('reason') or '')[:180],
         target_type=visual.get('target_type'),
+        # Preserve explicit negative person/activity checks as well as
+        # positive detection. This is a VLM hypothesis, NOT absence proof.
+        target_visible=(visual.get('target_visible')
+                        if isinstance(visual.get('target_visible'),bool)
+                        else None),
         confidence=visual.get('confidence'),
         frame_scope='historical_sensor_frame_with_model_visual_hypothesis')
 
