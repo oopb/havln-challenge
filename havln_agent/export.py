@@ -31,6 +31,8 @@ from scripts.export_cma_submission import SOURCE_REVISION, SPLITS, atomic_json, 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / 'scripts/run_api_agent.py'
 DEFAULT_MANIFEST = Path('/opt/havln-challenge/codabench/phase1/reference/public_reference_manifest.json')
+PHASE_SPLITS = {'phase1': SPLITS, 'phase2': ('test',)}
+PHASE2_EPISODES = 3408
 
 
 @contextmanager
@@ -112,9 +114,14 @@ def load_config(path):
     return config
 
 
-def build_jobs(data, splits, manifest, limit):
-    from havln_scoring.submission_contract import load_manifest
-    specs = {s.split: set(s.episode_ids) for s in load_manifest(manifest).splits}
+def build_jobs(data, splits, manifest, limit, phase='phase1'):
+    if phase == 'phase2':
+        # The official Phase 2 file contains all IDs 1..3408; no Phase 1
+        # manifest or inaccessible scoring-side test manifest is required.
+        specs = {'test': {str(i) for i in range(1, PHASE2_EPISODES + 1)}}
+    else:
+        from havln_scoring.submission_contract import load_manifest
+        specs = {s.split: set(s.episode_ids) for s in load_manifest(manifest).splits}
     expected, jobs, datasets = {}, [], {}
     for split in splits:
         path = data / f'HA-R2R/{split}/{split}.json.gz'
@@ -123,7 +130,7 @@ def build_jobs(data, splits, manifest, limit):
             episodes = json.load(handle)['episodes']
         ids = [str(e['episode_id']) for e in episodes]
         if len(ids) != len(set(ids)) or set(ids) != specs[split]:
-            raise ValueError('Input dataset differs from the official manifest')
+            raise ValueError('Input dataset episode IDs do not match the official ' + phase + ' split')
         episodes.sort(key=lambda e: int(e['episode_id']))
         if limit is not None:
             episodes = episodes[:limit]
@@ -142,6 +149,14 @@ def build_jobs(data, splits, manifest, limit):
     for relative in ('HAPS2_0', 'Multi-Human-Annotations/human_motion.json'):
         if not (data / relative).exists():
             raise ValueError('Missing simulator data: ' + relative)
+    if phase == 'phase2':
+        with (data / 'Multi-Human-Annotations/human_motion.json').open() as handle:
+            human_scenes = json.load(handle)
+        missing = sorted(job['key'][len('test-'):] for job in jobs
+                         if job['key'][len('test-'):] not in human_scenes)
+        if missing:
+            raise ValueError('Phase 2 human_motion.json lacks test scenes: '
+                             + ', '.join(missing))
     return jobs, expected, datasets
 
 
@@ -327,7 +342,7 @@ def run_worker(task_path):
         finished_at_epoch=time.time()))
 
 
-def assemble(output, jobs, expected, fingerprint, diagnostic):
+def assemble(output, jobs, expected, fingerprint, diagnostic, phase='phase1'):
     filenames = []
     for split, ids in expected.items():
         rows = []
@@ -351,13 +366,26 @@ def assemble(output, jobs, expected, fingerprint, diagnostic):
     if diagnostic:
         print('Diagnostic only: no submission ZIP is produced.')
         return
-    if set(expected) != set(SPLITS):
-        raise ValueError('Formal Phase 1 export requires both validation splits')
+    if set(expected) != set(PHASE_SPLITS[phase]):
+        raise ValueError('Formal ' + phase + ' export requires splits: '
+                         + ', '.join(PHASE_SPLITS[phase]))
     partial = output / 'submission.zip.partial'
     with zipfile.ZipFile(partial, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         for filename in filenames:
             archive.write(output / filename, arcname=filename)
-    subprocess.run(['havln-validate', str(partial)], check=True)
+    if phase == 'phase1':
+        subprocess.run(['havln-validate', str(partial)], check=True)
+    else:
+        # The container's bundled havln-validate may still only accept Phase 1.
+        # Validate Phase 2 exact coverage and archive contents independently.
+        with zipfile.ZipFile(partial) as archive:
+            if archive.namelist() != ['test.json']:
+                raise ValueError('Phase 2 ZIP must contain only root-level test.json')
+            payload = json.loads(archive.read('test.json'))
+        if payload.get('format_version') != 1 or payload.get('split') != 'test':
+            raise ValueError('Invalid Phase 2 submission header')
+        check_rows(payload['episodes'],
+                   [str(i) for i in range(1, PHASE2_EPISODES + 1)])
     os.replace(partial, output / 'submission.zip')
 
 
@@ -413,7 +441,8 @@ def assemble_saved_workers(output):
             raise ValueError('Saved episode coverage differs from original requested limit: '+split)
     # This checks every individual shard, provenance, complete coverage and
     # each exported action sequence before marking the run complete.
-    assemble(output,jobs,expected,fingerprint,metadata['diagnostic'])
+    assemble(output,jobs,expected,fingerprint,metadata['diagnostic'],
+             identity.get('phase','phase1'))
     metadata.update(complete=True,episodes={s:len(ids) for s,ids in expected.items()})
     atomic_json(receipt,metadata)
     print('Recovered Agent export from saved shards: '+str(output))
@@ -428,7 +457,8 @@ def export(args, config):
             raise ValueError('Output belongs to another pipeline; choose a fresh Agent directory')
     source = args.source_root.resolve()
     get_config, env_class = runtime_imports(source)
-    jobs, expected, datasets = build_jobs(data, args.splits, args.manifest, args.episode_limit)
+    jobs, expected, datasets = build_jobs(data, args.splits, args.manifest,
+                                          args.episode_limit, args.phase)
     import habitat
     import habitat_sim
     import numpy as np
@@ -448,7 +478,9 @@ def export(args, config):
                     source_revision=state['revision'], source_manifest=sha256(source / '.release.json'),
                     git_revision=revision.stdout.strip() if revision is not None and revision.returncode == 0 else 'unavailable',
                     code={str(p.relative_to(ROOT)): sha256(p) for p in code}, seed=args.seed,
-                    runtime_config=sha256(args.runtime_config), manifest=sha256(args.manifest),
+                    runtime_config=sha256(args.runtime_config),
+                    manifest=(sha256(args.manifest) if args.phase == 'phase1' else
+                              'official-phase2-test-ids-1-3408'), phase=args.phase,
                     resolved_runtime_config=hashlib.sha256(str(get_config(str(args.runtime_config))).encode()).hexdigest(),
                     simulator=sha256(Path(habitat.__file__).parent / 'sims/habitat_simulator/habitat_simulator.py'),
                     environment=sha256(sys.modules[env_class.__module__].__file__),
@@ -467,7 +499,8 @@ def export(args, config):
     verify_existing_run_provenance(output,fingerprint)
     # Validate credentials/config once, before launching any simulator worker.
     APIClient(config, output / 'cache/preflight')
-    diagnostic = (args.episode_limit is not None or set(args.splits) != set(SPLITS) or
+    diagnostic = (args.episode_limit is not None or
+                  set(args.splits) != set(PHASE_SPLITS[args.phase]) or
                   config['runtime']['max_steps'] != 500)
     metadata = dict(fingerprint=fingerprint, identity=identity, complete=False, diagnostic=diagnostic)
     atomic_json(receipt, metadata)
@@ -524,7 +557,7 @@ def export(args, config):
                     for episode_id in job['ids']]
         if len(assigned) != len(set(assigned)) or set(assigned) != set(ids):
             raise ValueError('Batch split has missing or duplicate episode assignments: '+split)
-    assemble(output, assigned_jobs, expected, fingerprint, diagnostic)
+    assemble(output, assigned_jobs, expected, fingerprint, diagnostic, args.phase)
     metadata.update(complete=True, episodes={split: len(ids) for split, ids in expected.items()})
     atomic_json(receipt, metadata)
     print('Completed Agent export: ' + str(output))
@@ -573,7 +606,7 @@ def preflight(args):
     report = {'dependencies': {name: importlib.util.find_spec(name) is not None
                               for name in ('habitat', 'habitat_sim', 'havln_scoring')},
               'runtime_config_exists': args.runtime_config.is_file(),
-              'manifest_exists': args.manifest.is_file()}
+              'manifest_exists': args.phase == 'phase2' or args.manifest.is_file()}
     try:
         config = load_config(args.config)
         report['configuration'] = 'loaded'
@@ -597,7 +630,10 @@ def main():
     parser.add_argument('--runtime-config', type=Path, default=Path('/app/config/challenge_submission.yaml'))
     parser.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument('--output-dir', type=Path)
-    parser.add_argument('--splits', nargs='+', choices=SPLITS, default=list(SPLITS))
+    parser.add_argument('--phase', choices=tuple(PHASE_SPLITS), default='phase1',
+                        help='Competition phase; phase2 runs the 3,408 test episodes')
+    parser.add_argument('--splits', nargs='+', choices=(*SPLITS, 'test'),
+                        help='Optional split subset for diagnostics (defaults to phase splits)')
     parser.add_argument('--gpu-ids', nargs='+', type=int, default=[0])
     parser.add_argument('--batch', type=int, default=1,
                         help='Concurrent independent Habitat worker processes PER GPU (1-32; default 1). '
@@ -626,6 +662,10 @@ def main():
     parser.add_argument('--no-auto-archive', action='store_true',
                         help='Disable automatic diagnostic archive on completion/failure')
     args = parser.parse_args()
+    if args.splits is None:
+        args.splits = list(PHASE_SPLITS[args.phase])
+    elif any(split not in PHASE_SPLITS[args.phase] for split in args.splits):
+        parser.error('--splits must belong to the selected --phase')
     if args.worker_task:
         try:
             run_worker(args.worker_task)
