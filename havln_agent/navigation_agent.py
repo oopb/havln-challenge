@@ -15,7 +15,7 @@ from .model_angles import project_model_angles
 MISSION_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
     "Read mission_evidence_v1, current RGB, source-linked history and motion receipts. The latest progress.narrative is a MODEL hypothesis, not verified completion. "
-    "The FIRST image is CURRENT RGB. History media gives signed relative view offsets, not executable bearings from old stances; re-ground all movement in live RGB. "
+    "The FIRST image is CURRENT RGB. History media gives signed relative offsets for views, not executable bearings from old stances; re-ground all movement in live RGB. "
     "Choose turn_direction LEFT, RIGHT, or NONE relative to the CURRENT robot camera plus nonnegative turn_degrees (NONE=0). LEFT means the left side of CURRENT RGB; RIGHT means right. Never calculate an absolute target heading for a motor turn. Pitch uses look=up/down/none separately. "
     "No global yaw is provided. View offsets: CURRENT forward=0, LEFT positive, RIGHT negative. "
     "Camera pitch remains model-controlled during MOVE; no automatic LOOK_UP. Use LOOK_DOWN for near-floor steps and LOOK_UP for distant openings when a downward view hides them. "
