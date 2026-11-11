@@ -129,7 +129,18 @@ _PROGRESS=dict(
     uncertainties=dict(type='array',maxItems=8,
                        items=dict(type='string',maxLength=220)),
     evidence_observation_ids=dict(type='array',maxItems=12,uniqueItems=True,
-                                  items=dict(type='string',maxLength=64)))
+                                  items=dict(type='string',maxLength=64)),
+    route_reference_update=dict(
+        type='object',additionalProperties=False,
+        properties=dict(
+            source_observation_id=dict(type='string',minLength=1,maxLength=64),
+            place_description=dict(type='string',minLength=1,maxLength=180),
+            instruction_relation=dict(type='string',minLength=1,maxLength=300),
+            evidence_status=dict(enum=['candidate','supported','contradicted']),
+            route_attempt_outcome=dict(type='string',minLength=1,maxLength=300),
+            outcome_observation_id=dict(type='string',minLength=1,maxLength=64)),
+        required=['source_observation_id','place_description',
+                  'instruction_relation','evidence_status']))
 
 def navigation_schema(tools):
     branches=[]
@@ -172,7 +183,12 @@ def compact_navigation_protocol(tools):
         'tool receipts; distinguish seen facts from hypotheses; '
         'each item should be concise (max 600 characters); '
         '(2) optional progress_narrative/navigation_intent/uncertainties/'
-        'evidence_observation_ids: revisable model assessments; '
+        'evidence_observation_ids/route_reference_update: revisable model '
+        'assessments; route_reference_update cites a REAL historical RGB '
+        'observation, binds an instruction-relative junction or stair exit '
+        'to that source view, and optionally records a tried route outcome '
+        'with its actual outcome_observation_id; never output absolute yaw '
+        'or a motor turn in this record; '
         '(3) decision_analysis: concise evidence-based explanation of '
         'the next navigation choice, including current-vs-historical '
         'heading and obstacle uncertainty where relevant; '
