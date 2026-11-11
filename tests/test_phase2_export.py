@@ -1,5 +1,7 @@
 """Phase 2 dataset, CLI and final single-file submission regression tests."""
+import contextlib
 import gzip
+import io
 import json
 from pathlib import Path
 import sys
@@ -51,6 +53,45 @@ class Phase2ExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'official phase2 split'):
                 build_jobs(data, ['test'], None, 4, phase='phase2')
 
+    def test_disjoint_phase2_ranges_keep_original_ids_and_trim_final_batch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self._dataset(Path(folder))
+            def select(start, limit):
+                jobs, expected, _ = build_jobs(
+                    data, ['test'], None, limit,
+                    phase='phase2', episode_start=start)
+                self.assertEqual(
+                    sorted(i for job in jobs for i in job['ids']),
+                    sorted(expected['test']))
+                return expected['test']
+            first = select(1, 100)
+            second = select(101, 100)
+            last = select(3401, 100)
+            self.assertEqual(first, [str(i) for i in range(1, 101)])
+            self.assertEqual(second, [str(i) for i in range(101, 201)])
+            self.assertEqual(last, [str(i) for i in range(3401, 3409)])
+            self.assertEqual(len(set(first + second + last)), 208)
+            self.assertEqual(select(3405, None), ['3405', '3406', '3407', '3408'])
+
+    def test_episode_start_rejects_out_of_range_and_phase1_usage(self):
+        for start in (0, -1, PHASE2_EPISODES + 1):
+            with self.subTest(start=start), self.assertRaisesRegex(
+                    ValueError, 'Phase 2 --episode-start'):
+                build_jobs(None, ['test'], None, 100, 'phase2', start)
+        with self.assertRaisesRegex(ValueError, 'only supported for Phase 2'):
+            build_jobs(None, ['val_seen'], None, 100, 'phase1', 2)
+
+    def test_episode_start_cli_validation(self):
+        for phase, start in (('phase2', '0'), ('phase2', '3409'),
+                             ('phase1', '101')):
+            with self.subTest(phase=phase, start=start):
+                argv = ['run_api_agent.py', '--phase', phase,
+                        '--episode-start', start]
+                with patch.object(sys, 'argv', argv), contextlib.redirect_stderr(
+                        io.StringIO()), self.assertRaises(SystemExit) as error:
+                    main()
+                self.assertEqual(error.exception.code, 2)
+
     def test_missing_test_human_motion_fails_before_api_or_simulation(self):
         with tempfile.TemporaryDirectory() as folder:
             data = self._dataset(Path(folder), include_humans=False)
@@ -62,7 +103,8 @@ class Phase2ExportTests(unittest.TestCase):
             seen = []
             with patch.object(sys, 'argv', ['run_api_agent.py',
                        '--phase', 'phase2', '--output-dir', folder,
-                       '--episode-limit', '4', '--no-auto-archive']), patch(
+                       '--episode-start', '101', '--episode-limit', '4',
+                       '--no-auto-archive']), patch(
                        'havln_agent.export.load_config', return_value={}), patch(
                        'havln_agent.export.export',
                        side_effect=lambda args, config: seen.append(args)):
@@ -70,6 +112,7 @@ class Phase2ExportTests(unittest.TestCase):
             self.assertEqual(seen[0].phase, 'phase2')
             self.assertEqual(seen[0].splits, ['test'])
             self.assertEqual(seen[0].episode_limit, 4)
+            self.assertEqual(seen[0].episode_start, 101)
 
     def test_phase2_formal_archive_has_exact_test_coverage(self):
         with tempfile.TemporaryDirectory() as folder:
