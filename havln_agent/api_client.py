@@ -261,6 +261,41 @@ def unsupported_reasoning_parameter(detail, field):
                 r'unexpected keyword|unknown field)\b', message)))
 
 
+def unsupported_chat_parameter(detail, field):
+    """True only for a clearly rejected wire field, never a generic HTTP 400.
+
+    The standard unknown/unsupported-parameter check also covers rejection of
+    max_tokens and max_completion_tokens. Special cases are narrowly scoped to
+    model-specific temperature defaults and unsupported native JSON modes.
+    """
+    if unsupported_reasoning_parameter(detail, field):
+        return True
+    try:
+        data = json.loads(detail)
+        error = data.get('error', data) if isinstance(data, dict) else {}
+        if not isinstance(error, dict):
+            return False
+    except (ValueError, TypeError):
+        return False
+    param = str(error.get('param') or '').lower()
+    code = str(error.get('code') or '').lower()
+    message = str(error.get('message') or '').lower()
+    if param and param != field:
+        return False
+    if field not in message and param != field:
+        return False
+    if field == 'temperature':
+        return ('default' in message and
+                ('only' in message or 'must be' in message) and
+                ('unsupported' in message or 'not supported' in message
+                 or code in ('unsupported_value', 'invalid_value')))
+    if field == 'response_format':
+        return (code in ('unsupported_value', 'invalid_value') and
+                ('not supported' in message or 'unsupported' in message)
+                and ('json_object' in message or 'json_schema' in message))
+    return False
+
+
 def next_reasoning_mode(config, current):
     if current == 'reasoning_effort':
         host = urllib.parse.urlsplit(config['base_url']).hostname or ''
@@ -324,6 +359,9 @@ class APIClient:
         self.keys = {}
         # Per-worker capability inference survives episode resets.
         self.reasoning_modes = {}
+        # Learned wire parameters are scoped to the endpoint + model, never
+        # confused with navigation state, schema validity or HTTP auth failures.
+        self.request_modes = {}
         for role in ROLES:
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
@@ -566,10 +604,22 @@ class APIClient:
             if config['response_format'] == 'json_schema' else 0,
             schema_channels=['response_format'] if config['response_format']=='json_schema' else
                 ['compact_protocol'] if protocol else ['system'])
-        body = dict(model=config['model'], messages=messages, response_format=response_format,
-                    temperature=config['temperature'], max_tokens=config['max_tokens'])
-        requested_reasoning = config.get('reasoning')
         reasoning_key = (config['base_url'], config['model'])
+        learned_params = self.request_modes.get(reasoning_key, {})
+        # The official OpenAI endpoint uses max_completion_tokens for reasoning
+        # models; legacy OpenAI-compatible providers often still use max_tokens.
+        # Unknown gateways are negotiated only upon explicit parameter rejection.
+        host = urllib.parse.urlsplit(config['base_url']).hostname or ''
+        token_field = learned_params.get('token_field',
+                                        'max_completion_tokens' if host == 'api.openai.com'
+                                        else 'max_tokens')
+        body = dict(model=config['model'], messages=messages)
+        if not learned_params.get('omit_response_format', False):
+            body['response_format'] = response_format
+        if not learned_params.get('omit_temperature', False):
+            body['temperature'] = config['temperature']
+        body[token_field] = config['max_tokens']
+        requested_reasoning = config.get('reasoning')
         reasoning_mode = (self.reasoning_modes.get(reasoning_key, 'reasoning_effort')
                           if requested_reasoning is not None else 'omit')
         if requested_reasoning is not None:
@@ -629,8 +679,9 @@ class APIClient:
         # Parameter negotiation is separate from retry_safe transport attempts.
         # Only a clearly rejected request can be renegotiated without executing
         # an action or repeating an accepted model completion.
-        max_attempts = retries + 1 + (2 if requested_reasoning is not None else 0)
+        max_attempts = retries + 1 + (2 if requested_reasoning is not None else 0) + 3
         transient_retries = 0
+        negotiated_fields = set()
         for attempt in range(max_attempts):
             available = self.availability()
             if available != 'available':
@@ -652,6 +703,11 @@ class APIClient:
                           validation_error_type=None, validation_field=[], repair_result='not_needed',
                           fallback_reason=(previous_endpoint_failures[-1]['error']
                               if previous_endpoint_failures else None),final_decision=None,
+                          request_token_field=token_field,
+                          request_temperature_mode=('omitted_provider_default'
+                              if 'temperature' not in body else 'configured'),
+                          request_response_format_mode=('local_validation_only'
+                              if 'response_format' not in body else config['response_format']),
                           reasoning=requested_reasoning, reasoning_wire_mode=reasoning_mode,
                           reasoning_fidelity=('exact' if reasoning_mode=='reasoning_effort' else
                               'boolean_only' if reasoning_mode=='thinking' else
@@ -662,6 +718,7 @@ class APIClient:
             retryable = False
             compatibility_retry = False
             next_mode = None
+            compatibility_change = None
             endpoint_unavailable = False
             record['request_phase'] = 'preparing_request'
             self._inflight(record, 'in_progress')
@@ -763,6 +820,32 @@ class APIClient:
                         record['reasoning_adaptation'] = (
                             reasoning_mode + '_unsupported_try_' + next_mode)
                         record['validation_error_type'] = 'protocol_unsupported'
+                        compatibility_change = ('reasoning', next_mode)
+                # Other parameter families are negotiated independently:
+                # no implicit unlimited output and no silent changes to
+                # model, multimodal input, credentials or message structure.
+                if error.code == 400 and not compatibility_retry:
+                    if (token_field not in negotiated_fields
+                            and unsupported_chat_parameter(detail, token_field)):
+                        compatibility_change = ('token_field',
+                            'max_tokens' if token_field == 'max_completion_tokens'
+                            else 'max_completion_tokens')
+                    elif ('temperature' in body and
+                            'temperature' not in negotiated_fields and
+                            unsupported_chat_parameter(detail, 'temperature')):
+                        compatibility_change = ('omit_temperature', True)
+                    elif ('response_format' in body and
+                            'response_format' not in negotiated_fields and
+                            unsupported_chat_parameter(detail, 'response_format')):
+                        compatibility_change = ('omit_response_format', True)
+                    if compatibility_change is not None:
+                        compatibility_retry = True
+                        retryable = True
+                        endpoint_unavailable = False
+                        record['request_parameter_adaptation'] = (
+                            compatibility_change[0] + ':' +
+                            str(compatibility_change[1]))
+                        record['validation_error_type'] = 'protocol_unsupported'
             except RequestDeadlineUnavailable as error:
                 retryable = False
                 record.update(error=str(error), validation_error_type='transport', repair_result='failed')
@@ -842,11 +925,35 @@ class APIClient:
                     'completion_request_id','upstream_completion_unknown') if k in record}
                 raise failure
             if compatibility_retry:
-                reasoning_mode = next_mode
-                self.reasoning_modes[reasoning_key] = reasoning_mode
-                body.pop('reasoning_effort', None)
-                body.pop('thinking', None)
-                body.update(reasoning_payload(requested_reasoning, reasoning_mode))
+                kind, value = compatibility_change
+                if kind == 'reasoning':
+                    reasoning_mode = value
+                    self.reasoning_modes[reasoning_key] = reasoning_mode
+                    body.pop('reasoning_effort', None)
+                    body.pop('thinking', None)
+                    body.update(reasoning_payload(requested_reasoning, reasoning_mode))
+                else:
+                    negotiated_fields.add('token_field' if kind == 'token_field' else
+                                          'temperature' if kind == 'omit_temperature'
+                                          else 'response_format')
+                    self.request_modes.setdefault(reasoning_key, {})[kind] = value
+                    if kind == 'token_field':
+                        body[value] = body.pop(token_field)
+                        token_field = value
+                    elif kind == 'omit_temperature':
+                        body.pop('temperature', None)
+                    elif kind == 'omit_response_format':
+                        body.pop('response_format', None)
+                        # json_object already embeds the full schema in the
+                        # system message. json_schema needs an equivalent text
+                        # contract once provider-side native enforcement is lost.
+                        if config['response_format'] == 'json_schema':
+                            addition = ('\nReturn only JSON satisfying this schema: ' +
+                                        canonical(wire_schema))
+                            messages[0]['content'] += addition
+                            logged_messages[0]['content'] += addition
+                            request_metrics['system_chars'] = len(messages[0]['content'])
+                            request_metrics['schema_channels'] = ['system_fallback']
                 digest, cache_path = cache_identity()
                 if recorder is not None:
                     try:
