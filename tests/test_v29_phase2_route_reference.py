@@ -4,6 +4,7 @@ No simulator, API key, metric VO, or hardcoded movement policy is required.
 """
 import copy
 import json
+import math
 from types import SimpleNamespace
 from unittest.mock import Mock
 import unittest
@@ -77,8 +78,8 @@ class Phase2RouteReference(unittest.TestCase):
         original=copy.deepcopy(m.route_references[0])
         self.assertEqual(original['source_observation_id'],'obs_0019')
         self.assertEqual(original['source_heading_deg'],225.)
-        self.assertFalse(original['instruction_relation_is_historical_not_current_turn']
-                         is False)
+        self.assertTrue(
+            original['instruction_relation_is_historical_not_current_turn'])
         self.assertEqual(original['route_attempts'],[])
         m.note_navigation_assessment(dict(route_reference_update=update(
             outcome='Kitchen corridor led to garage; not the bedroom.',
@@ -155,7 +156,7 @@ class Phase2RouteReference(unittest.TestCase):
         # the earlier actual forward orientation as a separate historical
         # view; it is not a current motor bearing or measured descent.
         source['step']=19
-        source['pose']['heading']=__import__('math').radians(270)
+        source['pose']['heading']=math.radians(270)
         m.note_route_reference(update())
         ref=m.route_references[0]
         self.assertEqual(ref['source_heading_deg'],270)
