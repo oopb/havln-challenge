@@ -221,11 +221,63 @@ def decode_response(content, allow_identical_duplicates=False):
                                              'unique_embedded_json_container')
 
 
+REASONING_LEVELS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh'))
+
+
+def reasoning_payload(effort, mode):
+    """Map the canonical effort to one supported Chat Completions extension."""
+    if mode == 'reasoning_effort':
+        return {'reasoning_effort': effort}
+    if mode == 'thinking':
+        # Vendor-specific boolean switch: cannot preserve precise effort.
+        return {'thinking': {'type': 'disabled' if effort == 'none' else 'enabled'}}
+    if mode == 'omit':
+        return {}
+    raise ValueError('Unknown reasoning wire mode')
+
+
+def unsupported_reasoning_parameter(detail, field):
+    """Only negotiate on explicit unsupported FIELD errors, never bad values."""
+    try:
+        data = json.loads(detail)
+        error = data.get('error', data) if isinstance(data, dict) else {}
+        if not isinstance(error, dict):
+            error = {}
+    except (ValueError, TypeError):
+        error = {}
+    message = str(error.get('message', detail)).lower()
+    code = str(error.get('code', '')).lower()
+    param = str(error.get('param') or '').lower()
+    if param and param != field:
+        return False
+    if field not in message and param != field:
+        return False
+    if re.search(r'\b(invalid|unsupported|unknown|unrecognized)\s+(value|effort|level)\b', message):
+        return False
+    return (code in ('unknown_parameter', 'unsupported_parameter', 'extra_forbidden')
+            or bool(re.search(
+                r'\b(unknown parameter|unrecognized parameter|unsupported parameter|'
+                r'not supported|not allowed|unexpected parameter|extra fields not permitted|'
+                r'unexpected keyword|unknown field)\b', message)))
+
+
+def next_reasoning_mode(config, current):
+    if current == 'reasoning_effort':
+        host = urllib.parse.urlsplit(config['base_url']).hostname or ''
+        # Avoid guessing a nonstandard extension on unknown gateways.
+        if 'deepseek' in config['model'].lower() or host == 'api.deepseek.com':
+            return 'thinking'
+        return 'omit'
+    if current == 'thinking':
+        return 'omit'
+    return None
+
+
 def model_endpoints(settings):
     """Only explicitly configured, role-compatible Chat Completions endpoints."""
     required = {'provider','base_url','api_key_env','model','response_format','temperature',
                 'timeout_seconds','max_retries','max_tokens'}
-    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'thinking','fallbacks'}:
+    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'reasoning','fallbacks'}:
         raise ValueError('Unexpected model fields; configure credentials with api_key_env')
     fallbacks = settings.get('fallbacks', [])
     if not isinstance(fallbacks, list):
@@ -234,12 +286,15 @@ def model_endpoints(settings):
     chain = [primary]
     for fallback in fallbacks:
         if (not isinstance(fallback, dict) or not {'base_url','model','api_key_env'} <= set(fallback)
-                or set(fallback)-required-{'thinking'}):
+                or set(fallback)-required-{'reasoning'}):
             raise ValueError('Each fallback requires base_url, model and api_key_env; nested fallbacks are unsupported')
         chain.append(dict(primary, **fallback))
     for config in chain:
-        if config.get('thinking') is None:
-            config.pop('thinking', None)
+        if config.get('reasoning') is None:
+            config.pop('reasoning', None)
+        elif (not isinstance(config['reasoning'], str) or
+              config['reasoning'] not in REASONING_LEVELS):
+            raise ValueError('reasoning must be one of: none, minimal, low, medium, high, xhigh')
         if any(not isinstance(config[name], str) or not config[name].strip()
                for name in ('base_url','model','api_key_env')):
             raise ValueError('Endpoint, model and credential variable must be nonempty strings')
@@ -267,6 +322,8 @@ class APIClient:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.keys = {}
+        # Per-worker capability inference survives episode resets.
+        self.reasoning_modes = {}
         for role in ROLES:
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
@@ -511,8 +568,12 @@ class APIClient:
                 ['compact_protocol'] if protocol else ['system'])
         body = dict(model=config['model'], messages=messages, response_format=response_format,
                     temperature=config['temperature'], max_tokens=config['max_tokens'])
-        if 'thinking' in config:
-            body['thinking'] = {'type': config['thinking']}
+        requested_reasoning = config.get('reasoning')
+        reasoning_key = (config['base_url'], config['model'])
+        reasoning_mode = (self.reasoning_modes.get(reasoning_key, 'reasoning_effort')
+                          if requested_reasoning is not None else 'omit')
+        if requested_reasoning is not None:
+            body.update(reasoning_payload(requested_reasoning, reasoning_mode))
         # Capture the assembled multi-turn wire input without Base64 in logs.
         # Recorder failure must never change the model's actual request.
         replay = None
@@ -523,19 +584,23 @@ class APIClient:
             except (OSError, ValueError, TypeError, KeyError) as error:
                 replay = dict(version=1, incomplete=True,
                               error='capture_' + type(error).__name__)
-        signature = dict(version=PROMPT_VERSION, role=role, endpoint=config['base_url'], request=body)
-        if cache and cache_context is not None:
-            cached_body = json.loads(canonical(body))
-            content = cached_body['messages'][1]['content']
-            if isinstance(content, list):
-                content[0]['text'] = canonical(cache_context)
-            else:
-                cached_body['messages'][1]['content'] = canonical(cache_context)
-            signature['request'] = cached_body
-        if result_schema is not None or validation_schema is not None:
-            signature['result_schema'] = provider_schema(result_schema or validation_schema)
-        digest = hashlib.sha256(canonical(signature).encode()).hexdigest()
-        cache_path = self.cache_dir / (digest + '.json')
+        def cache_identity():
+            signature = dict(version=PROMPT_VERSION, role=role,
+                             endpoint=config['base_url'], request=body)
+            if cache and cache_context is not None:
+                cached_body = json.loads(canonical(body))
+                content = cached_body['messages'][1]['content']
+                if isinstance(content, list):
+                    content[0]['text'] = canonical(cache_context)
+                else:
+                    cached_body['messages'][1]['content'] = canonical(cache_context)
+                signature['request'] = cached_body
+            if result_schema is not None or validation_schema is not None:
+                signature['result_schema'] = provider_schema(result_schema or validation_schema)
+            digest = hashlib.sha256(canonical(signature).encode()).hexdigest()
+            return digest, self.cache_dir / (digest + '.json')
+
+        digest, cache_path = cache_identity()
         if cache and cache_path.exists():
             try:
                 result = json.loads(cache_path.read_text(), parse_constant=reject_json_constant)
@@ -561,7 +626,12 @@ class APIClient:
         timeout = config['timeout_seconds'] if timeout_seconds is None else min(config['timeout_seconds'], timeout_seconds)
         if not math.isfinite(timeout) or timeout <= 0:
             raise APIError('request_timeout')
-        for attempt in range(retries + 1):
+        # Parameter negotiation is separate from retry_safe transport attempts.
+        # Only a clearly rejected request can be renegotiated without executing
+        # an action or repeating an accepted model completion.
+        max_attempts = retries + 1 + (2 if requested_reasoning is not None else 0)
+        transient_retries = 0
+        for attempt in range(max_attempts):
             available = self.availability()
             if available != 'available':
                 raise BudgetExceeded(available)
@@ -575,17 +645,23 @@ class APIClient:
                           request_number=self.calls,attempt=attempt,attempt_number=attempt+1,
                           completion_request_id=request_id,completion_attempt=self.calls-request_start,
                           endpoint_id=endpoint_id,endpoint_index=endpoint_index,base_url=config['base_url'],
-                          max_attempts=retries+1,retry_safe=retry_safe,
+                          max_attempts=max_attempts,retry_safe=retry_safe,
                           format_retry=format_retry,
                           model=config['model'], messages=logged_messages, replay=replay, request_type=purpose,
                           repair_attempt=attempt,
                           validation_error_type=None, validation_field=[], repair_result='not_needed',
                           fallback_reason=(previous_endpoint_failures[-1]['error']
                               if previous_endpoint_failures else None),final_decision=None,
-                          thinking=config.get('thinking'), timeout_seconds=config['timeout_seconds'],
+                          reasoning=requested_reasoning, reasoning_wire_mode=reasoning_mode,
+                          reasoning_fidelity=('exact' if reasoning_mode=='reasoning_effort' else
+                              'boolean_only' if reasoning_mode=='thinking' else
+                              'not_controllable' if requested_reasoning is not None else 'not_requested'),
+                          timeout_seconds=config['timeout_seconds'],
                           effective_timeout_seconds=timeout,
                           deadline_scope='physical_attempt')
             retryable = False
+            compatibility_retry = False
+            next_mode = None
             endpoint_unavailable = False
             record['request_phase'] = 'preparing_request'
             self._inflight(record, 'in_progress')
@@ -674,6 +750,19 @@ class APIClient:
                 record['validation_error_type'] = ('protocol_unsupported' if protocol_unsupported else
                     'transport' if endpoint_unavailable else 'http_request')
                 record['repair_result'] = 'failed'
+                field = ('reasoning_effort' if reasoning_mode == 'reasoning_effort'
+                         else 'thinking' if reasoning_mode == 'thinking' else None)
+                if (error.code == 400 and requested_reasoning is not None and field
+                        and unsupported_reasoning_parameter(detail, field)):
+                    next_mode = next_reasoning_mode(config, reasoning_mode)
+                    if next_mode is not None:
+                        # The server explicitly rejected the request parameter.
+                        compatibility_retry = True
+                        retryable = True
+                        endpoint_unavailable = False
+                        record['reasoning_adaptation'] = (
+                            reasoning_mode + '_unsupported_try_' + next_mode)
+                        record['validation_error_type'] = 'protocol_unsupported'
             except RequestDeadlineUnavailable as error:
                 retryable = False
                 record.update(error=str(error), validation_error_type='transport', repair_result='failed')
@@ -729,15 +818,19 @@ class APIClient:
                 self.latencies.append(elapsed)
                 record['success'] = 'error' not in record
                 self._account(role, record)
-                record['retry_scheduled'] = bool('error' in record and retryable and attempt<retries
-                    and self.availability()=='available')
+                record['retry_scheduled'] = bool(
+                    'error' in record and retryable and attempt < max_attempts-1
+                    and (compatibility_retry or transient_retries < retries)
+                    and self.availability() == 'available')
                 self._log(record)
                 self._inflight(record, 'completed')
             if 'error' not in record:
                 if cache:
                     atomic_json(cache_path, result)
                 return result
-            if not retryable or attempt == retries:
+            if not record['retry_scheduled']:
+                if compatibility_retry and self.availability() != 'available':
+                    raise BudgetExceeded(self.availability())
                 failure = APIError(record['error'], category=record.get('validation_error_type'))
                 failure.endpoint_unavailable = endpoint_unavailable
                 failure.validation_error = {k:record[k] for k in ('validation_field', 'validation_rule',
@@ -748,10 +841,23 @@ class APIClient:
                     'endpoint_id','endpoint_index','base_url','model','attempt_number','completion_attempt',
                     'completion_request_id','upstream_completion_unknown') if k in record}
                 raise failure
-            if self.availability() != 'available':
-                raise BudgetExceeded(self.availability())
-            # Backoff is outside the next attempt's fresh request deadline.
-            time.sleep(min(2 ** attempt, 4))
+            if compatibility_retry:
+                reasoning_mode = next_mode
+                self.reasoning_modes[reasoning_key] = reasoning_mode
+                body.pop('reasoning_effort', None)
+                body.pop('thinking', None)
+                body.update(reasoning_payload(requested_reasoning, reasoning_mode))
+                digest, cache_path = cache_identity()
+                if recorder is not None:
+                    try:
+                        replay = recorder.request_snapshot(messages, context, body)
+                    except (OSError, ValueError, TypeError, KeyError) as error:
+                        replay = dict(version=1, incomplete=True,
+                                      error='capture_' + type(error).__name__)
+            else:
+                transient_retries += 1
+                # Backoff is outside the next attempt's fresh request deadline.
+                time.sleep(min(2 ** (transient_retries-1), 4))
         raise APIError('request_failed')
 
 

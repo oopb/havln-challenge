@@ -9,7 +9,7 @@ navigation_agent:
   api_key_env: NAVIGATION_AGENT_API_KEY
   model: ${NAVIGATION_AGENT_MODEL}
   response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
-  thinking: disabled  # Optional DeepSeek extension; omit for other providers.
+  reasoning: medium  # Adaptive Chat Completions reasoning effort; wire format is negotiated.
   temperature: 0
   timeout_seconds: 120
   max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
@@ -21,7 +21,7 @@ visual_perception:
   api_key_env: VISUAL_PERCEPTION_API_KEY
   model: ${VISUAL_PERCEPTION_MODEL}
   response_format: json_object
-  thinking: disabled
+  reasoning: medium
   temperature: 0
   timeout_seconds: 120
   max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
