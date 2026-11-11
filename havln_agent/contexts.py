@@ -249,13 +249,24 @@ def _project_navigation_memory(memory, live_depth):
     # remain in Memory. Only a short latest-result summary is presented
     # in navigation. A source-grounded passage is also in route candidates.
     tasks=memory.get('observation_tasks') or []
+    # Long prose truncation may hide the decisive end-of-sentence VLM
+    # finding (e.g. "no reader identifiable"). Keep the typed target
+    # verdicts from each REAL RGB view, independently of the short summary.
+    # False is NOT evidence the person is absent: only not visible here.
     memory['observation_tasks']=[
-        _small(item,(
+        dict(_small(item,(
             'observation_task_id','objective','outcome',
             'end_observation_id','observation_summary',
             'navigation_suggestion'),
             {'objective':180,'observation_summary':220,
-             'navigation_suggestion':240})
+             'navigation_suggestion':240}),
+            target_visibility_checks=[
+                _small(view,('observation_id','target_type',
+                             'target_visible','confidence'))
+                for view in (item.get('selected_views') or [])[-3:]
+                if view.get('target_type') is not None
+                and isinstance(view.get('target_visible'),bool)],
+            target_not_visible_is_not_proven_absent=True)
         for item in tasks[-2:]]
     routes=memory.get('candidate_route_hypotheses') or []
     memory['candidate_route_hypotheses']=[
