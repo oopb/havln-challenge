@@ -52,13 +52,14 @@ class TaskMemory:
     instruction: str = ''
     progress_narrative: str = 'The mission has just begun; no destination is confirmed reached.'
     navigation_intent: str = 'Observe the surroundings and make progress toward the complete instruction.'
-    scene_goal: str = ''
-    scene_goal_source_observation_id: str = ''
     uncertainties: list = field(default_factory=list)
     progress_history: list = field(default_factory=list)
     evidence_observation_ids: list = field(default_factory=list)
     observed_landmarks: list = field(default_factory=list)
     navigation_intent_anchor: dict = field(default_factory=dict)
+    # Keep positional TaskMemory constructor compatibility with old fields.
+    scene_goal: str = ''
+    scene_goal_source_observation_id: str = ''
 
 
 class MemoryRecords:

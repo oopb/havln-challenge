@@ -16,6 +16,7 @@ from havln_agent.memory_records import MemoryRecords
 from havln_agent.mission_history import mission_evidence
 from havln_agent.model_angles import project_model_angles
 from havln_agent.navigation_agent import MISSION_PROMPT
+from havln_agent.navigation_history import navigation_visual_anchors
 from havln_agent.visual_perception import SCAN_GUIDANCE_PROMPT
 from test_forward_preflight_v9 import camera
 from test_v23_route_evidence import fixture
@@ -75,6 +76,20 @@ class Phase2SceneGoalContinuity(unittest.TestCase):
         rebased=project_model_angles(dict(memory=compact),45)
         self.assertEqual(rebased['memory']['progress']['scene_goal'],self.SCENE)
         self.assertNotIn('source_heading_deg',json.dumps(rebased['memory']['progress']))
+
+    def test_selected_scene_visual_anchor_is_available_as_historical_rgb(self):
+        m=self.make_scene()
+        m.current=next(o for o in m.observations
+                       if o['observation_id']=='obs_0052')
+        candidates=navigation_visual_anchors(
+            m,'obs_0052',max_pairs=3)
+        by_id={frame['observation_id']:frame
+               for frame in candidates}
+        self.assertIn('obs_0019',by_id)
+        self.assertEqual(by_id['obs_0019']['selection_reason'],
+                         'selected_scene_goal_reference')
+        self.assertLessEqual(len(candidates),3)
+        self.assertNotIn('obs_0052',by_id)
 
     def test_missing_reader_does_not_automatically_replace_scene_goal(self):
         m=self.make_scene()

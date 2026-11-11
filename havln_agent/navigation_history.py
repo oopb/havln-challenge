@@ -266,6 +266,12 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
             for attempt in (latest.get('route_attempts') or [])[-1:]:
                 offer(attempt.get('evidence_observation_id'),
                       'route_attempt_result_reference')
+    # Preserve the real scene view the model chose as its active spatial
+    # goal. This historical RGB is evidence for matching the room/layout,
+    # never a current heading or guaranteed physical localization.
+    scene_source=getattr(memory.task,'scene_goal_source_observation_id','')
+    if getattr(memory.task,'scene_goal','') and scene_source:
+        offer(scene_source,'selected_scene_goal_reference')
     # Reserve actual before/after photos of executed motion, but do not let
     # a long kitchen detour displace the source image of a critical junction.
     # Earlier repeated views at one yaw are not an alternative to the actual
