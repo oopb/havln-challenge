@@ -253,21 +253,24 @@ def _project_navigation_memory(memory, live_depth):
     # finding (e.g. "no reader identifiable"). Keep the typed target
     # verdicts from each REAL RGB view, independently of the short summary.
     # False is NOT evidence the person is absent: only not visible here.
-    memory['observation_tasks']=[
-        dict(_small(item,(
+    memory['observation_tasks']=[]
+    for item in tasks[-2:]:
+        compact=_small(item,(
             'observation_task_id','objective','outcome',
             'end_observation_id','observation_summary',
             'navigation_suggestion'),
             {'objective':180,'observation_summary':220,
-             'navigation_suggestion':240}),
-            target_visibility_checks=[
-                _small(view,('observation_id','target_type',
-                             'target_visible','confidence'))
-                for view in (item.get('selected_views') or [])[-3:]
-                if view.get('target_type') is not None
-                and isinstance(view.get('target_visible'),bool)],
-            target_not_visible_is_not_proven_absent=True)
-        for item in tasks[-2:]]
+             'navigation_suggestion':240})
+        checks=[
+            _small(view,('observation_id','target_type',
+                         'target_visible','confidence'))
+            for view in (item.get('selected_views') or [])[-3:]
+            if view.get('target_type') is not None
+            and isinstance(view.get('target_visible'),bool)]
+        if checks:
+            compact['target_visibility_checks']=checks
+            compact['target_not_visible_is_not_proven_absent']=True
+        memory['observation_tasks'].append(compact)
     routes=memory.get('candidate_route_hypotheses') or []
     memory['candidate_route_hypotheses']=[
         _small(item,(
