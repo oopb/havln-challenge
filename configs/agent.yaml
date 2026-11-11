@@ -10,7 +10,7 @@ navigation_agent:
   model: ${NAVIGATION_AGENT_MODEL}
   response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
   reasoning: medium  # Adaptive Chat Completions reasoning effort; wire format is negotiated.
-  temperature: 0
+  temperature: null  # Provider default; reasoning models may reject an explicit 0.
   timeout_seconds: 120
   max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
   max_tokens: 12000
@@ -22,7 +22,7 @@ visual_perception:
   model: ${VISUAL_PERCEPTION_MODEL}
   response_format: json_object
   reasoning: medium
-  temperature: 0
+  temperature: null  # Provider default; reasoning models may reject an explicit 0.
   timeout_seconds: 120
   max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
   max_tokens: 12000

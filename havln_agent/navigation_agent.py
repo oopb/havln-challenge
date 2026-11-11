@@ -11,9 +11,11 @@ from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
 from .heading import signed_turn
 from .model_angles import project_model_angles
+from .contracts import normalize_navigation_route_update
 
 MISSION_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
+    "Before EVERY decision carefully interpret the COMPLETE original instruction as an ordered route: starting action, temporal conditions (BEFORE/AFTER/UNTIL), directional reference (relative to the staircase approach or named junction, NOT automatically to the current camera), route continuation, and distinctive final destination evidence. Distinguish required steps from illustrative landmarks ('might notice' is not a required waypoint). Identify the pending clause and explain in decision_analysis how the proposed action advances it; do not replace the instruction with the latest room you happen to see. "
     "Read mission_evidence_v1, current RGB, source-linked history and motion receipts. The latest progress.narrative is a MODEL hypothesis, not verified completion. "
     "The FIRST image is CURRENT RGB. History media gives signed relative offsets for views, not executable bearings from old stances; re-ground all movement in live RGB. "
     "Choose turn_direction LEFT, RIGHT, or NONE relative to the CURRENT robot camera plus nonnegative turn_degrees (NONE=0). LEFT means the left side of CURRENT RGB; RIGHT means right. Never calculate an absolute target heading for a motor turn. Pitch uses look=up/down/none separately. "
@@ -27,7 +29,8 @@ MISSION_PROMPT=(
     "Commanded distance (0.25..3m) is a finite set of atomic forward steps, NOT measured displacement, stair descent or arrival. In stable visible corridors the model may choose a longer short cruise; in crowds, steps or uncertainty choose a shorter move or purposeful observation. There is no metric x/y/z, proven loop closure or confirmed height change. "
     "Use relative turn_direction plus turn_degrees in BOTH turn_and_observe and navigate_relative. Pure TURN/LOOK uses turn_and_observe; navigate_relative needs distance_m>=0.25. Camera pitch limits are recoverable; read camera_controls.allowed_look_now. "
     "When multiple plausible ROOM entrances exist and the instruction names a distinctive occupant/activity (e.g. a person reading), retain the alternatives. Compare their actual interiors from safe doorway viewpoints, moving between entrances if useful and invoking observe_for_goal only for unresolved visual questions. A chair or threshold alone does not identify the room; target NOT_VISIBLE is uncertainty, not proven absence. If one room remains unconfirmed while another plausible entrance is unchecked, inspect the other instead of request_finish(success). Do not demand extra scans if destination identity is already supported. "
-    "Keep progress revisable; commands do not prove arrival. At a meaningful stair exit OR multi-room fork, use route_reference_update with the REAL source frame and ORIGINAL instruction-relative relation; add the tried wrong/unconfirmed branch with its own evidence frame. On return compare saved fork RGB with live RGB; never reuse an old view as a motor turn or invent loop closure. Only request_finish success with evidence for the actual FINAL destination. "
+    "Distinguish the chosen SEMANTIC route/doorway from the next CAMERA-RELATIVE motor turn. 'Turn left after descending' selects a route relative to the DESCENT approach; it does NOT command a blind 90-degree turn into a wall. A temporary opposite turn to avoid a wall or align with a doorway is fine, but keep the selected entrance as the goal unless newly observed, cited evidence contradicts it. At each fork compare openings with the original ordered instruction, not just visual openness. "
+    "Keep progress revisable; commands do not prove arrival. At a meaningful stair exit OR multi-room fork, use route_reference_update with a REAL saved RGB source_observation_id and instruction_relation explaining the ORIGINAL instruction-relative choice, plus optional place_description and evidence_status. Record a failed/unconfirmed branch with route_attempt_outcome AND its real outcome_observation_id. This is an optional memory annotation, not another tool or motion authorization. Later compare saved source RGB with live RGB to continue the chosen route or explicitly revise it with evidence; never turn an old view offset into a motor bearing or invent loop closure. Only request_finish success with direct evidence for the actual FINAL destination. "
     "Output source-grounded observed_evidence first, concise decision_analysis next, and tool and args LAST. They alone execute. Return one legal registered tool; describe the short evidence and action rationale, not private internal chain-of-thought."
 )
 
@@ -186,9 +189,14 @@ class NavigationAgent:
         # Projection is read-only and runs AFTER all source frames are linked.
         context=project_model_angles(
             context,math.degrees(r.motion_controller.pose()['heading']))
+        # IDs come from immutable sensor records; optional memory annotations
+        # never block a valid tool decision when they are malformed.
+        known_ids={o['observation_id'] for o in r.memory.observations}
         proposal=r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
-            schema,validate=validate,image_url=images,
+            schema,validate=validate,
+            normalize=lambda result: normalize_navigation_route_update(result,known_ids),
+            image_url=images,
             format_retry=int(bool(format_feedback)),retry_safe=True,
             protocol=compact_navigation_protocol(tools),
             validation_schema=navigation_envelope(tools))

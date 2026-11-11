@@ -113,11 +113,12 @@ class MemoryRecords:
                        source_observation_id=source_id,
                        reason='unverified_source_or_outcome_observation')
             return None
+        # Only the cited source frame and its instruction-relative meaning
+        # are essential. Missing optional prose cannot invalidate an anchor.
         description=str(update.get('place_description') or '').strip()[:180]
         relation=str(update.get('instruction_relation') or '').strip()[:300]
-        status=update.get('evidence_status')
-        if not description or not relation or status not in (
-                'candidate','supported','contradicted'):
+        status=update.get('evidence_status') or 'candidate'
+        if not relation or status not in ('candidate','supported','contradicted'):
             return None
         reference=next((item for item in self.route_references
                         if item['source_observation_id']==source_id),None)
@@ -159,7 +160,7 @@ class MemoryRecords:
                     approach['pose']['heading'])%360,2) if approach else None,
                 approach_observation_id=approach_before,
                 approach_direction_is_historical_executed_forward_only=True,
-                place_description=description,
+                place_description=description or ('route at '+source_id),
                 instruction_relation=relation,
                 evidence_status=status,
                 evidence_scope='model_hypothesis_not_verified_arrival',
@@ -168,9 +169,14 @@ class MemoryRecords:
             self.route_references.append(reference)
             changed=True
         else:
-            for key,value in (('place_description',description),
-                              ('instruction_relation',relation),
-                              ('evidence_status',status)):
+            # An absent optional description or confidence must not overwrite
+            # a previously source-grounded label or stronger assessment.
+            revisions=[('instruction_relation',relation)]
+            if description:
+                revisions.append(('place_description',description))
+            if update.get('evidence_status') is not None:
+                revisions.append(('evidence_status',status))
+            for key,value in revisions:
                 if reference[key]!=value:
                     reference[key]=value
                     changed=True

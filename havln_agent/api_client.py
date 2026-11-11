@@ -345,8 +345,11 @@ def model_endpoints(settings):
                 or not math.isfinite(config['timeout_seconds']) or config['timeout_seconds']<=0
                 or type(config['max_retries']) is not int or not 0<=config['max_retries']<=5
                 or type(config['max_tokens']) is not int or config['max_tokens']<1
-                or not isinstance(config['temperature'],(int,float)) or isinstance(config['temperature'],bool)
-                or not math.isfinite(config['temperature']) or not 0<=config['temperature']<=2):
+                or (config['temperature'] is not None and (
+                    not isinstance(config['temperature'],(int,float))
+                    or isinstance(config['temperature'],bool)
+                    or not math.isfinite(config['temperature'])
+                    or not 0<=config['temperature']<=2))):
             raise ValueError('Invalid API model, timeout or retries')
     return chain
 
@@ -626,7 +629,9 @@ class APIClient:
             request_metrics['system_chars'] = len(messages[0]['content'])
             request_metrics['schema_channels'] = ['system_fallback']
             request_metrics['native_schema_chars'] = 0
-        if not learned_params.get('omit_temperature', False):
+        # None means intentionally omit this optional parameter from the very
+        # first request. Keep endpoint-specific 400 negotiation for other models.
+        if config['temperature'] is not None and not learned_params.get('omit_temperature', False):
             body['temperature'] = config['temperature']
         body[token_field] = config['max_tokens']
         requested_reasoning = config.get('reasoning')
@@ -770,16 +775,21 @@ class APIClient:
                         purpose=='vlm_guided_observation'))
                 if normalization:
                     record['response_normalization'] = normalization
-                errors = list(validator.iter_errors(result))
-                structural = errors
-                if structural:
-                    raise specific_schema_error(structural[0])
+                # A narrowly scoped, pure normalization may repair OPTIONAL
+                # assessment metadata before envelope validation. The final
+                # registered tool schema still validates every executable arg.
+                # Never infer or normalize movement commands.
                 if normalize is not None:
                     original = result
                     result = normalize(result)
                     if result != original:
                         self.normalizations += 1
                         record['repair_result'] = 'locally_normalized'
+                        record['optional_assessment_normalized'] = (
+                            role == 'navigation_agent')
+                errors = list(validator.iter_errors(result))
+                if errors:
+                    raise specific_schema_error(errors[0])
                 # A navigation-specific validator reports the exact bad
                 # tool parameter before the generic tagged-union schema
                 # produces an unhelpful top-level oneOf error. It still

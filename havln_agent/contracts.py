@@ -143,8 +143,73 @@ _PROGRESS=dict(
             evidence_status=dict(enum=['candidate','supported','contradicted']),
             route_attempt_outcome=dict(type='string',minLength=1,maxLength=300),
             outcome_observation_id=dict(type='string',minLength=1,maxLength=64)),
-        required=['source_observation_id','place_description',
-                  'instruction_relation','evidence_status']))
+        # The source frame and original instruction relation are the only
+        # essential facts. Labels and candidate confidence may be omitted.
+        required=['source_observation_id','instruction_relation']))
+
+
+def normalize_navigation_route_update(decision, known_observation_ids=None):
+    """Normalize optional *descriptive* route metadata, never motor actions.
+
+    Some JSON-object providers paraphrase route-reference field names even
+    while returning a valid tool decision. Canonicalize a small set of
+    semantically equivalent names observed in real Phase 2 diagnostics.
+    Discard an ungrounded/ambiguous OPTIONAL reference rather than forcing
+    another paid completion or fabricating a waypoint. This does not bypass
+    the registered executable tool schema.
+    """
+    if not isinstance(decision, dict) or 'route_reference_update' not in decision:
+        return decision
+    original=decision['route_reference_update']
+    output=dict(decision)
+    if not isinstance(original, dict):
+        output.pop('route_reference_update', None)
+        return output
+
+    def choose(*names):
+        values=[original.get(k) for k in names
+                if isinstance(original.get(k), str) and original[k].strip()]
+        if not values or len(set(values)) != 1 and len(names)>1 and (
+                names[0] in original and names[1] in original):
+            # Conflicting explicit canonical/alias facts are not repairable.
+            return None
+        return values[0].strip()
+
+    source=choose('source_observation_id')
+    relation=choose('instruction_relation','instruction_relative_relation')
+    if (not source or len(source)>64 or not relation or len(relation)>300
+            or (known_observation_ids is not None
+                and source not in known_observation_ids)):
+        output.pop('route_reference_update', None)
+        return output
+
+    normalized=dict(source_observation_id=source,instruction_relation=relation)
+    description=choose('place_description','junction_description','description')
+    if description and len(description)<=180:
+        normalized['place_description']=description
+    status=original.get('evidence_status')
+    if status in ('candidate','supported','contradicted'):
+        normalized['evidence_status']=status
+    else:
+        normalized['evidence_status']='candidate'
+
+    attempt=original.get('tried_route')
+    # Explicit canonical outcome takes precedence; otherwise recover a
+    # single cited trial, never flatten an ambiguous list of alternatives.
+    outcome=original.get('route_attempt_outcome')
+    outcome_id=original.get('outcome_observation_id')
+    if not isinstance(outcome,str) and isinstance(attempt,dict):
+        outcome=attempt.get('outcome') or attempt.get('description')
+        outcome_id=attempt.get('outcome_observation_id')
+    if (isinstance(outcome,str) and outcome.strip()
+            and len(outcome.strip())<=300
+            and isinstance(outcome_id,str) and len(outcome_id)<=64
+            and (known_observation_ids is None
+                 or outcome_id in known_observation_ids)):
+        normalized['route_attempt_outcome']=outcome.strip()
+        normalized['outcome_observation_id']=outcome_id
+    output['route_reference_update']=normalized
+    return output
 
 def navigation_schema(tools):
     branches=[]
@@ -188,11 +253,16 @@ def compact_navigation_protocol(tools):
         'each item should be concise (max 600 characters); '
         '(2) optional progress_narrative/navigation_intent/uncertainties/'
         'evidence_observation_ids/route_reference_update: revisable model '
-        'assessments; route_reference_update cites a REAL historical RGB '
-        'observation, binds an instruction-relative junction or stair exit '
-        'to that source view, and optionally records a tried route outcome '
-        'with its actual outcome_observation_id; never output absolute yaw '
-        'or a motor turn in this record; '
+        'assessments; optional route_reference_update MUST use JSON keys '
+        'source_observation_id (real RGB ID), instruction_relation (the '
+        'ORIGINAL instruction-relative direction/landmark), optional '
+        'place_description, evidence_status (candidate|supported|contradicted), '
+        'and optional route_attempt_outcome with outcome_observation_id. '
+        'Example: {"source_observation_id":"obs_0028",'
+        '"instruction_relation":"LEFT of stair DESCENT approach",'
+        '"place_description":"stair exit junction",'
+        '"evidence_status":"candidate"}. Never output a motor turn or '
+        'world yaw in this reference; '
         '(3) decision_analysis: concise evidence-based explanation of '
         'the next navigation choice, including current-vs-historical '
         'heading and obstacle uncertainty where relevant; '

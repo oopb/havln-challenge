@@ -405,7 +405,12 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
     # progress narrative and stale camera-relative navigation intent.
     # Historical headings remain internal and are rebased by model_angles.
     route_references=[]
-    for reference in reversed(getattr(memory,'route_references',[]) or []):
+    # Preserve the original junction when subsequent exploratory forks are
+    # added; otherwise newest-first truncation silently loses the route root.
+    saved_references=getattr(memory,'route_references',[]) or []
+    reference_order=([saved_references[0]] + list(reversed(saved_references[1:]))
+                     if saved_references else [])
+    for reference in reference_order:
         source_id=reference.get('source_observation_id')
         if source_id not in by_id:
             continue

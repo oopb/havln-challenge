@@ -248,18 +248,24 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
     # Keep the original junction/stair-exit RGB accessible when returning
     # from a failed route. Do not infer that the current stance is the same:
     # this is a HISTORICAL view, never a computed turn or localization result.
-    for reference in reversed(getattr(memory,'route_references',[]) or []):
-        identifier=reference.get('source_observation_id')
-        if identifier in by_id:
-            offer(identifier,'instruction_relative_route_reference')
-            if max_pairs>=3:
-                offer(reference.get('approach_observation_id'),
-                      'stair_exit_approach_view_reference')
-            if max_pairs>=5:
-                for attempt in (reference.get('route_attempts') or [])[-1:]:
-                    offer(attempt.get('evidence_observation_id'),
-                          'route_attempt_result_reference')
-            break
+    references=getattr(memory,'route_references',[]) or []
+    if references:
+        # Keep the first instruction-relative route choice and the newest
+        # local fork visible together. Historical views are never motor turns.
+        root=references[0]
+        offer(root.get('source_observation_id'),
+              'instruction_relative_route_reference')
+        if max_pairs>=3:
+            offer(root.get('approach_observation_id'),
+                  'stair_exit_approach_view_reference')
+        latest=references[-1]
+        if latest is not root and max_pairs>=3:
+            offer(latest.get('source_observation_id'),
+                  'recent_route_reference')
+        if max_pairs>=5:
+            for attempt in (latest.get('route_attempts') or [])[-1:]:
+                offer(attempt.get('evidence_observation_id'),
+                      'route_attempt_result_reference')
     # Reserve actual before/after photos of executed motion, but do not let
     # a long kitchen detour displace the source image of a critical junction.
     # Earlier repeated views at one yaw are not an alternative to the actual
