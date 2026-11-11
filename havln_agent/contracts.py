@@ -48,10 +48,12 @@ def registry(camera, max_actions, pitch_deg=0.):
         ('objective',))
     specs={
         'observe_for_goal':(
-            'Ask Observation Agent in natural language what to look for to advance the ENTIRE mission; '
-            'it receives full instruction and narrative progress, current RGB-D, relevant movement '
-            'history and retains the full RGB-D conversation within this observation session. '
-            'It returns observations and optional waypoint proposals, NEVER a task-completion verdict.',
+            'Ask Observation Agent a specific route-critical question for the entire mission. '
+            'It sees current RGB-D, source-linked history and prior frames from the same '
+            'observation session. For competing room entrances, ask whether a distinctive '
+            'person/activity is actually visible; furniture or a doorway is not proof of '
+            'the requested room. It cannot walk to another room, choose movement or '
+            'certify task completion.',
             observe),
         'navigate_relative':(
             'Move along one model-chosen finite relative segment (up to 3m). '
@@ -101,8 +103,10 @@ def registry(camera, max_actions, pitch_deg=0.):
             'Inspect a specific saved sensor/observation/tool evidence record by ID.',
             object_schema(dict(record_id=TEXT))),
         'request_finish':(
-            'Request STOP for whole-mission success (only with direct current evidence of final arrival), '
-            'or abort. The independent official scorer determines whether the episode was successful.',
+            'Request STOP for whole-mission success only with current evidence of the '
+            'actual FINAL destination, or abort. For a room distinguished by an occupant '
+            'or activity, reaching one furnished doorway while another plausible room '
+            'is unchecked does not establish the correct room. Official scoring is external.',
             object_schema(dict(outcome=dict(enum=['success','aborted']),evidence=dict(TEXT,minLength=1)))),
     }
     return {name:dict(description=desc,parameters=params,
