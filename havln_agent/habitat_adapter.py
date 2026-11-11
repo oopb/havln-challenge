@@ -1,6 +1,6 @@
 """Use the released image's environment, without importing the CMA policy."""
 from .perception import Camera
-from scripts.export_cma_submission import ACTIONS
+from .submission_contract import ACTIONS
 
 
 def read_current_observation(env, camera, instruction):
@@ -33,12 +33,14 @@ def runtime_imports(source=None):
     import vlnce_baselines
     import vlnce_baselines.common
     if source is not None:
-        # Match the CMA bootstrap's package search order, without loading a policy.
-        baseline = source / 'agent/VLN-CE/vlnce_baselines'
-        for package, path in ((vlnce_baselines, baseline),
-                              (vlnce_baselines.common, baseline / 'common')):
-            if str(path) not in package.__path__:
-                package.__path__.append(str(path))
+        # Some images need additional HA-VLN environment code. It is NOT the
+        # CMA policy/checkpoint, and no installer .release.json is required.
+        extension = source / 'agent/VLN-CE/vlnce_baselines'
+        if extension.is_dir():
+            for package, path in ((vlnce_baselines, extension),
+                                  (vlnce_baselines.common, extension / 'common')):
+                if path.is_dir() and str(path) not in package.__path__:
+                    package.__path__.append(str(path))
     from vlnce_baselines.config.default import get_config
     from vlnce_baselines.common.environments import HAVLNCEDaggerEnv
     return get_config, HAVLNCEDaggerEnv

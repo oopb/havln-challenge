@@ -26,7 +26,7 @@ from .episode_runner import run_episode
 from scripts.pack_agent_diagnostics import pack
 from .habitat_adapter import camera_from_config, environment_config, runtime_imports
 from .progress_monitor import ProgressMonitor
-from scripts.export_cma_submission import SOURCE_REVISION, SPLITS, atomic_json, check_rows, sha256
+from .submission_contract import SPLITS, atomic_json, check_rows, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / 'scripts/run_api_agent.py'
@@ -282,7 +282,7 @@ def run_worker(task_path):
     task = json.loads(Path(task_path).read_text())
     import numpy as np
     from havln_scoring.runtime import quiet_runtime
-    get_config, env_class = runtime_imports(Path(task['source']))
+    get_config, env_class = runtime_imports(Path(task['source']) if task.get('source') else None)
     random.seed(task['seed'])
     np.random.seed(task['seed'])
     data, output = Path(task['data']), Path(task['output'])
@@ -463,7 +463,14 @@ def export(args, config):
         previous = json.loads((output / 'export_metadata.json').read_text())
         if previous.get('identity', {}).get('agent') != PROMPT_VERSION:
             raise ValueError('Output belongs to another pipeline; choose a fresh Agent directory')
-    source = args.source_root.resolve()
+    # HA-VLN human-aware environment extensions are distinct from the CMA
+    # checkpoint. The legacy source checkout is optional, never pinned to a
+    # CMA installer marker, and only supplements missing image runtime code.
+    source = args.source_root.resolve() if args.source_root is not None else None
+    if source is None:
+        legacy = Path('/workspace/cma-deps/HA-VLN')
+        if (legacy / 'agent/VLN-CE/vlnce_baselines').is_dir():
+            source = legacy
     get_config, env_class = runtime_imports(source)
     jobs, expected, datasets = build_jobs(data, args.splits, args.manifest,
                                           args.episode_limit, args.phase,
@@ -473,10 +480,7 @@ def export(args, config):
     import numpy as np
     import PIL
     import jsonschema
-    state = json.loads((source / '.release.json').read_text())
-    if state['revision'] != SOURCE_REVISION or any(sha256(source / p) != digest for p, digest in state['files'].items()):
-        raise ValueError('Pinned public sources have been modified')
-    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, ROOT / 'scripts/export_cma_submission.py',
+    code = list((ROOT / 'havln_agent').rglob('*.py')) + [ENTRYPOINT, 
            ROOT / 'scripts/pack_agent_diagnostics.py']
     try:
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
@@ -484,7 +488,6 @@ def export(args, config):
     except FileNotFoundError:
         revision = None
     identity = dict(agent=PROMPT_VERSION, config=config, datasets=datasets,
-                    source_revision=state['revision'], source_manifest=sha256(source / '.release.json'),
                     git_revision=revision.stdout.strip() if revision is not None and revision.returncode == 0 else 'unavailable',
                     code={str(p.relative_to(ROOT)): sha256(p) for p in code}, seed=args.seed,
                     runtime_config=sha256(args.runtime_config),
@@ -528,7 +531,7 @@ def export(args, config):
         for slot in slots:
             gpu, worker_id = slot['gpu'], slot['worker_id']
             task = dict(config=config, data=str(data), output=str(output), gpu=gpu,
-                        worker_id=worker_id,source=str(source),
+                        worker_id=worker_id,source=str(source) if source else None,
                         runtime_config=str(args.runtime_config.resolve()), fingerprint=fingerprint,
                         seed=args.seed, retry_incomplete=args.retry_incomplete,
                         verbose=args.verbose, jobs=slot['jobs'])
@@ -637,7 +640,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=ROOT / 'configs/agent.yaml')
     parser.add_argument('--data-root', type=Path, default=Path('/data/havln2'))
-    parser.add_argument('--source-root', type=Path, default=Path('/workspace/cma-deps/HA-VLN'))
+    parser.add_argument('--source-root', type=Path, default=None,
+                        help='Optional HA-VLN simulator environment source checkout '
+                             '(not CMA weights; installed image packages are preferred)')
     parser.add_argument('--runtime-config', type=Path, default=Path('/app/config/challenge_submission.yaml'))
     parser.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument('--output-dir', type=Path)

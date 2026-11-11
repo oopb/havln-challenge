@@ -14,7 +14,7 @@ import zipfile
 
 # Allow direct invocation via python /toolkit/scripts/merge_phase2_submissions.py.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.export_cma_submission import check_rows
+from havln_agent.submission_contract import check_rows
 
 TOTAL = 3408
 ALL_IDS = [str(i) for i in range(1, TOTAL + 1)]
