@@ -336,6 +336,28 @@ worker shards and filenames.
 `worker-<ID>.progress.json` and the per-episode
 `api-inflight.json` are small live state markers, not proof of task success.
 
+### Phase 2: run a fixed range of original Test Episode IDs
+
+For the 3,408-episode Phase 2 Test split, use a **1-based** `--episode-start`
+together with `--episode-limit`. For example, this runs IDs **101–200**
+without renumbering them:
+
+```bash
+python /toolkit/scripts/run_api_agent.py \
+  --phase phase2 --episode-start 101 --episode-limit 100 \
+  --max-steps 500 --gpu-ids 0 --batch 4 \
+  --output-dir /workspace/agent-runs/phase2-batch-002
+```
+
+The last 100-episode batch starts at ID 3401 and automatically contains
+only eight episodes. Each range uses its **own output directory** and writes
+`test.diagnostic.json`; it cannot be submitted alone. Re-running the same
+range in the same directory reuses completed episodes (pass
+`--retry-incomplete` only when intentionally retrying incomplete API work).
+`--assemble-only` reconstructs **one directory's** shards, not several
+independent range runs. Cross-directory Phase 2 submission merging is not
+implemented by the API Agent exporter.
+
 
 ## 🚀 Getting Started
 
