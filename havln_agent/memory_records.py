@@ -705,6 +705,7 @@ class MemoryRecords:
             observation_searches=copy.deepcopy(self.observation_searches),
             navigation_turns=copy.deepcopy(self.navigation_turns),
             route_candidates=copy.deepcopy(self.route_candidates),
+            route_references=copy.deepcopy(self.route_references),
             latest_motion_receipt=copy.deepcopy(self.latest_motion_receipt),
             visual_changes=self.visual_changes,
             observations=self.observations,
