@@ -134,6 +134,31 @@ class Phase2RouteReference(unittest.TestCase):
         five=navigation_visual_anchors(m,'obs_0052',max_pairs=5)
         self.assertIn('obs_0051',[f['observation_id'] for f in five])
 
+    def test_approach_yaw_is_from_last_executed_forward_not_post_turn_camera(self):
+        m=fixture()
+        source=next(o for o in m.observations
+                    if o['observation_id']=='obs_0019')
+        # Stair exit source view may already face a new direction. Preserve
+        # the earlier actual forward orientation as a separate historical
+        # view; it is not a current motor bearing or measured descent.
+        source['step']=19
+        source['pose']['heading']=__import__('math').radians(270)
+        m.note_route_reference(update())
+        ref=m.route_references[0]
+        self.assertEqual(ref['source_heading_deg'],270)
+        self.assertEqual(ref['approach_heading_deg'],225)
+        self.assertEqual(ref['approach_observation_id'],'obs_0018')
+        frames=navigation_visual_anchors(m,'obs_0052',max_pairs=3)
+        self.assertEqual([v['observation_id'] for v in frames[:2]],
+                         ['obs_0019','obs_0018'])
+        wire=project_model_angles(dict(memory=compact_navigation_context(
+            dict(memory=mission_evidence(m,m.current['pose'])))['memory']),45)
+        sent=wire['memory']['instruction_route_references'][0]
+        self.assertEqual(sent['source_view_offset_deg_from_current'],-135)
+        self.assertEqual(sent['historical_approach_view_offset_deg_from_current'],
+                         -180)
+        self.assertNotIn('approach_heading_deg',sent)
+
     def test_invalid_or_unseen_reference_is_not_written(self):
         m=fixture()
         missing=update()
