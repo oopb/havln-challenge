@@ -57,6 +57,9 @@ class TaskMemory:
     evidence_observation_ids: list = field(default_factory=list)
     observed_landmarks: list = field(default_factory=list)
     navigation_intent_anchor: dict = field(default_factory=dict)
+    # Keep positional TaskMemory constructor compatibility with old fields.
+    scene_goal: str = ''
+    scene_goal_source_observation_id: str = ''
 
 
 class MemoryRecords:
@@ -210,6 +213,7 @@ class MemoryRecords:
             if isinstance(o,str) and o in allowed))
         previous=dict(progress_narrative=task.progress_narrative,
                       navigation_intent=task.navigation_intent,
+                      scene_goal=task.scene_goal,
                       uncertainties=list(task.uncertainties))
         changed=False
         for key,maximum in [('progress_narrative',1200),
@@ -220,6 +224,18 @@ class MemoryRecords:
                 if getattr(task,key)!=proposed:
                     setattr(task,key,proposed)
                     changed=True
+        # A model-selected scene goal survives camera changes. It is
+        # qualitative mission memory, never an executable heading or verified
+        # destination. A new goal is grounded in the current sensor record.
+        goal=decision.get('scene_goal')
+        goal_source=(self.current or {}).get('observation_id')
+        if (isinstance(goal,str) and goal.strip()
+                and goal_source in allowed):
+            proposed=goal.strip()[:350]
+            if proposed!=task.scene_goal:
+                task.scene_goal=proposed
+                task.scene_goal_source_observation_id=goal_source
+                changed=True
         if isinstance(decision.get('uncertainties'),list):
             proposed=[v.strip()[:220]
                       for v in decision['uncertainties'][:8]
@@ -274,6 +290,8 @@ class MemoryRecords:
                 prior=previous,
                 progress_narrative=task.progress_narrative,
                 navigation_intent=task.navigation_intent,
+                scene_goal=task.scene_goal,
+                scene_goal_source_observation_id=task.scene_goal_source_observation_id,
                 navigation_intent_anchor=copy.deepcopy(task.navigation_intent_anchor),
                 uncertainties=list(task.uncertainties),
                 evidence_observation_ids=cited,
@@ -752,5 +770,7 @@ class MemoryRecords:
             tool_ledger=self.tool_ledger,
             progress_state=dict(progress_narrative=self.task.progress_narrative,
                 navigation_intent=self.task.navigation_intent,
+                scene_goal=self.task.scene_goal,
+                scene_goal_source_observation_id=self.task.scene_goal_source_observation_id,
                 uncertainties=list(self.task.uncertainties)),
         )
