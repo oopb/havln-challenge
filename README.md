@@ -336,6 +336,20 @@ worker shards and filenames.
 `worker-<ID>.progress.json` and the per-episode
 `api-inflight.json` are small live state markers, not proof of task success.
 
+### API Agent environment dependencies (no CMA checkpoint)
+
+The API Agent uses its navigation/visual API endpoints and the HA-VLN
+human-aware Habitat simulator. It does **not** load the CMA neural checkpoint,
+require `cma-submission`, or require a
+`/workspace/cma-deps/HA-VLN/.release.json` marker. Run metadata now hashes
+the imported environment implementation and runtime configuration directly.
+The container's installed environment packages are used; if the legacy
+HA-VLN environment source directory exists, it can optionally supplement the
+import path. Use `--source-root /path/to/HA-VLN` only when a nonstandard
+runtime source checkout is required. This is **environment code**, not the
+CMA policy/weights. Do not delete the HA-VLN environment libraries or the
+Habitat/MP3D/HAPS simulation assets when removing old CMA checkpoint files.
+
 ### Phase 2: run a fixed range of original Test Episode IDs
 
 For the 3,408-episode Phase 2 Test split, use a **1-based** `--episode-start`
