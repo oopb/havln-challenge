@@ -32,6 +32,8 @@ def inspected_room(observations):
             'A diagonal seam marks the nearby floor threshold between jambs. '
             'The robot appears beside a doorway with chairs in a long narrow '
             'side room, but the entrance position itself is not verified. '
+            'The visible doorway floor continues into the seating area; '
+            'the upholstered furniture occludes much of the room interior. '
             'No seated person reading a magazine is identifiable in any '
             'inspected camera view.'),
         navigation_suggestion=(
