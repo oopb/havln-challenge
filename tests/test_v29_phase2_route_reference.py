@@ -184,6 +184,24 @@ class Phase2RouteReference(unittest.TestCase):
         self.assertFalse(m.route_references)
         self.assertEqual(m.events[-1]['event'],'route_reference_rejected')
 
+    def test_actual_navigation_request_keeps_route_reference_relative_only(self):
+        r,_=test_runtime()
+        r.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        current=r.memory.current['observation_id']
+        reference=update()
+        reference['source_observation_id']=current
+        r.memory.note_navigation_assessment(
+            dict(route_reference_update=reference))
+        r.navigation_agent.decide()
+        payload=r.client.complete.call_args.args[3]
+        refs=payload['memory']['instruction_route_references']
+        self.assertEqual(len(refs),1)
+        self.assertEqual(refs[0]['source_observation_id'],current)
+        self.assertNotIn('source_heading_deg',json.dumps(payload))
+        self.assertEqual(refs[0]['source_view_offset_deg_from_current'],0)
+        self.assertTrue(refs[0][
+            'reference_is_historical_view_not_current_motor_bearing'])
+
     def test_invalid_source_id_is_recoverable_api_format_error(self):
         r,_=test_runtime()
         r.geometry=Mock(return_value=geometry('EXECUTABLE'))
