@@ -20,7 +20,7 @@ _ABSOLUTE_DEG_KEYS={
     'last_heading_deg','heading_at_capture_deg','absolute_heading_deg',
     'goal_heading_deg','target_heading_deg','yaw_deg','source_yaw_deg',
     'current_yaw_deg','absolute_yaw_deg','camera_yaw_deg',
-    'azimuth_deg','absolute_azimuth_deg',
+    'azimuth_deg','absolute_azimuth_deg','approach_heading_deg',
 }
 _ABSOLUTE_RAD_KEYS={'heading','yaw'}  # Only for pose-like structures.
 _ABSOLUTE_BIN_KEYS={'observed_heading_bins_deg','heading_bins_deg',
@@ -44,6 +44,8 @@ def _view_label(key):
         return 'source_view_offset_deg_from_current'
     if key=='heading_at_capture_deg':
         return 'capture_view_offset_deg_from_current'
+    if key=='approach_heading_deg':
+        return 'historical_approach_view_offset_deg_from_current'
     if key.startswith('absolute_') or key.startswith('target_') or key.startswith('goal_'):
         return 'historical_target_offset_deg_from_current'
     return key+'_offset_from_current'

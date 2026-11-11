@@ -269,6 +269,23 @@ def _project_navigation_memory(memory, live_depth):
             'evidence','navigation_suggestion','uncertainty'),
             {'evidence':155,'navigation_suggestion':210,'uncertainty':120})
         for item in routes[:3]]
+    references=memory.get('instruction_route_references') or []
+    memory['instruction_route_references']=[
+        dict(_small(item,('reference_id','source_observation_id',
+            'source_heading_deg','source_stance_id','approach_heading_deg',
+            'approach_observation_id',
+            'approach_direction_is_historical_executed_forward_only',
+            'place_description','instruction_relation','evidence_status',
+            'reference_is_historical_view_not_current_motor_bearing',
+            'completion_verified'),
+            {'place_description':140,'instruction_relation':220}),
+            route_attempts=[
+                _small(a,('evidence_observation_id','assessment','evidence_scope'),
+                       {'assessment':175})
+                for a in (item.get('route_attempts') or [])[-1:]])
+        for item in references[:2]]
+    if not references:
+        memory.pop('instruction_route_references',None)
     history=memory.get('historical_frames') or []
     memory['historical_frames']=[
         _small(item,('observation_id','heading_deg','pitch_deg',
@@ -285,9 +302,15 @@ def _project_navigation_memory(memory, live_depth):
             progress['narrative']=progress['narrative'][:450]
         prior=progress.get('prior_navigation_intent') or {}
         if isinstance(prior,dict):
-            progress['prior_navigation_intent']=_small(prior,(
-                'text','source','relative_direction_valid_for_current_camera',
-                'historical_only'),{'text':240})
+            keys=('source','relative_direction_valid_for_current_camera',
+                  'historical_only')
+            # Once a proper junction reference exists, don't keep repeating
+            # a stale short-term camera instruction such as "align with stairs".
+            # Keep its source and historical marker for audit.
+            if not (references and prior.get('historical_only')):
+                keys=('text',)+keys
+            progress['prior_navigation_intent']=_small(
+                prior,keys,{'text':240})
     return memory
 
 

@@ -394,6 +394,7 @@ class MemoryService(MemoryRecords):
                      context_observation_id=v.get('context_observation_id'),
                      evidence_observation_ids=v.get('evidence_observation_ids'))
                 for v in self.task.progress_history],
+            route_references=copy.deepcopy(getattr(self,'route_references',[])),
             history_scope='complete_causal_episode_timeline_and_source_linked_sensor_index')
 
     def read_memory_record(self, record_id):
@@ -408,6 +409,14 @@ class MemoryService(MemoryRecords):
                 sensor_record=copy.deepcopy(next(o for o in self.observations if o['observation_id']==record_id)),
                 visual_analyses=copy.deepcopy([v for v in self.scene_history if v['source']['observation_id']==record_id]),
                 grounding_ids=[g['grounding_id'] for g in self.groundings if g['source']['observation_id']==record_id])
+        reference=next((v for v in getattr(self,'route_references',[])
+            if v.get('reference_id')==record_id),None)
+        if reference is not None:
+            return dict(detail_requested=True,
+                record=copy.deepcopy(reference),
+                original_visual_frame=reference['source_observation_id'],
+                instruction_relation_is_historical_not_motor_command=True,
+                completion_verified=False)
         candidate=next((v for v in getattr(self,'route_candidates',[])
             if v.get('candidate_id')==record_id),None)
         if candidate is not None:

@@ -77,6 +77,9 @@ class MemoryRecords:
         # Canonical, source-linked hypotheses and real motion receipts.
         # Neither field grants safety clearance or authorizes a move.
         self.route_candidates = []
+        # Source-bound semantic junction/stair-exit hypotheses from the model.
+        # A reference is a past *view*, never localization or a motor command.
+        self.route_references = []
         self.latest_motion_receipt = None
         self.human_max_age_seconds = getattr(self, 'human_max_age_seconds', 2)
         self.current, self.revisits = None, []
@@ -89,6 +92,102 @@ class MemoryRecords:
         entry=dict(event=kind,step=len(self.actions))
         entry.update(data)
         self.events.append(entry)
+
+    def note_route_reference(self, update):
+        """Retain a model-selected instruction-relative route anchor.
+
+        References are keyed by a real source RGB-D frame. An attempted
+        branch outcome is separately linked to its own real evidence frame.
+        Neither an historical orientation nor a model claim is motion proof.
+        """
+        if not isinstance(update, dict):
+            return None
+        by_id={o['observation_id']:o for o in self.observations}
+        source_id=update.get('source_observation_id')
+        source=by_id.get(source_id)
+        outcome_text=str(update.get('route_attempt_outcome') or '').strip()[:300]
+        outcome_id=(update.get('outcome_observation_id')
+                    or (self.current or {}).get('observation_id'))
+        if source is None or (outcome_text and outcome_id not in by_id):
+            self.event('route_reference_rejected',
+                       source_observation_id=source_id,
+                       reason='unverified_source_or_outcome_observation')
+            return None
+        description=str(update.get('place_description') or '').strip()[:180]
+        relation=str(update.get('instruction_relation') or '').strip()[:300]
+        status=update.get('evidence_status')
+        if not description or not relation or status not in (
+                'candidate','supported','contradicted'):
+            return None
+        reference=next((item for item in self.route_references
+                        if item['source_observation_id']==source_id),None)
+        changed=False
+        if reference is None:
+            pose=source.get('pose') or {}
+            # Preserve the real APPROACH orientation separately from the
+            # source camera's yaw, which may have turned near the landing.
+            # Only executed forward receipts before the source view qualify;
+            # they do NOT prove actual descent or location.
+            source_step=source.get('step')
+            approach=None
+            if type(source_step) is int:
+                for action in reversed(self.actions):
+                    step=action.get('step')
+                    if (action.get('action')!='MOVE_FORWARD'
+                            or type(step) is not int or step>source_step):
+                        continue
+                    if source_step-step>12:
+                        break
+                    old_pose=action.get('pose') or {}
+                    old_heading=old_pose.get('heading')
+                    if isinstance(old_heading,(int,float)) and math.isfinite(old_heading):
+                        approach=action
+                        break
+            approach_before=(approach.get('result') or {}).get(
+                'observation_before') if approach else None
+            if approach_before not in by_id:
+                approach_before=None
+            reference=dict(
+                reference_id='route_ref_%04d'%len(self.route_references),
+                source_observation_id=source_id,
+                source_step=source.get('step'),
+                source_stance_id=pose.get('stance_id'),
+                source_heading_deg=round(
+                    math.degrees(pose.get('heading',0))%360,2),
+                source_pitch_deg=pose.get('pitch_deg'),
+                approach_heading_deg=round(math.degrees(
+                    approach['pose']['heading'])%360,2) if approach else None,
+                approach_observation_id=approach_before,
+                approach_direction_is_historical_executed_forward_only=True,
+                place_description=description,
+                instruction_relation=relation,
+                evidence_status=status,
+                evidence_scope='model_hypothesis_not_verified_arrival',
+                instruction_relation_is_historical_not_current_turn=True,
+                route_attempts=[])
+            self.route_references.append(reference)
+            changed=True
+        else:
+            for key,value in (('place_description',description),
+                              ('instruction_relation',relation),
+                              ('evidence_status',status)):
+                if reference[key]!=value:
+                    reference[key]=value
+                    changed=True
+        if outcome_text:
+            attempt=dict(evidence_observation_id=outcome_id,
+                         assessment=outcome_text,
+                         evidence_scope='model_report_not_verified_route_failure')
+            if attempt not in reference['route_attempts']:
+                reference['route_attempts'].append(attempt)
+                changed=True
+        if changed:
+            self.event('route_reference_updated',
+                       reference_id=reference['reference_id'],
+                       source_observation_id=source_id,
+                       latest_outcome_observation_id=outcome_id if outcome_text else None,
+                       instruction_relative_not_motor_command=True)
+        return dict(reference_id=reference['reference_id'],changed=changed)
 
     def note_navigation_assessment(self, decision):
         """Revision log for model assessments, never a verified sensor fact.
@@ -150,6 +249,10 @@ class MemoryRecords:
             if novel_intent and anchor!=task.navigation_intent_anchor:
                 task.navigation_intent_anchor=anchor
                 changed=True
+        reference_update=self.note_route_reference(
+            decision.get('route_reference_update'))
+        if reference_update and reference_update['changed']:
+            changed=True
         new_refs=[]
         for identifier in cited:
             if identifier not in task.evidence_observation_ids:
@@ -169,13 +272,15 @@ class MemoryRecords:
                 uncertainties=list(task.uncertainties),
                 evidence_observation_ids=cited,
                 cited_observation_ids_validated=True,
-                completion_verified=False)
+                completion_verified=False,
+                route_reference_id=(reference_update or {}).get('reference_id'))
             task.progress_history.append(entry)
             # Retain every episode revision for causal navigation history.
             # The model receives a structured projection, not repeated raw
             # prompt texts or duplicated RGB base64 messages.
             self.event('mission_progress_updated',**entry)
         return dict(changed=changed,
+                    route_reference_id=(reference_update or {}).get('reference_id'),
                     evidence_observation_ids=cited,
                     new_evidence_observation_ids=new_refs,
                     context_observation_id=(self.current or {}).get('observation_id'))
@@ -627,6 +732,7 @@ class MemoryRecords:
             observation_searches=copy.deepcopy(self.observation_searches),
             navigation_turns=copy.deepcopy(self.navigation_turns),
             route_candidates=copy.deepcopy(self.route_candidates),
+            route_references=copy.deepcopy(self.route_references),
             latest_motion_receipt=copy.deepcopy(self.latest_motion_receipt),
             visual_changes=self.visual_changes,
             observations=self.observations,

@@ -371,6 +371,29 @@ range in the same directory reuses completed episodes (pass
 `--assemble-only` reconstructs **one directory's** shards, not several
 independent range runs.
 
+### Phase 2: historical stair-exit and junction references
+
+NavigationAgent may add an **optional** `route_reference_update` to the
+existing JSON response at meaningful route decisions (for example, leaving a
+staircase, choosing a foyer branch, or recording that a kitchen corridor did
+not lead to the requested bedroom). Each record cites an actual saved RGB-D
+`source_observation_id` and preserves the **instruction-relative** route
+relationship and any later source-linked trial outcome.
+
+The route reference is a revisable **model interpretation**, not proof that
+the robot finished descending, returned to the same metric position, or
+that an older heading is a valid move command. The original junction image
+takes priority when selecting limited historical RGB slots for replanning.
+NavigationAgent still selects **current-camera-relative** turns and whether
+to move or call ObservationAgent; no verifier, mandatory LOOK/MOVE sequence,
+or rigid stair-completion gate was added.
+
+For a stair exit, the agents are specifically instructed to distinguish a
+distant visible landing from a continuous floor after the last tread and to
+ask a focused visual question only if the evidence is insufficient.
+Older route references remain available through `query_task_memory` and
+`read_memory_record(route_ref_XXXX)`.
+
 ### Phase 2: select completed batches, validate, and merge for submission
 
 Run `scripts/merge_phase2_submissions.py` offline after your selected batches

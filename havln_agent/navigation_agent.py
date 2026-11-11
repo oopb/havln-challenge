@@ -15,18 +15,18 @@ from .model_angles import project_model_angles
 MISSION_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
     "Read mission_evidence_v1, current RGB, source-linked history and motion receipts. The latest progress.narrative is a MODEL hypothesis, not verified completion. "
-    "The FIRST image is CURRENT RGB; history_media.manifest contains signed view offsets from the CURRENT camera (positive LEFT, negative RIGHT) plus historical source pitch/stance. Past view offsets are NOT movement commands across different stances; always re-ground in current RGB. "
+    "The FIRST image is CURRENT RGB. History media gives signed relative offsets for views, not executable bearings from old stances; re-ground all movement in live RGB. "
     "Choose turn_direction LEFT, RIGHT, or NONE relative to the CURRENT robot camera plus nonnegative turn_degrees (NONE=0). LEFT means the left side of CURRENT RGB; RIGHT means right. Never calculate an absolute target heading for a motor turn. Pitch uses look=up/down/none separately. "
-    "Inputs contain no global yaw. View offsets use CURRENT forward=0, LEFT positive/RIGHT negative; old-stance offsets are NOT movement bearings. Choose turns using CURRENT RGB. "
-    "Camera pitch is model-controlled and stays at the chosen angle during forward motion; there is no automatic LOOK_UP or level-camera action. Vertical LOOK is a useful observation, not a movement penalty. The same horizontal heading at a different pitch reveals different information: for nearby floor and stair edges consider LOOK_DOWN; for a distant hallway, doorway or landmark obscured in a down-tilted view consider LOOK_UP. "
+    "No global yaw is provided. View offsets: CURRENT forward=0, LEFT positive, RIGHT negative. "
+    "Camera pitch remains model-controlled during MOVE; no automatic LOOK_UP. Use LOOK_DOWN for near-floor steps and LOOK_UP for distant openings when a downward view hides them. "
     "Choose informative pitch changes, not on a fixed schedule. Use turn_and_observe with look=up/down and no turn when helpful. After checking near-floor steps, consider LOOK_UP for the distant route; LOOK is not translation. "
-    "Call observe_for_goal for a SPECIFIC route-critical question: do CURRENT stair treads rise or descend, or which side of a person has a passage? Compare source-linked before/after observation IDs with current RGB-D; a visible staircase does NOT prove descent. Avoid observation when a route is clear; VLM cannot authorize motion. "
+    "Call observe_for_goal ONLY for a specific unresolved route question. On stairs, distinguish SEEING the distant landing from actually passing the last tread onto continuous flat floor before interpreting 'after descending turn left' as a junction choice. Curved-stair steering while still descending is fine. When uncertain, compare before/after RGB-D or ask VLM whether treads remain ahead; do not demand repeated verification or stall when a safe forward route is visible. VLM cannot authorize motion. "
     "front_depth_preflight: BLOCKED is occupied; CLEAR is not full-route proof; absent means UNKNOWN. If previous_identical_view_forward_rejections>0, identical RGB-D/stance/yaw/pitch already caused a denied forward with ZERO actions executed. Changing only distance_m adds no new evidence; consider a new view, direction or focused observe_for_goal. Every atomic forward rechecks fresh Depth; do not chase CLEAR by turning. "
-    "Read memory.route_continuity: compare source-linked forward actions with earlier model visual claims before concluding the route was never traversed. Opposing yaw suggests a possible return but does NOT prove the same location, vertical motion or completed descent. Read memory.recent_look_evidence for recent LOOK questions, their follow-up visual answers and repeated yaw/pitch bins; prefer acting on already answered evidence over another duplicate view. Use full_coverage_by_pitch to distinguish novel views; turns and LOOK are observations, not forward progress. There is no forced scan or forward rule. "
-    "After a series of executed forward steps, a front wall BLOCKED at the endpoint describes the NEXT step from that stance, not failure of the completed steps. Compare the before/after history RGB before resetting mission progress. If CURRENT RGB shows one plausible continuous passage, with no confirmed front BLOCKED or obvious person/dropoff risk, favor a short model-chosen forward exploration over repeatedly TURN/LOOK to reconfirm an already-seen route; each atomic forward still gets fresh Depth preflight. Multiple competing passages or unclear stair direction justify focused observe_for_goal. Earlier model progress is a hypothesis, not a verified floor level. "
+    "Read memory.route_continuity and recent_look_evidence: compare actual forward receipts and historical RGB against fallible model progress, and avoid repeat LOOK/turn viewpoints. Opposing yaw or similar scenery suggests a possible return, NOT proven same location; no forced scan/forward rule. "
+    "A front BLOCKED after completed forward steps concerns the NEXT step, not those already executed. Prefer short forward exploration when one plausible safe passage remains; use focused observation for ambiguous passages or stairs. Preserve earlier source-linked evidence despite revised model claims. "
     "Commanded distance (0.25..3m) is a finite set of atomic forward steps, NOT measured displacement, stair descent or arrival. In stable visible corridors the model may choose a longer short cruise; in crowds, steps or uncertainty choose a shorter move or purposeful observation. There is no metric x/y/z, proven loop closure or confirmed height change. "
     "Use relative turn_direction plus turn_degrees in BOTH turn_and_observe and navigate_relative. Pure TURN/LOOK uses turn_and_observe; navigate_relative needs distance_m>=0.25. Camera pitch limits are recoverable; read camera_controls.allowed_look_now. "
-    "Keep progress narratives revisable: distinguish visual evidence, actions actually executed and uncertainty. Only request_finish success when CURRENT evidence supports arriving at the FINAL mission destination; scoring is external. "
+    "Keep progress narratives revisable; action receipts prove executed commands, not metric arrival. Use OPTIONAL route_reference_update at a meaningful stair exit/junction: cite a real observation, name the place and ORIGINAL instruction-relative turn (e.g. LEFT OF DESCENT DIRECTION), never a turn from current camera. Later append a tried wrong-branch outcome with its real evidence frame. On return, compare the saved junction RGB with live RGB and re-ground the instruction-relative direction BEFORE choosing a current-camera turn; do not invent loop closure. Only request_finish success with current final-destination evidence. "
     "Output source-grounded observed_evidence first, concise decision_analysis next, and tool and args LAST. They alone execute. Return one legal registered tool; describe the short evidence and action rationale, not private internal chain-of-thought."
 )
 
@@ -164,6 +164,16 @@ class NavigationAgent:
             if not Draft7Validator(schema).is_valid(value):
                 raise APIError('navigation_tool_arguments_violate_registered_schema',
                                category='structured_field')
+            reference=value.get('route_reference_update')
+            if reference is not None:
+                allowed={o['observation_id'] for o in r.memory.observations}
+                if reference['source_observation_id'] not in allowed:
+                    raise APIError('route_reference_unknown_source_observation_id',
+                                   category='structured_field')
+                outcome=reference.get('outcome_observation_id')
+                if outcome is not None and outcome not in allowed:
+                    raise APIError('route_reference_unknown_outcome_observation_id',
+                                   category='structured_field')
             if value['tool'] in ('navigate_relative','turn_and_observe'):
                 args=value['args']
                 try:

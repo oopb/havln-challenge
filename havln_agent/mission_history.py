@@ -396,6 +396,36 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             0,len(memory.actions)-last_motion.get('action_step_finished',0))
         last_motion['current_heading_deg']=round(
             math.degrees(pose.get('heading',0))%360,2)
+    # Stable source-grounded route references survive changes to the latest
+    # progress narrative and stale camera-relative navigation intent.
+    # Historical headings remain internal and are rebased by model_angles.
+    route_references=[]
+    for reference in reversed(getattr(memory,'route_references',[]) or []):
+        source_id=reference.get('source_observation_id')
+        if source_id not in by_id:
+            continue
+        attempts=[dict(
+            evidence_observation_id=a.get('evidence_observation_id'),
+            assessment=str(a.get('assessment') or '')[:240],
+            evidence_scope='model_report_not_verified_route_failure')
+            for a in (reference.get('route_attempts') or [])[-2:]
+            if a.get('evidence_observation_id') in by_id]
+        route_references.append(dict(
+            reference_id=reference.get('reference_id'),
+            source_observation_id=source_id,
+            source_heading_deg=reference.get('source_heading_deg'),
+            approach_heading_deg=reference.get('approach_heading_deg'),
+            approach_observation_id=reference.get('approach_observation_id'),
+            approach_direction_is_historical_executed_forward_only=True,
+            source_stance_id=reference.get('source_stance_id'),
+            place_description=reference.get('place_description'),
+            instruction_relation=reference.get('instruction_relation'),
+            evidence_status=reference.get('evidence_status'),
+            route_attempts=attempts,
+            reference_is_historical_view_not_current_motor_bearing=True,
+            completion_verified=False))
+        if len(route_references)>=3:
+            break
     anchor=copy.deepcopy(getattr(task,'navigation_intent_anchor',{}) or {})
     anchored_source=by_id.get(anchor.get('source_observation_id'))
     source_pose=(anchored_source or {}).get('pose') or {}
@@ -438,6 +468,7 @@ def mission_evidence(memory, pose, max_observation_tasks=4):
             position_coordinates_valid=pose.get('position_coordinates_valid',True)),
         observation_tasks=searches,
         candidate_route_hypotheses=route_candidates,
+        instruction_route_references=route_references,
         last_motion_decision=last_motion,
         historical_frames=selected_history_frames(memory,current_id),
         blocked_at_source_stances=blocked,
