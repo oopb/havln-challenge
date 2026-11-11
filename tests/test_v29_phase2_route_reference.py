@@ -119,6 +119,19 @@ class Phase2RouteReference(unittest.TestCase):
         self.assertIn('garage',projected['route_attempts'][0]['assessment'])
         self.assertNotIn('target_heading_deg',json.dumps(wire))
 
+    def test_old_camera_navigation_intent_does_not_replace_junction_reference(self):
+        m=fixture()
+        m.task.navigation_intent='Align with stair opening and begin descent.'
+        m.task.navigation_intent_anchor=dict(
+            source_observation_id='obs_0012',source_heading_deg=225)
+        m.note_route_reference(update())
+        full=mission_evidence(m,m.current['pose'])
+        self.assertTrue(full['progress']['prior_navigation_intent']['historical_only'])
+        compact=compact_navigation_context(dict(memory=full))['memory']
+        self.assertNotIn('text',compact['progress']['prior_navigation_intent'])
+        self.assertEqual(compact['instruction_route_references'][0][
+            'source_observation_id'],'obs_0019')
+
     def test_historical_junction_frame_precedes_kitchen_detour_frame(self):
         m=fixture()
         baseline=navigation_visual_anchors(m,'obs_0052',max_pairs=3)
