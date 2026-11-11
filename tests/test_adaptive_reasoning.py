@@ -189,6 +189,10 @@ class AdaptiveReasoningTests(unittest.TestCase):
             "Unsupported value: medium for reasoning_effort", 'reasoning_effort'))
         self.assertFalse(unsupported_reasoning_parameter(
             "Unknown parameter: 'temperature'.", 'reasoning_effort'))
+        self.assertTrue(unsupported_reasoning_parameter(
+            json.dumps({'error': {'param': None,
+                                   'message': "Unknown parameter: 'reasoning_effort'."}}),
+            'reasoning_effort'))
 
 
 if __name__ == '__main__':
