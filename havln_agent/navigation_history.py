@@ -252,6 +252,9 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
         identifier=reference.get('source_observation_id')
         if identifier in by_id:
             offer(identifier,'instruction_relative_route_reference')
+            if max_pairs>=3:
+                offer(reference.get('approach_observation_id'),
+                      'stair_exit_approach_view_reference')
             if max_pairs>=5:
                 for attempt in (reference.get('route_attempts') or [])[-1:]:
                     offer(attempt.get('evidence_observation_id'),
