@@ -191,7 +191,7 @@ class NavigationAgent:
         proposal=r.client.complete(
             'navigation_agent','navigation_decision',MISSION_PROMPT,context,
             schema,validate=validate,
-            normalize=lambda result: normalize_navigation_route_update(result,known_ids),
+            pre_normalize=lambda result: normalize_navigation_route_update(result,known_ids),
             image_url=images,
             format_retry=int(bool(format_feedback)),retry_safe=True,
             protocol=compact_navigation_protocol(tools),

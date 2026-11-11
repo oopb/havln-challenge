@@ -107,7 +107,7 @@ class Phase2InstructionRouteReliability(unittest.TestCase):
                 navigation_schema(tools),
                 validation_schema=navigation_envelope(tools),
                 protocol=compact_navigation_protocol(tools),
-                normalize=lambda x: normalize_navigation_route_update(
+                pre_normalize=lambda x: normalize_navigation_route_update(
                     x,{'obs_0019'}))
             self.assertEqual(client.calls,1)
             self.assertEqual(result['args'],raw['args'])
@@ -134,11 +134,13 @@ class Phase2InstructionRouteReliability(unittest.TestCase):
         self.assertEqual(frames[0]['observation_id'],'obs_0019')
 
     def test_instruction_analysis_preserves_model_autonomy(self):
-        self.assertIn('COMPLETE instruction as an ordered route',MISSION_PROMPT)
-        self.assertIn('BEFORE/AFTER/UNTIL',MISSION_PROMPT)
-        self.assertIn('not necessarily the current camera',MISSION_PROMPT)
-        self.assertIn('SEMANTIC route/doorway',MISSION_PROMPT)
-        self.assertIn('An opposite local turn',MISSION_PROMPT)
+        # Revert to Phase 2 early action-first prompt while preserving only
+        # critical route grounding and transient-human evidence semantics.
+        self.assertIn('Complete the ORIGINAL full navigation instruction',MISSION_PROMPT)
+        self.assertIn('favor a short model-chosen forward exploration',MISSION_PROMPT)
+        self.assertIn('people can move, appear or leave',MISSION_PROMPT)
+        self.assertIn('route_reference_update',MISSION_PROMPT)
+        self.assertNotIn('BEFORE/AFTER/UNTIL',MISSION_PROMPT)
         self.assertNotIn('must immediately turn LEFT',MISSION_PROMPT)
         self.assertLess(len(MISSION_PROMPT),5000)
 
