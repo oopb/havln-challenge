@@ -221,7 +221,6 @@ def decode_response(content, allow_identical_duplicates=False):
                                              'unique_embedded_json_container')
 
 
-
 REASONING_LEVELS = frozenset(('none', 'minimal', 'low', 'medium', 'high', 'xhigh'))
 
 
@@ -248,7 +247,7 @@ def unsupported_reasoning_parameter(detail, field):
         error = {}
     message = str(error.get('message', detail)).lower()
     code = str(error.get('code', '')).lower()
-    param = str(error.get('param', '')).lower()
+    param = str(error.get('param') or '').lower()
     if param and param != field:
         return False
     if field not in message and param != field:
