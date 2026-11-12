@@ -356,6 +356,7 @@ def _cost_optimized_projection(result):
     and verbose metadata already present in current RGB/history manifest.
     This can also re-project already-logged compact requests for cost audits.
     """
+    result=copy.deepcopy(result)
     memory=result.get('memory')
     if not isinstance(memory,dict):
         return result

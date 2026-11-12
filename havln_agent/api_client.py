@@ -322,8 +322,18 @@ def unsupported_prefix_cache(detail):
         problem=json.loads(detail)
         error=problem.get('error',problem) if isinstance(problem,dict) else {}
         message=str((error or {}).get('message','')).lower()
+        field=str((error or {}).get('param','')).lower()
+        code=str((error or {}).get('code','')).lower()
     except (ValueError,TypeError,AttributeError):
         return False
+    if (('prompt_cache_breakpoint' in field
+         or 'prompt_cache_breakpoint' in message)
+        and (code in ('unknown_parameter','unsupported_parameter',
+                      'extra_forbidden')
+             or any(x in message for x in (
+                 'unknown','unsupported','not allowed',
+                 'unexpected','not permitted')))):
+        return True
     return (('messages[0].content' in message
              or 'messages.0.content' in message)
             and 'string' in message
