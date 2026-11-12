@@ -8,7 +8,7 @@ navigation_agent:
   base_url: ${NAVIGATION_AGENT_BASE_URL}
   api_key_env: NAVIGATION_AGENT_API_KEY
   model: ${NAVIGATION_AGENT_MODEL}
-  response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
+  response_format: auto  # Prefer JSON Schema; negotiate json_object/plain JSON only on explicit rejection.
   prompt_cache: auto  # Explicit stable-prefix caching when supported; 400 fallback once per gateway/model.
   reasoning: low  # Require low-effort reasoning for navigation; no implicit high fallback.
   temperature: null  # Provider default; reasoning models may reject an explicit 0.
@@ -22,7 +22,7 @@ visual_perception:
   base_url: ${VISUAL_PERCEPTION_BASE_URL}
   api_key_env: VISUAL_PERCEPTION_API_KEY
   model: ${VISUAL_PERCEPTION_MODEL}
-  response_format: json_object
+  response_format: auto
   reasoning: low
   temperature: null  # Provider default; reasoning models may reject an explicit 0.
   timeout_seconds: 120
