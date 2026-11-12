@@ -2,10 +2,10 @@
 
 No TaskPlanner calls, indexed milestone review or automatic VERIFY loops.
 """
-from .api_client import APIError,BudgetExceeded
+from .api_client import APIError,BudgetExceeded,canonical
 
 class EvidenceLivenessGuard:
-    """Resource diagnostic only. It never chooses headings or forces STOP."""
+    """Stop evidence-free inference without prescribing a physical action."""
     def __init__(self,runtime):
         self.limit=max(2,int(runtime.config.get(
             'max_unchanged_evidence_decisions',8)))
@@ -13,6 +13,8 @@ class EvidenceLivenessGuard:
             'max_model_decisions',2*runtime.config['max_steps'])))
         self.reference=self.fingerprint(runtime)
         self.actionless_decisions=0
+        self.last_blocked_command=None
+        self.identical_blocked_count=0
 
     @staticmethod
     def fingerprint(runtime):
@@ -29,11 +31,29 @@ class EvidenceLivenessGuard:
             self.actionless_decisions+=1
         return self.actionless_decisions>=self.limit
 
+    def repeated_blocked_command(self,runtime,command,result):
+        """Count identical rejected commands at one unchanged sensor stance."""
+        if (result.get('status')!='BLOCKED'
+                or result.get('reason')!='measured_centerline_obstacle'
+                or result.get('executed_actions')!=0):
+            self.last_blocked_command=None
+            self.identical_blocked_count=0
+            return 0
+        signature=(self.fingerprint(runtime),canonical(command))
+        if signature==self.last_blocked_command:
+            self.identical_blocked_count+=1
+        else:
+            self.last_blocked_command=signature
+            self.identical_blocked_count=1
+        return self.identical_blocked_count
+
     def diagnostic(self,runtime):
         return dict(consecutive_unchanged_decisions=self.actionless_decisions,
             max_unchanged_evidence_decisions=self.limit,
             max_model_decisions=self.max_decisions,
             model_decisions=runtime.decisions,
+            identical_blocked_decisions=self.identical_blocked_count,
+            max_identical_blocked_decisions=3,
             observation_id=(runtime.memory.current or {}).get('observation_id'),
             atomic_actions=len(runtime.memory.actions),
             reason='no_new_RGBD_or_atomic_action',
@@ -46,7 +66,6 @@ FORMAT_ERROR_CATEGORIES=frozenset(
 # bounded recovery below can retry an entire navigation cycle without ever
 # inventing a physical command.
 FORMAT_REGENERATIONS_PER_DECISION=3
-MAX_RECOVERABLE_FORMAT_CYCLES=2
 
 
 def format_repair_feedback(error,context):
@@ -103,7 +122,6 @@ def request(runtime,role,operation,append):
 def run(runtime,append):
     runtime.start_mission()
     liveness=EvidenceLivenessGuard(runtime)
-    consecutive_format_failures=0
     while not runtime.done:
         if runtime.decisions>=liveness.max_decisions:
             runtime.navigation_liveness=liveness.diagnostic(runtime)
@@ -145,7 +163,6 @@ def run(runtime,append):
             # Only the registered executable command reaches ToolExecutor.
             command=dict(tool=proposal['tool'],args=proposal['args'])
             result=runtime.execute(command,binding)
-            consecutive_format_failures=0
             runtime.memory.note_navigation_turn(
                 proposal,result,binding.get('observation_id'),
                 turn_start_step,runtime.current_decision_id)
@@ -156,36 +173,22 @@ def run(runtime,append):
             runtime.assess(result)
             if runtime.done:
                 continue
-            repeated=liveness.feedback(runtime)
+            unchanged=liveness.feedback(runtime)
+            identical=liveness.repeated_blocked_command(runtime,command,result)
             runtime.navigation_liveness=liveness.diagnostic(runtime)
-            if repeated:
-                runtime.event('navigation_liveness_advisory',
+            if identical>=2:
+                runtime.event('navigation_repeated_blocked_command',
+                    source='scheduler',diagnostic=runtime.navigation_liveness,
+                    action_executed=False,command=command)
+            if unchanged or identical>=3:
+                runtime.event('navigation_liveness_exhausted',
                     source='scheduler',diagnostic=runtime.navigation_liveness,
                     last_tool=result.get('tool'),last_status=result.get('status'))
+                runtime.terminate('navigation_no_new_evidence')
         except BudgetExceeded:
             runtime.terminate('api_budget_exhausted')
         except APIError as error:
             runtime.api_failure=getattr(error,'request_context',
                 dict(error=str(error),category=error.category))
-            if (error.category in FORMAT_ERROR_CATEGORIES and
-                    runtime.client.availability()=='available' and
-                    consecutive_format_failures<
-                        MAX_RECOVERABLE_FORMAT_CYCLES):
-                # A malformed response is NOT a movement instruction.
-                # Start a new decision from fresh public observation,
-                # bounded by both the API budget and model-decision guard.
-                consecutive_format_failures+=1
-                runtime.decisions+=1
-                liveness.feedback(runtime)
-                runtime.navigation_liveness=liveness.diagnostic(runtime)
-                runtime.event('navigation_format_cycle_recovered',
-                    source='scheduler',
-                    consecutive_failures=consecutive_format_failures,
-                    max_recoverable=MAX_RECOVERABLE_FORMAT_CYCLES,
-                    no_atomic_motion_executed=True)
-                append('navigation_agent',dict(
-                    event='navigation_format_cycle_recovered',
-                    attempt=consecutive_format_failures,
-                    error=runtime.api_failure))
-                continue
+            # request() owns the only bounded format retry budget.
             runtime.terminate('api_error')
