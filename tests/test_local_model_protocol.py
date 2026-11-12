@@ -144,6 +144,19 @@ class LocalModelProtocolTests(unittest.TestCase):
         self.assertEqual(len(sent),2)
         self.assertTrue(full['properties']['evidence_observation_ids']['uniqueItems'])
 
+    def test_schema_projection_does_not_delete_property_names_or_enum_data(self):
+        original=dict(type='object', properties={
+            'uniqueItems':dict(type='string'),
+            'ids':dict(type='array',uniqueItems=True,
+                       items=dict(type='string')),
+            'flags':dict(enum=[{'uniqueItems': True}])})
+        projected=native_generation_schema(original)
+        self.assertIn('uniqueItems',projected['properties'])
+        self.assertNotIn('uniqueItems',projected['properties']['ids'])
+        self.assertEqual(projected['properties']['flags']['enum'],
+                         [{'uniqueItems': True}])
+        self.assertTrue(original['properties']['ids']['uniqueItems'])
+
     def test_exact_local2_grammar_400_downgrades_only_format(self):
         """Replay the actual vLLM 0.33/XGrammar error, including null param."""
         sent=[]
