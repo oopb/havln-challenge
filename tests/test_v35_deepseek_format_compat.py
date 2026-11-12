@@ -47,7 +47,7 @@ def vision_decision():
         'confidence': 'medium',
         'box': None,
         'passage_box': None,
-        'uncertainty': 'Whether the earlier bedroom doorway lies beyond this tiled area is not confirmed. The threshold appears level, but clearance beyond the opening remains uncertain. The moving reader need not be visible in this particular frame.',
+        'uncertainty': 'Whether the earlier bedroom doorway lies beyond this tiled area is not confirmed. The threshold appears level, but clearance beyond the opening remains uncertain. The moving reader need not be visible in this particular frame. Absence of a person is not evidence of a different room; compare the fixed doorway and floor connections from the actual image before changing the route.',
         'navigation_suggestion': 'Observe the bedroom doorway past the foyer.',
         'reason': 'The doorway and floor are visible.',
         'expected_progress': 'ADVANCE',
@@ -177,7 +177,7 @@ class DeepSeekFormatCompatibility(unittest.TestCase):
     def test_visual_verbose_descriptions_preserved(self):
         sample = vision_decision()
         self.assertGreater(len(sample['target_type']), 80)
-        self.assertGreater(len(sample['uncertainty']), 150)
+        self.assertGreater(len(sample['uncertainty']), 300)
         c = self.client(json.dumps(sample))
         self.assertEqual(self.ask_visual(c), sample)
         self.assertEqual(c.calls, 1)
