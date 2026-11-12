@@ -9,6 +9,7 @@ navigation_agent:
   api_key_env: NAVIGATION_AGENT_API_KEY
   model: ${NAVIGATION_AGENT_MODEL}
   response_format: json_object  # DeepSeek Chat Completions; schema checked locally.
+  prompt_cache: auto  # Explicit stable-prefix caching when supported; 400 fallback once per gateway/model.
   reasoning: medium  # Adaptive Chat Completions reasoning effort; wire format is negotiated.
   temperature: null  # Provider default; reasoning models may reject an explicit 0.
   timeout_seconds: 120
@@ -16,6 +17,7 @@ navigation_agent:
   max_tokens: 12000
   fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
 visual_perception:
+  prompt_cache: 'off'  # Quote: YAML 1.1 treats unquoted off as boolean False.
   provider: openai_compatible
   base_url: ${VISUAL_PERCEPTION_BASE_URL}
   api_key_env: VISUAL_PERCEPTION_API_KEY

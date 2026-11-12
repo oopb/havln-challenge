@@ -3,7 +3,7 @@ import math
 from jsonschema import Draft7Validator
 from .contracts import (navigation_schema, compact_navigation_protocol,
                         navigation_envelope)
-from .contexts import navigation_context, compact_navigation_context
+from .contexts import navigation_context, cost_optimized_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
 from .perception import image_url
@@ -27,7 +27,7 @@ MISSION_PROMPT=(
     "Commanded distance (0.25..3m) is nominal atomic steps, NOT measured arrival or stair descent. Cruise farther in stable corridors; shorten steps near crowds, stairs or obstacles. No verified height change or metric robot x/y/z. "
     "Use relative turn_direction plus turn_degrees in BOTH turn_and_observe and navigate_relative. Pure TURN/LOOK uses turn_and_observe; navigate_relative needs distance_m>=0.25. Camera pitch limits are recoverable; read camera_controls.allowed_look_now. "
     "When selecting an instruction-matching scene, set optional scene_goal to its durable SPATIAL target, not a camera turn. Retain across turns/MOVE; change when new positive spatial evidence justifies another scene. Before leaving for a different entrance, compare the ORIGINAL instruction and room/route layout; explain the actual contradiction or better match. A missing moving person or open door alone is insufficient. Turning to observe and evidence-backed backtracking remain allowed. For multiple plausible ROOM entrances compare actual scenes; target NOT_VISIBLE is uncertainty, not room rejection. At a junction optional route_reference_update cites real RGB and instruction-relative branch, not motor turn. Only request_finish success on final-destination evidence. "
-    "Output source-grounded observed_evidence first, concise decision_analysis next, and tool and args LAST. They alone execute. Return one legal registered tool; describe the short evidence and action rationale, not private internal chain-of-thought."
+    "Output 1-2 SHORT source-grounded observed_evidence items (avoid paraphrasing history), then a one-sentence decision_analysis citing why this move advances the goal. Update progress_narrative, scene_goal and route references only when genuinely changed. Put the executable tool and args LAST. Return one legal registered tool; no hidden chain-of-thought."
 )
 
 class NavigationAgent:
@@ -46,7 +46,7 @@ class NavigationAgent:
         state=navigation_context(r)
         if preflight.get('status') in ('CLEAR','BLOCKED'):
             state['front_depth_preflight']=preflight
-        context=compact_navigation_context(state)
+        context=cost_optimized_navigation_context(state)
         # Preserve bounded context, but allow up to five diverse, source-
         # verified historical RGB images for before/after route comparison.
         if format_feedback:
@@ -120,6 +120,18 @@ class NavigationAgent:
                     # Missing historical frame is optional. Current RGB
                     # and v12 text memory are always sufficient to proceed.
                     continue
+            # If an authentic historic RGB is attached, its text catalog
+            # entry is redundant; keep only unmatched source-grounded
+            # descriptions. Never discard the original junction image.
+            indexed={v['observation_id'] for v in manifest[1:]}
+            historical=context['memory'].get('historical_frames') or []
+            if indexed and historical:
+                remaining=[v for v in historical
+                           if v.get('observation_id') not in indexed]
+                if remaining:
+                    context['memory']['historical_frames']=remaining[-1:]
+                else:
+                    context['memory'].pop('historical_frames',None)
             context['history_media']=dict(
                 manifest=manifest,
                 attached_historical_RGB=len(images)-1,

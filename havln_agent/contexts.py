@@ -347,5 +347,170 @@ def compact_navigation_context(state):
         result.pop('liveness_diagnostic',None)
     return result
 
+
+def _cost_optimized_projection(result):
+    """One read-only wire projection; never summarize or rewrite canonical Memory.
+
+    Preserve stable scene goals, original instruction/route anchors, real
+    Depth and failed-motion categories. Remove overlapping interpretations
+    and verbose metadata already present in current RGB/history manifest.
+    This can also re-project already-logged compact requests for cost audits.
+    """
+    result=copy.deepcopy(result)
+    memory=result.get('memory')
+    if not isinstance(memory,dict):
+        return result
+
+    # The original instruction is never shortened. Camera-relative short
+    # steering has its own validity rules; a stable scene goal does not.
+    progress=memory.get('progress')
+    if isinstance(progress,dict):
+        reduced=_small(progress,(
+            'narrative','scene_goal','scene_goal_source_observation_id',
+            'navigation_intent','uncertainties','model_revision_count',
+            'prior_navigation_intent'))
+        prior=reduced.get('prior_navigation_intent')
+        if isinstance(prior,dict):
+            if (prior.get('historical_only') and
+                    (reduced.get('scene_goal') or
+                     memory.get('instruction_route_references'))):
+                reduced.pop('prior_navigation_intent',None)
+            else:
+                reduced['prior_navigation_intent']=_small(prior,(
+                    'text','historical_only',
+                    'relative_direction_valid_for_current_camera'))
+        memory['progress']=reduced
+
+    current=memory.get('current')
+    if isinstance(current,dict):
+        memory['current']=_small(current,(
+            'observation_id','pitch_deg','stance_id','place_id'))
+
+    route=memory.get('route_continuity')
+    if isinstance(route,dict):
+        core=_small(route,(
+            'latest_forward','selected_historical_forward',
+            'separation_from_historical_forward_deg',
+            'endpoint_front_obstacle'))
+        for key in ('latest_forward','selected_historical_forward'):
+            if isinstance(core.get(key),dict):
+                core[key]=_small(core[key],(
+                    'start_observation_id','end_observation_id',
+                    'executed_forward_with_RGBD_change',
+                    'heading_deg','view_offset_deg_from_current'))
+        claims=route.get('model_assessment_snapshots') or []
+        if claims:
+            # Retain BOTH original and newest contradictory visual claims.
+            chosen=[claims[0],claims[-1]] if len(claims)>1 else claims
+            core['model_assessment_snapshots']=[
+                _small(claim,(
+                    'source_observation_id','model_visual_description',
+                    'model_progress_claim','source_heading_deg',
+                    'source_view_offset_deg_from_current'))
+                for claim in chosen]
+        memory['route_continuity']=core
+
+    # Route continuity already carries the salient historical segment and
+    # most recent successful segment; keep only additional recent movement.
+    segments=memory.get('observed_forward_action_segments') or []
+    last=segments[-1] if segments else None
+    if last is not None:
+        selected=(route or {}).get('selected_historical_forward') or {}
+        latest=(route or {}).get('latest_forward') or {}
+        if last.get('end_observation_id') in (
+                selected.get('end_observation_id'),
+                latest.get('end_observation_id')):
+            memory['observed_forward_action_segments']=[]
+        else:
+            memory['observed_forward_action_segments']=[_small(last,(
+                'start_observation_id','end_observation_id',
+                'forward_steps','heading_deg','view_offset_deg_from_current'))]
+
+    coverage=memory.get('recent_views_at_current_stance')
+    if isinstance(coverage,dict):
+        # The complete yaw/pitch coverage remains intact; this is not a
+        # count-only replacement that could induce repeated scans.
+        memory['recent_views_at_current_stance']=_small(coverage,(
+            'turn_actions_since_last_forward',
+            'look_actions_since_last_forward',
+            'repeated_same_RGBD_heading_pitch_views',
+            'horizontal_360_coverage_observed',
+            'full_coverage_by_pitch'))
+
+    last_motion=memory.get('last_motion_decision')
+    if isinstance(last_motion,dict):
+        memory['last_motion_decision']=_small(last_motion,(
+            'source_observation_id','end_observation_id','status',
+            'executed_forward_actions','forward_actions_with_RGBD_change',
+            'atomic_actions_since_motion','last_heading_deg',
+            'last_view_offset_deg_from_current'))
+
+    tasks=memory.get('observation_tasks') or []
+    for task in tasks:
+        if not isinstance(task,dict):
+            continue
+        for key,limit in (('objective',140),
+                          ('observation_summary',175),
+                          ('navigation_suggestion',165)):
+            if isinstance(task.get(key),str):
+                task[key]=task[key][:limit]
+        checks=task.get('target_visibility_checks') or []
+        if checks:
+            # Retain a confirmed target plus the latest negative check;
+            # no observation of an absent person is promoted to proof.
+            confirmed=next((v for v in reversed(checks)
+                            if v.get('target_visible') is True),None)
+            selected=[confirmed] if confirmed is not None else []
+            if checks[-1] is not confirmed:
+                selected.append(checks[-1])
+            task['target_visibility_checks']=selected
+
+    # Historical motion boxes and repeat blocks are already bounded by
+    # compact_navigation_context. Never mix sensed BLOCKED with STALLED.
+    # Keep the stable structural keys consumed by NavigationAgent events,
+    # replay UI and older request-shape regressions. Empty arrays cost only
+    # a few bytes and avoid KeyErrors before ANY request is issued.
+    for key in ('observation_tasks','historical_frames',
+                'blocked_at_source_stances','recent_tool_receipts',
+                'observed_forward_action_segments'):
+        memory.setdefault(key,[])
+    for key in ('stalled_forward_at_source_stances',
+                'observed_front_blocks','candidate_route_hypotheses',
+                'recent_look_evidence','recent_camera_pitch_limits',
+                'instruction_route_references'):
+        if not memory.get(key):
+            memory.pop(key,None)
+
+    # Front preflight remains independent from prior failed commands.
+    depth=result.get('front_depth_preflight')
+    if isinstance(depth,dict):
+        critical=_small(depth,(
+            'status','source_observation_id','reason','path_state',
+            'clearance_m','required_forward_step_m','center_confirmed',
+            'unknown_sweep_pixels',
+            'previous_identical_view_forward_rejections',
+            'previous_rejected_forward_actions_executed',
+            'previous_rejection_observation_id',
+            'rejections_match_current_RGBD_stance_yaw_pitch'))
+        blocker=depth.get('blocker')
+        if isinstance(blocker,dict):
+            critical['blocker']=_small(blocker,(
+                'nearest_along_m','central_support_pixels',
+                'focus_region_xyxy_norm'))
+        result['front_depth_preflight']=critical
+
+    camera=result.get('camera_controls')
+    if isinstance(camera,dict):
+        result['camera_controls']=_small(camera,(
+            'current_pitch_deg','allowed_look_now',
+            'pitch_limits_deg','tilt_step_deg'))
+    result.pop('current_rgb_image_attached_separately',None)
+    return result
+
+
+def cost_optimized_navigation_context(state):
+    """Aggressive, source-preserving request format for NavigationAgent only."""
+    return _cost_optimized_projection(compact_navigation_context(state))
+
 def planner_context(runtime):
     return dict(instruction=runtime.memory.task.instruction)

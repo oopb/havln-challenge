@@ -308,11 +308,43 @@ def next_reasoning_mode(config, current):
     return None
 
 
+
+def unsupported_prefix_cache(detail):
+    """Only explicit provider rejection can disable server prefix caching.
+
+    Gateways may reject the options object or Chat Completions text parts.
+    Never mistake unrelated HTTP 400/schema errors for cache negotiation.
+    """
+    if (unsupported_chat_parameter(detail,'prompt_cache_options')
+            or unsupported_chat_parameter(detail,'prompt_cache_breakpoint')):
+        return True
+    try:
+        problem=json.loads(detail)
+        error=problem.get('error',problem) if isinstance(problem,dict) else {}
+        message=str((error or {}).get('message','')).lower()
+        field=str((error or {}).get('param','')).lower()
+        code=str((error or {}).get('code','')).lower()
+    except (ValueError,TypeError,AttributeError):
+        return False
+    if (('prompt_cache_breakpoint' in field
+         or 'prompt_cache_breakpoint' in message)
+        and (code in ('unknown_parameter','unsupported_parameter',
+                      'extra_forbidden')
+             or any(x in message for x in (
+                 'unknown','unsupported','not allowed',
+                 'unexpected','not permitted')))):
+        return True
+    return (('messages[0].content' in message
+             or 'messages.0.content' in message)
+            and 'string' in message
+            and any(word in message for word in ('array','list','type')))
+
+
 def model_endpoints(settings):
     """Only explicitly configured, role-compatible Chat Completions endpoints."""
     required = {'provider','base_url','api_key_env','model','response_format','temperature',
                 'timeout_seconds','max_retries','max_tokens'}
-    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'reasoning','fallbacks'}:
+    if not isinstance(settings, dict) or not required <= set(settings) or set(settings)-required-{'reasoning','fallbacks','prompt_cache'}:
         raise ValueError('Unexpected model fields; configure credentials with api_key_env')
     fallbacks = settings.get('fallbacks', [])
     if not isinstance(fallbacks, list):
@@ -321,10 +353,14 @@ def model_endpoints(settings):
     chain = [primary]
     for fallback in fallbacks:
         if (not isinstance(fallback, dict) or not {'base_url','model','api_key_env'} <= set(fallback)
-                or set(fallback)-required-{'reasoning'}):
+                or set(fallback)-required-{'reasoning','prompt_cache'}):
             raise ValueError('Each fallback requires base_url, model and api_key_env; nested fallbacks are unsupported')
         chain.append(dict(primary, **fallback))
     for config in chain:
+        if config.get('prompt_cache','off') is False:
+            config['prompt_cache']='off'  # YAML 1.1 unquoted off compatibility.
+        if config.get('prompt_cache','off') not in ('off','auto'):
+            raise ValueError('prompt_cache must be off or auto')
         if config.get('reasoning') is None:
             config.pop('reasoning', None)
         elif (not isinstance(config['reasoning'], str) or
@@ -365,6 +401,9 @@ class APIClient:
         # Learned wire parameters are scoped to the endpoint + model, never
         # confused with navigation state, schema validity or HTTP auth failures.
         self.request_modes = {}
+        # A gateway may accept cache parameters but never report any cache
+        # reuse. Avoid repeated 1.25x writes without demonstrated read hits.
+        self.prefix_cache_probes = {}
         for role in ROLES:
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
@@ -640,6 +679,25 @@ class APIClient:
                           if requested_reasoning is not None else 'omit')
         if requested_reasoning is not None:
             body.update(reasoning_payload(requested_reasoning, reasoning_mode))
+        # GPT-5.6+ Chat Completions needs an explicit reusable breakpoint.
+        # Only the stable system+tool contract is cached; live RGB, Depth,
+        # mission memory and per-step evidence remain outside that boundary.
+        # Unknown OpenAI-compatible gateways are tried once and only
+        # disabled on a specific unsupported-field HTTP 400.
+        cache_candidate=(
+            role=='navigation_agent'
+            and config.get('prompt_cache','off')=='auto'
+            and not learned_params.get('omit_prompt_cache',False)
+            and not conversation_messages and len(system)>=3500)
+        static_system_text=messages[0]['content']
+        if cache_candidate:
+            messages[0]['content']=[dict(
+                type='text',text=static_system_text,
+                prompt_cache_breakpoint=dict(mode='explicit'))]
+            body['prompt_cache_options']=dict(mode='explicit',ttl='30m')
+        request_metrics['prompt_cache_requested']=cache_candidate
+        request_metrics['stable_cache_prefix_chars']=(
+            len(static_system_text) if cache_candidate else 0)
         # Capture the assembled multi-turn wire input without Base64 in logs.
         # Recorder failure must never change the model's actual request.
         replay = None
@@ -746,6 +804,7 @@ class APIClient:
                 payload = json.dumps(body,ensure_ascii=False,
                                      allow_nan=False).encode()
                 record['request_body_sha256'] = hashlib.sha256(payload).hexdigest()
+                record['prompt_cache_requested']=cache_candidate
                 request = urllib.request.Request(
                     config['base_url'].rstrip('/') + '/chat/completions',
                     data=payload,
@@ -761,6 +820,10 @@ class APIClient:
                 record['raw_response'] = message.get('content')
                 record['response_model'] = envelope.get('model')
                 record['usage'] = envelope.get('usage')
+                record['provider_cached_prompt_tokens'] = (
+                    ((envelope.get('usage') or {})
+                     .get('prompt_tokens_details') or {})
+                    .get('cached_tokens',0))
                 record['finish_reason'] = choice.get('finish_reason')
                 # Count reported usage even when a provider returned unusable JSON.
                 for name, count in usage_counts(envelope.get('usage')).items():
@@ -811,6 +874,22 @@ class APIClient:
                     validate(result)
                 if time.monotonic() >= deadline:
                     raise RequestDeadlineExceeded('total_request_deadline_exceeded')
+                if cache_candidate:
+                    probe=self.prefix_cache_probes.setdefault(reasoning_key,
+                        dict(successful=0,reported_cache_hits=0))
+                    probe['successful']+=1
+                    if isinstance(record.get('provider_cached_prompt_tokens'),int) and (
+                            record['provider_cached_prompt_tokens']>0):
+                        probe['reported_cache_hits']+=1
+                    if (probe['successful']>=6
+                            and probe['reported_cache_hits']==0):
+                        # Stop paying write premiums if the endpoint has not
+                        # demonstrated a single cache read in six accepted
+                        # requests. Learned only for this endpoint+model.
+                        self.request_modes.setdefault(
+                            reasoning_key,{})['omit_prompt_cache']=True
+                        record['prompt_cache_auto_disabled']=(
+                            'no_reported_cache_hits_after_6_successes')
                 if record.get('response_normalization') and record['repair_result'] != 'locally_normalized':
                     self.normalizations += 1
                     record['repair_result'] = 'locally_normalized'
@@ -854,7 +933,10 @@ class APIClient:
                 # no implicit unlimited output and no silent changes to
                 # model, multimodal input, credentials or message structure.
                 if error.code == 400 and not compatibility_retry:
-                    if ('token_field' not in negotiated_fields
+                    if (cache_candidate and 'prompt_cache' not in negotiated_fields
+                            and unsupported_prefix_cache(detail)):
+                        compatibility_change=('omit_prompt_cache',True)
+                    elif ('token_field' not in negotiated_fields
                             and unsupported_chat_parameter(detail, token_field)):
                         compatibility_change = ('token_field',
                             'max_tokens' if token_field == 'max_completion_tokens'
@@ -962,16 +1044,31 @@ class APIClient:
                     body.pop('thinking', None)
                     body.update(reasoning_payload(requested_reasoning, reasoning_mode))
                 else:
-                    negotiated_fields.add('token_field' if kind == 'token_field' else
-                                          'temperature' if kind == 'omit_temperature'
-                                          else 'response_format')
+                    negotiated_fields.add(
+                        'token_field' if kind=='token_field'
+                        else 'temperature' if kind=='omit_temperature'
+                        else 'prompt_cache' if kind=='omit_prompt_cache'
+                        else 'response_format')
                     self.request_modes.setdefault(reasoning_key, {})[kind] = value
                     if kind == 'token_field':
                         body[value] = body.pop(token_field)
                         token_field = value
                     elif kind == 'omit_temperature':
                         body.pop('temperature', None)
+                    elif kind == 'omit_prompt_cache':
+                        body.pop('prompt_cache_options',None)
+                        messages[0]['content']=static_system_text
+                        cache_candidate=False
+                        request_metrics['prompt_cache_requested']=False
+                        request_metrics['stable_cache_prefix_chars']=0
                     elif kind == 'omit_response_format':
+                        # A fallback schema appended to SYSTEM changes the
+                        # stable prefix, so remove any existing breakpoint.
+                        if cache_candidate:
+                            body.pop('prompt_cache_options',None)
+                            messages[0]['content']=static_system_text
+                            cache_candidate=False
+                        request_metrics['prompt_cache_requested']=False
                         body.pop('response_format', None)
                         # json_object already embeds the full schema in the
                         # system message. json_schema needs an equivalent text
