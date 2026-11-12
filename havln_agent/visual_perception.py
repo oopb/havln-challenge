@@ -31,7 +31,7 @@ ENTRY_SCHEMA=object_schema(dict(stairs=dict(enum=['visible','possible','unknown'
 # the robot moves. A visible box is mandatory for an actionable candidate.
 SEARCH_SCHEMA = object_schema(dict(
     target_visible=dict(type='boolean'),
-    target_type=dict(type='string',minLength=1,maxLength=80),
+    target_type=dict(type='string',minLength=1,maxLength=180),
     confidence=dict(enum=['low','medium','high']),
     box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
@@ -44,12 +44,12 @@ SEARCH_SCHEMA = object_schema(dict(
 # hypotheses plus the next real TURN/LOOK request, never a navigation MOVE.
 SCAN_GUIDANCE_SCHEMA = object_schema(dict(
     target_visible=dict(type='boolean'),
-    target_type=dict(type='string',minLength=1,maxLength=80),
+    target_type=dict(type='string',minLength=1,maxLength=180),
     confidence=dict(enum=['low','medium','high']),
     box=dict(anyOf=[dict(type='array',minItems=4,maxItems=4,
         items=dict(type='number',minimum=0,maximum=1)),dict(type='null')]),
     evidence=dict(type='string',maxLength=1200),
-    uncertainty=dict(type='string',maxLength=300),
+    uncertainty=dict(type='string',maxLength=500),
     target_kind=dict(enum=['ENTRY','APPROACH','TARGET','CUE','UNKNOWN']),
     candidate_approach=dict(type='boolean'),
     # Object detection box (box) and the optional visually continuous
