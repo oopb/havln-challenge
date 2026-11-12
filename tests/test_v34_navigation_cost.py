@@ -209,6 +209,9 @@ class Phase2PrefixCache(unittest.TestCase):
         self.ask(c)
         self.assertNotIn('prompt_cache_options',bodies[0])
         self.assertIsInstance(bodies[0]['messages'][0]['content'],str)
+        legacy=settings()
+        legacy['prompt_cache']=False  # PyYAML 1.1 unquoted 'off'
+        self.assertEqual(model_endpoints(legacy)[0]['prompt_cache'],'off')
         bad=settings()
         bad['prompt_cache']='force'
         with self.assertRaises(ValueError):

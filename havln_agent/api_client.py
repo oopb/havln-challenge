@@ -357,6 +357,8 @@ def model_endpoints(settings):
             raise ValueError('Each fallback requires base_url, model and api_key_env; nested fallbacks are unsupported')
         chain.append(dict(primary, **fallback))
     for config in chain:
+        if config.get('prompt_cache','off') is False:
+            config['prompt_cache']='off'  # YAML 1.1 unquoted off compatibility.
         if config.get('prompt_cache','off') not in ('off','auto'):
             raise ValueError('prompt_cache must be off or auto')
         if config.get('reasoning') is None:

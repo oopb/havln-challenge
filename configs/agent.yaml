@@ -17,7 +17,7 @@ navigation_agent:
   max_tokens: 12000
   fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
 visual_perception:
-  prompt_cache: off  # Observation Agent session dialogue is dynamic.
+  prompt_cache: 'off'  # Quote: YAML 1.1 treats unquoted off as boolean False.
   provider: openai_compatible
   base_url: ${VISUAL_PERCEPTION_BASE_URL}
   api_key_env: VISUAL_PERCEPTION_API_KEY
