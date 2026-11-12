@@ -962,6 +962,11 @@ class APIClient:
                         ) + 'navigation_state_echo_fields'
                         record['repair_result'] = 'locally_normalized'
                         self.normalizations += 1
+                    result, repaired = normalize_navigation_descriptions(result)
+                    if repaired:
+                        record['normalized_descriptive_fields'] = repaired
+                        record['repair_result'] = 'locally_normalized'
+                        self.normalizations += 1
                 # Pre-normalize only explicitly opted-in, non-executable
                 # wire metadata (e.g. NavigationAgent route reference aliases).
                 # RGB-D coordinates are NOT modified before checking their
@@ -1031,8 +1036,8 @@ class APIClient:
                 for key in self.keys.values():
                     detail = detail.replace(key, '[REDACTED]')
                 record['error_detail'] = detail
-                protocol_unsupported = (error.code==400 and config['response_format']=='json_schema'
-                    and any(word in detail.lower() for word in ('json_schema','response_format')))
+                protocol_unsupported = (error.code in (400,422)
+                    and mode=='json_schema' and unsupported_native_json_schema(detail))
                 endpoint_unavailable = retryable or error.code in (401,403,404) or protocol_unsupported
                 retryable = retryable and retry_safe
                 record['validation_error_type'] = ('protocol_unsupported' if protocol_unsupported else
@@ -1055,23 +1060,31 @@ class APIClient:
                 # Other parameter families are negotiated independently:
                 # no implicit unlimited output and no silent changes to
                 # model, multimodal input, credentials or message structure.
-                if error.code == 400 and not compatibility_retry:
-                    if (cache_candidate and 'prompt_cache' not in negotiated_fields
+                if error.code in (400,422) and not compatibility_retry:
+                    if (error.code==400 and cache_candidate
+                            and 'prompt_cache' not in negotiated_fields
                             and unsupported_prefix_cache(detail)):
                         compatibility_change=('omit_prompt_cache',True)
-                    elif ('token_field' not in negotiated_fields
+                    elif (error.code==400 and 'token_field' not in negotiated_fields
                             and unsupported_chat_parameter(detail, token_field)):
                         compatibility_change = ('token_field',
                             'max_tokens' if token_field == 'max_completion_tokens'
                             else 'max_completion_tokens')
-                    elif ('temperature' in body and
+                    elif (error.code==400 and 'temperature' in body and
                             'temperature' not in negotiated_fields and
                             unsupported_chat_parameter(detail, 'temperature')):
                         compatibility_change = ('omit_temperature', True)
                     elif ('response_format' in body and
-                            'response_format' not in negotiated_fields and
-                            unsupported_chat_parameter(detail, 'response_format')):
-                        compatibility_change = ('omit_response_format', True)
+                            'format:' + mode not in negotiated_fields and
+                            ((mode=='json_schema' and
+                              unsupported_native_json_schema(detail)) or
+                             (mode=='json_object' and
+                              unsupported_chat_parameter(detail, 'response_format')))):
+                        if config['response_format']=='auto':
+                            compatibility_change = ('response_format_mode',
+                                'json_object' if mode=='json_schema' else 'omit')
+                        else:
+                            compatibility_change = ('omit_response_format', True)
                     if compatibility_change is not None:
                         compatibility_retry = True
                         retryable = True
@@ -1180,7 +1193,7 @@ class APIClient:
                         'token_field' if kind=='token_field'
                         else 'temperature' if kind=='omit_temperature'
                         else 'prompt_cache' if kind=='omit_prompt_cache'
-                        else 'response_format')
+                        else 'format:' + mode)
                     self.request_modes.setdefault(reasoning_key, {})[kind] = value
                     if kind == 'token_field':
                         body[value] = body.pop(token_field)
@@ -1193,26 +1206,29 @@ class APIClient:
                         cache_candidate=False
                         request_metrics['prompt_cache_requested']=False
                         request_metrics['stable_cache_prefix_chars']=0
-                    elif kind == 'omit_response_format':
-                        # A fallback schema appended to SYSTEM changes the
-                        # stable prefix, so remove any existing breakpoint.
-                        if cache_candidate:
-                            body.pop('prompt_cache_options',None)
-                            messages[0]['content']=static_system_text
-                            cache_candidate=False
-                        request_metrics['prompt_cache_requested']=False
+                    elif kind in ('response_format_mode', 'omit_response_format'):
+                        # Keep the format parameter and prompt contract in sync.
+                        mode = value if kind=='response_format_mode' else 'omit'
                         body.pop('response_format', None)
-                        # json_object already embeds the full schema in the
-                        # system message. json_schema needs an equivalent text
-                        # contract once provider-side native enforcement is lost.
-                        if config['response_format'] == 'json_schema':
-                            addition = ('\nReturn only JSON satisfying this schema: ' +
-                                        canonical(wire_schema))
-                            messages[0]['content'] += addition
-                            logged_messages[0]['content'] += addition
-                            request_metrics['system_chars'] = len(messages[0]['content'])
-                            request_metrics['schema_channels'] = ['system_fallback']
-                            request_metrics['native_schema_chars'] = 0
+                        response_format = response_format_payload(
+                            mode, purpose, wire_schema,
+                            strict=(config['response_format']!='auto'))
+                        if response_format is not None:
+                            body['response_format'] = response_format
+                        if cache_candidate:
+                            body.pop('prompt_cache_options', None)
+                            cache_candidate = False
+                        static_system_text = system_for_mode(mode)
+                        messages[0]['content'] = static_system_text
+                        logged_messages[0]['content'] = static_system_text
+                        request_metrics['prompt_cache_requested'] = False
+                        request_metrics['stable_cache_prefix_chars'] = 0
+                        request_metrics['system_chars'] = len(static_system_text)
+                        request_metrics['schema_channels'] = (
+                            ['response_format'] if mode=='json_schema' else
+                            ['compact_protocol'] if protocol else ['system'])
+                        request_metrics['native_schema_chars'] = (
+                            len(canonical(response_format)) if mode=='json_schema' else 0)
                 digest, cache_path = cache_identity()
                 if recorder is not None:
                     try:
