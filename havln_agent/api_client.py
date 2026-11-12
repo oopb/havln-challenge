@@ -132,12 +132,25 @@ def native_generation_schema(schema):
     execution contract. This returns a new tree; caller schemas are intact.
     """
     def project(node):
-        if isinstance(node, list):
-            return [project(item) for item in node]
-        if isinstance(node, dict):
-            return {key: project(value) for key, value in node.items()
-                    if key != 'uniqueItems' and not key.startswith('x-')}
-        return node
+        if not isinstance(node, dict):
+            return copy.deepcopy(node)
+        result = {}
+        for key, value in node.items():
+            if key == 'uniqueItems' or key.startswith('x-'):
+                continue
+            if key in ('properties', 'patternProperties', 'definitions', '$defs'):
+                # Schema property names are user data, not schema keywords.
+                result[key] = {name: project(child)
+                               for name, child in value.items()}
+            elif key in ('items', 'additionalProperties', 'additionalItems',
+                         'contains', 'propertyNames', 'not', 'if', 'then', 'else'):
+                result[key] = project(value)
+            elif key in ('oneOf', 'allOf', 'anyOf', 'prefixItems'):
+                result[key] = [project(child) for child in value]
+            else:
+                # Do not transform const/enum values or other literal data.
+                result[key] = copy.deepcopy(value)
+        return result
     return project(schema)
 
 
