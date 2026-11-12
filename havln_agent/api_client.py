@@ -123,6 +123,24 @@ def provider_schema(schema):
     return schema
 
 
+def native_generation_schema(schema):
+    """Project a validation schema onto vLLM-compatible generation grammar.
+
+    Some JSON Schema assertions (notably array uniqueness) cannot be
+    expressed by the grammar backend. Exclude them from constrained
+    generation, not from the authoritative Python validator or tool
+    execution contract. This returns a new tree; caller schemas are intact.
+    """
+    def project(node):
+        if isinstance(node, list):
+            return [project(item) for item in node]
+        if isinstance(node, dict):
+            return {key: project(value) for key, value in node.items()
+                    if key != 'uniqueItems' and not key.startswith('x-')}
+        return node
+    return project(schema)
+
+
 def reject_json_constant(value):
     raise json.JSONDecodeError('Non-finite values are not valid JSON', value, 0)
 
@@ -381,7 +399,12 @@ def unsupported_native_json_schema(detail):
         'unsupported', 'not supported', 'invalid schema', 'schema error',
         'failed to compile', 'cannot compile', 'unknown parameter',
         'unrecognized parameter', 'not implemented'))
-    return targeted and rejected
+    # vLLM/XGrammar reports unsupported JSON Schema assertions as
+    # "Grammar error: Unimplemented keys: [\\"uniqueItems\\"]", with
+    # param=null and no mention of response_format or json_schema.
+    grammar_keys_error = ('grammar error:' in msg and
+        ('unimplemented keys' in msg or 'unsupported keys' in msg))
+    return (targeted and rejected) or grammar_keys_error
 
 
 def response_format_payload(mode, purpose, wire_schema, strict):
@@ -480,7 +503,7 @@ def model_endpoints(settings):
         if config['provider']!='openai_compatible':
             raise ValueError('Only openai_compatible is supported')
         if config['response_format'] not in ('json_schema','json_object','auto'):
-            raise ValueError('response_format must be json_schema or json_object')
+            raise ValueError('response_format must be auto, json_schema or json_object')
         if (not isinstance(config['timeout_seconds'],(int,float)) or isinstance(config['timeout_seconds'],bool)
                 or not math.isfinite(config['timeout_seconds']) or config['timeout_seconds']<=0
                 or type(config['max_retries']) is not int or not 0<=config['max_retries']<=5
@@ -688,7 +711,7 @@ class APIClient:
         endpoint_id = 'primary' if endpoint_index==0 else 'fallback_%d' % endpoint_index
         validator = Draft7Validator(validation_schema or schema)
         result_validator = Draft7Validator(result_schema or validation_schema or schema)
-        wire_schema = provider_schema(generation_schema or schema)
+        wire_schema = native_generation_schema(generation_schema or schema)
         text_schema = provider_schema(schema)
         reasoning_key = (config['base_url'], config['model'])
         learned_params = self.request_modes.get(reasoning_key, {})
