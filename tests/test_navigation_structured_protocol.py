@@ -29,8 +29,13 @@ class FakeClient:
         self.responses=list(responses)
         self.calls=[]
 
-    def needs_navigation_staging(self, role):
+    def needs_navigation_staging(self, role, generation_schema):
+        self.seen_union=generation_schema
         return self.staged
+
+    def mark_navigation_schema_unreliable(self, role, generation_schema):
+        self.marked_schema=generation_schema
+        self.staged=True
 
     def complete(self, role, purpose, prompt, context, schema, **kwargs):
         self.calls.append(dict(role=role,purpose=purpose,prompt=prompt,
@@ -126,6 +131,8 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
             'navigation_tool_arguments'])
         self.assertEqual(runtime.events[-1]['reason'],
                          'native_union_response_invalid')
+        self.assertTrue(client.staged)
+        self.assertEqual(client.marked_schema,client.seen_union)
 
     def test_invalid_staged_action_is_rejected_not_autofilled(self):
         selection=decision(tool='navigate_relative')
