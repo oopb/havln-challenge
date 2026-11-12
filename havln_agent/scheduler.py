@@ -62,9 +62,9 @@ class EvidenceLivenessGuard:
 
 FORMAT_ERROR_CATEGORIES=frozenset(
     ('structured_field','json_syntax','json_schema'))
-# One operation uses up to three exact-role regeneration attempts. A separate
-# bounded recovery below can retry an entire navigation cycle without ever
-# inventing a physical command.
+# Each navigation decision has one bounded, exact-role regeneration budget.
+# Invalid commands never enter the executor; no outer recovery cycle restarts
+# the same decision and multiplies unsuccessful API calls.
 FORMAT_REGENERATIONS_PER_DECISION=3
 
 
