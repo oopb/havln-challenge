@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from jsonschema import Draft7Validator
 
-from havln_agent.api_client import APIClient, APIError
+from havln_agent.api_client import APIClient, APIError, native_generation_schema
 from havln_agent.contracts import (
     navigation_envelope, navigation_generation_schema,
     navigation_schema, registry,
@@ -101,6 +101,87 @@ class LocalModelProtocolTests(unittest.TestCase):
         self.client._request = Mock(side_effect=handler)
         self.assertEqual(self.ask(), {'ok': True})
         self.assertEqual(bodies[1]['response_format']['type'],'json_object')
+
+    def test_local2_native_schema_excludes_uniqueitems_but_local_enforces_it(self):
+        """Actual local-test-2 schema: uniqueItems is a Python-only assertion."""
+        tools=registry(None,100)
+        full=navigation_envelope(tools)
+        generation=navigation_generation_schema(tools)
+        native=native_generation_schema(generation)
+        source=full['properties']['evidence_observation_ids']
+        self.assertTrue(source['uniqueItems'])
+        self.assertTrue(generation['properties']['evidence_observation_ids']['uniqueItems'])
+        self.assertNotIn('uniqueItems',
+            native['properties']['evidence_observation_ids'])
+        self.assertEqual(native['properties']['args']['properties']
+                         ['distance_m']['minimum'],0.25)
+        self.assertEqual(native['required'],full['required'])
+        sent=[]
+        item=dict(observed_evidence=['Current RGB shows a corridor.'],
+            decision_analysis='Continue through the corridor.',
+            evidence_observation_ids=['obs_0001'],
+            tool='navigate_relative',
+            args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.25))
+        def respond(req,timeout,record):
+            sent.append(json.loads(req.data))
+            return answer(item)
+        self.client._request=Mock(side_effect=respond)
+        def call():
+            return self.client.complete(
+                'navigation_agent','navigation_decision','JSON',{},
+                navigation_schema(tools),validation_schema=full,
+                generation_schema=generation,
+                validate=lambda value: Draft7Validator(
+                    navigation_schema(tools)).validate(value))
+        self.assertEqual(call(),item)
+        wire=sent[0]['response_format']['json_schema']['schema']
+        self.assertNotIn('uniqueItems',
+            wire['properties']['evidence_observation_ids'])
+        self.assertEqual(sent[0]['response_format']['type'],'json_schema')
+        item['evidence_observation_ids']=['obs_0001','obs_0001']
+        with self.assertRaises(APIError):
+            call()
+        self.assertEqual(len(sent),2)
+        self.assertTrue(full['properties']['evidence_observation_ids']['uniqueItems'])
+
+    def test_schema_projection_does_not_delete_property_names_or_enum_data(self):
+        original=dict(type='object', properties={
+            'uniqueItems':dict(type='string'),
+            'ids':dict(type='array',uniqueItems=True,
+                       items=dict(type='string')),
+            'flags':dict(enum=[{'uniqueItems': True}])})
+        projected=native_generation_schema(original)
+        self.assertIn('uniqueItems',projected['properties'])
+        self.assertNotIn('uniqueItems',projected['properties']['ids'])
+        self.assertEqual(projected['properties']['flags']['enum'],
+                         [{'uniqueItems': True}])
+        self.assertTrue(original['properties']['ids']['uniqueItems'])
+
+    def test_exact_local2_grammar_400_downgrades_only_format(self):
+        """Replay the actual vLLM 0.33/XGrammar error, including null param."""
+        sent=[]
+        original_error=dict(error=dict(
+            message='Grammar error: Unimplemented keys: ["uniqueItems"]',
+            type='BadRequestError',param=None,code=400))
+        def respond(req,timeout,record):
+            body=json.loads(req.data)
+            sent.append(body)
+            if len(sent)==1:
+                record['error_detail']=json.dumps(original_error)
+                raise urllib.error.HTTPError(req.full_url,400,
+                    'Bad Request',None,None)
+            return answer({'ok':True})
+        self.client._request=Mock(side_effect=respond)
+        self.assertEqual(self.ask(),{'ok':True})
+        self.assertEqual([x['response_format']['type'] for x in sent],
+                         ['json_schema','json_object'])
+        self.assertEqual(sent[0]['model'],sent[1]['model'])
+        self.assertEqual(sent[0]['messages'][1],sent[1]['messages'][1])
+        self.assertEqual(self.client.request_modes[
+            ('http://127.0.0.1:8000/v1','havln-local')]['response_format_mode'],
+                         'json_object')
+        self.assertEqual(self.ask(),{'ok':True})
+        self.assertEqual(sent[2]['response_format']['type'],'json_object')
 
     def test_both_formats_rejected_uses_plain_schema_prompt(self):
         bodies = []
