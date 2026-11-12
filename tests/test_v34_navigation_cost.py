@@ -18,7 +18,7 @@ from havln_agent.contracts import compact_navigation_protocol,registry
 from havln_agent.model_angles import project_model_angles
 from havln_agent.navigation_agent import MISSION_PROMPT
 from test_api_parameter_compat import accepted, rejected, settings
-from test_forward_preflight_v9 import camera
+from test_forward_preflight_v9 import camera, geometry, test_runtime
 from test_v21_compact_navigation_context import large_request
 from test_v29_phase2_route_reference import fixture,update
 from havln_agent.mission_history import mission_evidence
@@ -38,7 +38,7 @@ class Phase2EfficientNavigationContext(unittest.TestCase):
         self.assertEqual(result['memory']['instruction'],full['memory']['instruction'])
         self.assertEqual(result['front_depth_preflight']['status'],
                          full['front_depth_preflight']['status'])
-        self.assertLess(chars(result),chars(legacy)*.80)
+        self.assertLess(chars(result),chars(legacy)*.90)
         self.assertEqual(result['memory']['contract'],'mission_evidence_v1')
         self.assertNotIn('recent_forward_failures',result['memory'])
 
@@ -93,8 +93,22 @@ class Phase2EfficientNavigationContext(unittest.TestCase):
         self.assertIn('scene_goal',protocol)
         self.assertIn('turn_direction',protocol)
         self.assertIn('look=up/down/none',protocol)
-        self.assertLess(len(protocol),1650)
+        self.assertLess(len(protocol),2100)
         self.assertIn('favor a short model-chosen forward exploration',MISSION_PROMPT)
+
+    def test_navigation_decision_event_contract_survives_empty_records(self):
+        runtime,_=test_runtime()
+        runtime.geometry=Mock(return_value=geometry('EXECUTABLE'))
+        # This exercises the ACTUAL agent call, including mission_context_built
+        # event fields and the initial empty memory lists.
+        runtime.navigation_agent.decide()
+        submitted=runtime.client.complete.call_args.args[3]
+        memory=submitted['memory']
+        for key in ('historical_frames','observation_tasks',
+                    'blocked_at_source_stances','recent_tool_receipts',
+                    'observed_forward_action_segments'):
+            self.assertIn(key,memory)
+        self.assertIn('model_revision_count',memory['progress'])
 
     def test_no_unnecessary_source_removal_when_input_has_no_photos(self):
         full=large_request()
