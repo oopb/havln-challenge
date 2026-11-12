@@ -367,7 +367,8 @@ def _cost_optimized_projection(result):
     if isinstance(progress,dict):
         reduced=_small(progress,(
             'narrative','scene_goal','scene_goal_source_observation_id',
-            'navigation_intent','uncertainties','prior_navigation_intent'))
+            'navigation_intent','uncertainties','model_revision_count',
+            'prior_navigation_intent'))
         prior=reduced.get('prior_navigation_intent')
         if isinstance(prior,dict):
             if (prior.get('historical_only') and
@@ -419,7 +420,7 @@ def _cost_optimized_projection(result):
         if last.get('end_observation_id') in (
                 selected.get('end_observation_id'),
                 latest.get('end_observation_id')):
-            memory.pop('observed_forward_action_segments',None)
+            memory['observed_forward_action_segments']=[]
         else:
             memory['observed_forward_action_segments']=[_small(last,(
                 'start_observation_id','end_observation_id',
@@ -466,12 +467,16 @@ def _cost_optimized_projection(result):
 
     # Historical motion boxes and repeat blocks are already bounded by
     # compact_navigation_context. Never mix sensed BLOCKED with STALLED.
-    for key in ('blocked_at_source_stances',
-                'stalled_forward_at_source_stances',
+    # Keep the stable structural keys consumed by NavigationAgent events,
+    # replay UI and older request-shape regressions. Empty arrays cost only
+    # a few bytes and avoid KeyErrors before ANY request is issued.
+    for key in ('observation_tasks','historical_frames',
+                'blocked_at_source_stances','recent_tool_receipts',
+                'observed_forward_action_segments'):
+        memory.setdefault(key,[])
+    for key in ('stalled_forward_at_source_stances',
                 'observed_front_blocks','candidate_route_hypotheses',
-                'recent_look_evidence','recent_tool_receipts',
-                'recent_camera_pitch_limits','observation_tasks',
-                'observed_forward_action_segments',
+                'recent_look_evidence','recent_camera_pitch_limits',
                 'instruction_route_references'):
         if not memory.get(key):
             memory.pop(key,None)
