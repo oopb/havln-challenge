@@ -154,6 +154,16 @@ def strip_navigation_echo_metadata(value):
     return cleaned, echoes
 
 
+def normalize_navigation_descriptions(value):
+    """Normalize only unambiguous non-executable metadata, never commands."""
+    if not isinstance(value, dict) or not isinstance(value.get('uncertainties'), str):
+        return value, []
+    cleaned = dict(value)
+    text = value['uncertainties']
+    cleaned['uncertainties'] = [text] if text else []
+    return cleaned, ['uncertainties:string_to_array']
+
+
 def decode_response(content, allow_identical_duplicates=False, navigation_metadata_keys=None):
     """Decode one JSON response without silently resolving conflicts.
 
@@ -347,6 +357,44 @@ def unsupported_chat_parameter(detail, field):
     return False
 
 
+def unsupported_native_json_schema(detail):
+    """Explicit schema/grammar capability rejection, never a generic HTTP 400."""
+    if unsupported_chat_parameter(detail, 'response_format'):
+        return True
+    try:
+        obj = json.loads(detail)
+        error = obj.get('error', obj) if isinstance(obj, dict) else {}
+        if not isinstance(error, dict):
+            return False
+    except (ValueError, TypeError):
+        return False
+    field = str(error.get('param') or '').lower()
+    msg = str(error.get('message') or '').lower()
+    if field and not (field.startswith('response_format') or
+                      field.startswith('structured_outputs')):
+        return False
+    targeted = any(x in field + ' ' + msg for x in (
+        'json_schema', 'json schema', 'response_format',
+        'structured_outputs', 'xgrammar', 'grammar compilation',
+        'schema compilation'))
+    rejected = any(x in msg for x in (
+        'unsupported', 'not supported', 'invalid schema', 'schema error',
+        'failed to compile', 'cannot compile', 'unknown parameter',
+        'unrecognized parameter', 'not implemented'))
+    return targeted and rejected
+
+
+def response_format_payload(mode, purpose, wire_schema, strict):
+    if mode == 'omit':
+        return None
+    if mode == 'json_object':
+        return {'type': 'json_object'}
+    if mode == 'json_schema':
+        return {'type': 'json_schema', 'json_schema': {
+            'name': purpose, 'strict': strict, 'schema': wire_schema}}
+    raise ValueError('Unknown response format mode')
+
+
 def next_reasoning_mode(config, current):
     # 'thinking: enabled' is a boolean, not low effort. Likewise omitting
     # reasoning_effort would silently relinquish the user's low setting.
@@ -431,7 +479,7 @@ def model_endpoints(settings):
             raise ValueError('API base_url must be an HTTP(S) URL without credentials/query')
         if config['provider']!='openai_compatible':
             raise ValueError('Only openai_compatible is supported')
-        if config['response_format'] not in ('json_schema','json_object'):
+        if config['response_format'] not in ('json_schema','json_object','auto'):
             raise ValueError('response_format must be json_schema or json_object')
         if (not isinstance(config['timeout_seconds'],(int,float)) or isinstance(config['timeout_seconds'],bool)
                 or not math.isfinite(config['timeout_seconds']) or config['timeout_seconds']<=0
@@ -604,7 +652,7 @@ class APIClient:
     def complete(self, role, purpose, system, context, schema, image_url=None, cache=False, validate=None,
                  normalize=None, timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
                  retry_safe=False, protocol=None, validation_schema=None,
-                 conversation_messages=None, pre_normalize=None):
+                 conversation_messages=None, pre_normalize=None, generation_schema=None):
         # Only pure inference callers opt in. No environment tool executes until
         # a single response has been returned and independently validated.
         self.completion_requests += 1
@@ -619,7 +667,7 @@ class APIClient:
                     timeout_seconds=timeout_seconds,format_retry=format_retry,result_schema=result_schema,
                     cache_context=cache_context,retry_safe=retry_safe,protocol=protocol,
                     previous_endpoint_failures=failures,validation_schema=validation_schema,
-                    conversation_messages=conversation_messages)
+                    conversation_messages=conversation_messages, generation_schema=generation_schema)
             except BudgetExceeded:
                 raise
             except APIError as error:
@@ -636,13 +684,25 @@ class APIClient:
                  request_id, request_start, image_url=None, cache=False, validate=None, normalize=None,
                  timeout_seconds=None, format_retry=0, result_schema=None, cache_context=None,
                  retry_safe=False, protocol=None, previous_endpoint_failures=None, validation_schema=None,
-                 conversation_messages=None, pre_normalize=None):
+                 conversation_messages=None, pre_normalize=None, generation_schema=None):
         endpoint_id = 'primary' if endpoint_index==0 else 'fallback_%d' % endpoint_index
         validator = Draft7Validator(validation_schema or schema)
         result_validator = Draft7Validator(result_schema or validation_schema or schema)
-        wire_schema = provider_schema(schema)
-        if config['response_format'] != 'json_schema':
-            system += ('\n'+protocol if protocol else '\nReturn only JSON satisfying this schema: '+canonical(wire_schema))
+        wire_schema = provider_schema(generation_schema or schema)
+        text_schema = provider_schema(schema)
+        reasoning_key = (config['base_url'], config['model'])
+        learned_params = self.request_modes.get(reasoning_key, {})
+        mode = learned_params.get('response_format_mode',
+            'json_schema' if config['response_format']=='auto'
+            else config['response_format'])
+        if learned_params.get('omit_response_format', False):
+            mode = 'omit'
+        plain_system = system
+        text_contract = ('\n'+protocol if protocol else
+            '\nReturn only JSON satisfying this schema: '+canonical(text_schema))
+        def system_for_mode(value):
+            return plain_system if value == 'json_schema' else plain_system + text_contract
+        system = system_for_mode(mode)
         messages = [{'role': 'system', 'content': system},
                     {'role': 'user', 'content': canonical(context)}]
         logged_messages = json.loads(canonical(messages))
@@ -686,9 +746,8 @@ class APIClient:
                 history_text_chars)
             logged_messages[1]['prior_conversation_image_count']=(
                 history_image_count)
-        response_format = {'type': config['response_format']}
-        if config['response_format'] == 'json_schema':
-            response_format['json_schema'] = dict(name=purpose, strict=True, schema=wire_schema)
+        response_format = response_format_payload(
+            mode, purpose, wire_schema, strict=(config['response_format']!='auto'))
         exposed_names = [
             item.get('properties',{}).get('tool',{}).get('const')
             for item in schema.get('oneOf',[])
@@ -700,11 +759,9 @@ class APIClient:
             offered_tool_count=len(exposed_names) if exposed_names else None,
             offered_tool_names=exposed_names if exposed_names else None,
             native_schema_chars=len(canonical(response_format))
-            if config['response_format'] == 'json_schema' else 0,
-            schema_channels=['response_format'] if config['response_format']=='json_schema' else
+            if mode == 'json_schema' else 0,
+            schema_channels=['response_format'] if mode=='json_schema' else
                 ['compact_protocol'] if protocol else ['system'])
-        reasoning_key = (config['base_url'], config['model'])
-        learned_params = self.request_modes.get(reasoning_key, {})
         # The official OpenAI endpoint uses max_completion_tokens for reasoning
         # models; legacy OpenAI-compatible providers often still use max_tokens.
         # Unknown gateways are negotiated only upon explicit parameter rejection.
@@ -713,18 +770,8 @@ class APIClient:
                                         'max_completion_tokens' if host == 'api.openai.com'
                                         else 'max_tokens')
         body = dict(model=config['model'], messages=messages)
-        if not learned_params.get('omit_response_format', False):
+        if response_format is not None:
             body['response_format'] = response_format
-        elif config['response_format'] == 'json_schema':
-            # Once this endpoint rejects native schemas, subsequent requests
-            # still need the full task-specific schema in their system text.
-            addition = ('\nReturn only JSON satisfying this schema: ' +
-                        canonical(wire_schema))
-            messages[0]['content'] += addition
-            logged_messages[0]['content'] += addition
-            request_metrics['system_chars'] = len(messages[0]['content'])
-            request_metrics['schema_channels'] = ['system_fallback']
-            request_metrics['native_schema_chars'] = 0
         # None means intentionally omit this optional parameter from the very
         # first request. Keep endpoint-specific 400 negotiation for other models.
         if config['temperature'] is not None and not learned_params.get('omit_temperature', False):
@@ -809,7 +856,7 @@ class APIClient:
         # Parameter negotiation is separate from retry_safe transport attempts.
         # Only a clearly rejected request can be renegotiated without executing
         # an action or repeating an accepted model completion.
-        max_attempts = retries + 1 + (2 if requested_reasoning is not None else 0) + 3
+        max_attempts = retries + 1 + (2 if requested_reasoning is not None else 0) + 5
         transient_retries = 0
         negotiated_fields = set()
         for attempt in range(max_attempts):
@@ -837,7 +884,7 @@ class APIClient:
                           request_temperature_mode=('omitted_provider_default'
                               if 'temperature' not in body else 'configured'),
                           request_response_format_mode=('local_validation_only'
-                              if 'response_format' not in body else config['response_format']),
+                              if 'response_format' not in body else mode),
                           reasoning=requested_reasoning, reasoning_wire_mode=reasoning_mode,
                           reasoning_fidelity=('exact' if reasoning_mode=='reasoning_effort' else
                               'boolean_only' if reasoning_mode=='thinking' else
