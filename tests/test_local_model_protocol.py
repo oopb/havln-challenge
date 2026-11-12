@@ -11,7 +11,8 @@ from unittest.mock import Mock, patch
 
 from jsonschema import Draft7Validator
 
-from havln_agent.api_client import APIClient, APIError, native_generation_schema
+from havln_agent.api_client import (
+    APIClient, APIError, native_generation_schema, schema_fingerprint)
 from havln_agent.contracts import (
     navigation_envelope, navigation_generation_schema,
     navigation_choice_schema, navigation_schema, registry,
@@ -187,10 +188,53 @@ class LocalModelProtocolTests(unittest.TestCase):
         self.assertEqual(sent[0]['model'],sent[1]['model'])
         self.assertEqual(sent[0]['messages'][1],sent[1]['messages'][1])
         self.assertEqual(self.client.request_modes[
-            ('http://127.0.0.1:8000/v1','havln-local')]['response_format_mode'],
-                         'json_object')
+            ('http://127.0.0.1:8000/v1','havln-local')]['schema_format_modes']
+            [schema_fingerprint(SIMPLE)],'json_object')
         self.assertEqual(self.ask(),{'ok':True})
         self.assertEqual(sent[2]['response_format']['type'],'json_object')
+
+    def test_union_grammar_failure_keeps_native_schema_for_typed_arguments(self):
+        """Union-only XGrammar limitation must not disable all JSON Schema."""
+        tools=registry(None,100)
+        union=navigation_generation_schema(tools)
+        full=navigation_schema(tools)
+        envelope=navigation_envelope(tools)
+        result=dict(observed_evidence=['Visible corridor.'],
+                    decision_analysis='Go to the corridor.',
+                    tool='navigate_relative',
+                    args=dict(turn_direction='NONE',turn_degrees=0,
+                              distance_m=0.25))
+        sent=[]
+        def respond(req,timeout,record):
+            payload=json.loads(req.data)
+            sent.append(payload)
+            if len(sent)==1:
+                record['error_detail']=json.dumps(dict(error=dict(
+                    message='Grammar error: Unimplemented keys: ["oneOf"]',
+                    param=None,code=400)))
+                raise urllib.error.HTTPError(req.full_url,400,
+                    'Bad Request',None,None)
+            if len(sent)==2:
+                return answer(result)
+            return answer({'ok':True})
+        self.client._request=Mock(side_effect=respond)
+        received=self.client.complete(
+            'navigation_agent','navigation_decision','JSON',{},full,
+            validation_schema=envelope, generation_schema=union,
+            validate=lambda x:Draft7Validator(full).validate(x))
+        self.assertEqual(received,result)
+        self.assertEqual([r['response_format']['type'] for r in sent[:2]],
+                         ['json_schema','json_object'])
+        self.assertTrue(self.client.needs_navigation_staging(
+            'navigation_agent',union))
+        self.assertFalse(self.client.needs_navigation_staging(
+            'navigation_agent',SIMPLE))
+        self.assertEqual(self.ask(),{'ok':True})
+        self.assertEqual(sent[2]['response_format']['type'],'json_schema')
+        # No global response_format downgrade was recorded.
+        modes=self.client.request_modes[
+            ('http://127.0.0.1:8000/v1','havln-local')]
+        self.assertNotIn('response_format_mode',modes)
 
     def test_both_formats_rejected_uses_plain_schema_prompt(self):
         bodies = []
