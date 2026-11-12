@@ -120,11 +120,11 @@ def registry(camera, max_actions, pitch_deg=0.):
 # -> final tool/args. This is a visible decision summary, not hidden chain
 # of thought or a separate validator authorizing the movement.
 _EVIDENCE=dict(
-    observed_evidence=dict(type='array',minItems=1,maxItems=5,
+    observed_evidence=dict(type='array',minItems=1,maxItems=8,
         items=dict(type='string',minLength=1,maxLength=600)),
 )
 _DECISION_ANALYSIS=dict(
-    decision_analysis=dict(type='string',minLength=1,maxLength=700),
+    decision_analysis=dict(type='string',minLength=1,maxLength=1000),
 )
 
 _PROGRESS=dict(

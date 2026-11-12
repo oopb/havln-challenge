@@ -127,7 +127,34 @@ def reject_json_constant(value):
     raise json.JSONDecodeError('Non-finite values are not valid JSON', value, 0)
 
 
-def decode_response(content, allow_identical_duplicates=False):
+NAVIGATION_ECHO_METADATA_TYPES = {
+    # These are trustworthy *input-state* labels often echoed by JSON-object
+    # models. They are not instructions and never affect the executed motion.
+    'scene_goal_source_observation_id': str,
+    'scene_goal_is_model_selected_not_verified': bool,
+}
+
+
+def strip_navigation_echo_metadata(value):
+    """Ignore known non-executable state echoes, never unknown/action fields.
+
+    A new, unexpected field remains an error rather than becoming a silent
+    extension of the command protocol. Return a new object; don't mutate
+    the decoded response or any tool arguments.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get('tool'), str) or not isinstance(value.get('args'), dict):
+        return value, []
+    echoes = sorted(key for key, expected in NAVIGATION_ECHO_METADATA_TYPES.items()
+                    if key in value and type(value[key]) is expected)
+    if not echoes:
+        return value, []
+    cleaned = dict(value)
+    for key in echoes:
+        del cleaned[key]
+    return cleaned, echoes
+
+
+def decode_response(content, allow_identical_duplicates=False, navigation_metadata_keys=None):
     """Decode one JSON response without silently resolving conflicts.
 
     Only explicitly opted-in, read-only VLM observation responses may
@@ -183,6 +210,30 @@ def decode_response(content, allow_identical_duplicates=False):
         return with_identical_duplicate_note(decoder.decode(content),
                                              normalization)
     except json.JSONDecodeError as original_error:
+        # DeepSeek can emit the explanatory navigation metadata and one
+        # executable tool as TWO adjacent JSON objects. Merge only that
+        # exact, unambiguous split; never merge two actions or arbitrary JSON.
+        # The resulting single object still passes the full action schema.
+        if (navigation_metadata_keys and isinstance(content, str)
+                and original_error.msg == 'Extra data'):
+            try:
+                raw = content.strip()
+                metadata, boundary = decoder.raw_decode(raw)
+                tail = raw[boundary:].lstrip()
+                action, consumed = decoder.raw_decode(tail)
+                if (not tail[consumed:].strip()
+                        and isinstance(metadata, dict)
+                        and {'observed_evidence', 'decision_analysis'} <= set(metadata)
+                        and set(metadata) <= set(navigation_metadata_keys)
+                        and isinstance(action, dict)
+                        and set(action) == {'tool', 'args'}
+                        and isinstance(action['tool'], str)
+                        and isinstance(action['args'], dict)):
+                    return with_identical_duplicate_note(
+                        dict(metadata, **action),
+                        'navigation_split_metadata_and_action')
+            except json.JSONDecodeError:
+                pass
         # Some Chat Completions providers leak a plain-language preface even
         # with response_format=json_object. Only recover ONE complete,
         # unambiguous JSON container; all existing schema/role validation
@@ -297,6 +348,11 @@ def unsupported_chat_parameter(detail, field):
 
 
 def next_reasoning_mode(config, current):
+    # 'thinking: enabled' is a boolean, not low effort. Likewise omitting
+    # reasoning_effort would silently relinquish the user's low setting.
+    # Fail explicitly if a provider rejects low rather than escalating it.
+    if config.get('reasoning') == 'low':
+        return None
     if current == 'reasoning_effort':
         host = urllib.parse.urlsplit(config['base_url']).hostname or ''
         # Avoid guessing a nonstandard extension on unknown gateways.
@@ -832,13 +888,33 @@ class APIClient:
                     # Repeating a refused/truncated request with the same limit won't repair it.
                     retryable = False
                     raise APIError('refusal_or_incomplete_response')
+                accepted_schema = validation_schema or schema
+                navigation_metadata_keys = None
+                if (role == 'navigation_agent'
+                        and isinstance(accepted_schema, dict)):
+                    properties = accepted_schema.get('properties', {})
+                    if {'tool', 'args'} <= set(properties):
+                        navigation_metadata_keys = (
+                            set(properties) - {'tool', 'args'}
+                            | set(NAVIGATION_ECHO_METADATA_TYPES))
                 result, normalization = decode_response(
                     message['content'],
                     allow_identical_duplicates=(
                         role=='visual_perception' and
-                        purpose=='vlm_guided_observation'))
+                        purpose=='vlm_guided_observation'),
+                    navigation_metadata_keys=navigation_metadata_keys)
                 if normalization:
                     record['response_normalization'] = normalization
+                if role == 'navigation_agent':
+                    result, ignored = strip_navigation_echo_metadata(result)
+                    if ignored:
+                        record['ignored_non_executable_echo_fields'] = ignored
+                        record['response_normalization'] = (
+                            (record.get('response_normalization', '') + '+')
+                            if record.get('response_normalization') else ''
+                        ) + 'navigation_state_echo_fields'
+                        record['repair_result'] = 'locally_normalized'
+                        self.normalizations += 1
                 # Pre-normalize only explicitly opted-in, non-executable
                 # wire metadata (e.g. NavigationAgent route reference aliases).
                 # RGB-D coordinates are NOT modified before checking their
@@ -992,6 +1068,15 @@ class APIClient:
                     record['error_detail'] = '%s: %s requires %s; actual length %s' % (
                         '.'.join(map(str, error.absolute_path)) or 'response', error.validator,
                         str(error.validator_value)[:200], actual)
+                    if (error.validator == 'additionalProperties'
+                            and isinstance(error.instance, dict)):
+                        allowed = set(error.schema.get('properties', {}))
+                        extras = sorted(set(error.instance) - allowed)
+                        record['unexpected_fields'] = extras[:12]
+                        record['validation_field'] += extras[:1]
+                        record['error_detail'] = ('Unexpected fields at %s: %s' % (
+                            '.'.join(map(str, error.absolute_path)) or 'response',
+                            ', '.join(extras[:12])))
                     if error.validator == 'required' and isinstance(error.instance, dict):
                         record['missing_fields'] = [k for k in error.validator_value if k not in error.instance]
                         record['validation_field'] += record['missing_fields'][:1]
@@ -1028,7 +1113,7 @@ class APIClient:
                 failure = APIError(record['error'], category=record.get('validation_error_type'))
                 failure.endpoint_unavailable = endpoint_unavailable
                 failure.validation_error = {k:record[k] for k in ('validation_field', 'validation_rule',
-                    'validation_limit', 'actual_length', 'missing_fields') if k in record}
+                    'validation_limit', 'actual_length', 'missing_fields', 'unexpected_fields') if k in record}
                 failure.request_context = {k:record[k] for k in ('role', 'purpose', 'request_number',
                     'request_phase', 'error', 'error_type', 'error_detail', 'timeout_scope',
                     'effective_timeout_seconds','validation_error_type','validation_field','http_status',
