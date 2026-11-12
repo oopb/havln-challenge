@@ -14,7 +14,7 @@ from jsonschema import Draft7Validator
 from havln_agent.api_client import APIClient, APIError, native_generation_schema
 from havln_agent.contracts import (
     navigation_envelope, navigation_generation_schema,
-    navigation_schema, registry,
+    navigation_choice_schema, navigation_schema, registry,
 )
 
 
@@ -110,12 +110,19 @@ class LocalModelProtocolTests(unittest.TestCase):
         native=native_generation_schema(generation)
         source=full['properties']['evidence_observation_ids']
         self.assertTrue(source['uniqueItems'])
-        self.assertTrue(generation['properties']['evidence_observation_ids']['uniqueItems'])
-        self.assertNotIn('uniqueItems',
-            native['properties']['evidence_observation_ids'])
-        self.assertEqual(native['properties']['args']['properties']
-                         ['distance_m']['minimum'],0.25)
-        self.assertEqual(native['required'],full['required'])
+        branches={b['properties']['tool']['const']:b
+                  for b in generation['oneOf']}
+        native_branches={b['properties']['tool']['const']:b
+                         for b in native['oneOf']}
+        self.assertEqual(set(branches),set(tools))
+        for name in tools:
+            self.assertTrue(branches[name]['properties']
+                            ['evidence_observation_ids']['uniqueItems'])
+            self.assertNotIn('uniqueItems',
+                native_branches[name]['properties']['evidence_observation_ids'])
+            self.assertEqual(branches[name]['required'],full['required'])
+        self.assertEqual(native_branches['navigate_relative']['properties']
+                         ['args']['properties']['distance_m']['minimum'],0.25)
         sent=[]
         item=dict(observed_evidence=['Current RGB shows a corridor.'],
             decision_analysis='Continue through the corridor.',
@@ -135,8 +142,10 @@ class LocalModelProtocolTests(unittest.TestCase):
                     navigation_schema(tools)).validate(value))
         self.assertEqual(call(),item)
         wire=sent[0]['response_format']['json_schema']['schema']
-        self.assertNotIn('uniqueItems',
-            wire['properties']['evidence_observation_ids'])
+        self.assertEqual(set(wire),{'oneOf'})
+        self.assertTrue(all('uniqueItems' not in
+            branch['properties']['evidence_observation_ids']
+            for branch in wire['oneOf']))
         self.assertEqual(sent[0]['response_format']['type'],'json_schema')
         item['evidence_observation_ids']=['obs_0001','obs_0001']
         with self.assertRaises(APIError):
@@ -269,18 +278,71 @@ class LocalModelProtocolTests(unittest.TestCase):
                 validate=lambda x: Draft7Validator(schema).validate(x))
         self.assertEqual(item['args']['turn_degrees'],190)
 
-    def test_generation_schema_preserves_registry_argument_constraints(self):
+    def test_generation_schema_binds_tool_to_its_own_required_args(self):
         tools=registry(None,100)
         schema=navigation_generation_schema(tools)
-        args=schema['properties']['args']
-        self.assertEqual(args['additionalProperties'],False)
+        self.assertEqual(set(schema),{'oneOf'})
+        self.assertEqual(len(schema['oneOf']),len(tools))
+        branches={branch['properties']['tool']['const']:branch
+                  for branch in schema['oneOf']}
+        self.assertEqual(set(branches),set(tools))
+        for name,spec in tools.items():
+            branch=branches[name]
+            self.assertIn('tool',branch['required'])
+            self.assertIn('args',branch['required'])
+            self.assertEqual(branch['properties']['args'],spec['parameters'])
+            self.assertFalse(branch['additionalProperties'])
+        args=branches['navigate_relative']['properties']['args']
+        self.assertEqual(set(args['required']),
+            {'turn_direction','turn_degrees','distance_m'})
+        self.assertEqual(set(args['properties']),
+            {'turn_direction','turn_degrees','distance_m'})
         self.assertEqual(args['properties']['turn_direction']['enum'],
-                         ['LEFT','RIGHT','NONE'])
+            ['LEFT','RIGHT','NONE'])
         self.assertEqual(args['properties']['distance_m']['minimum'],0.25)
-        self.assertEqual(args['properties']['outcome']['enum'],
+        self.assertEqual(branches['request_finish']['properties']['args']
+                         ['properties']['outcome']['enum'],
                          ['success','aborted'])
-        self.assertEqual(set(schema['required']),
-                         {'observed_evidence','decision_analysis','tool','args'})
+        self.assertEqual(set(navigation_choice_schema(tools)['required']),
+            {'observed_evidence','decision_analysis','tool'})
+        self.assertNotIn('args',navigation_choice_schema(tools)['properties'])
+
+    def test_19_like_tool_argument_failures_are_rejected_by_native_union(self):
+        tools=registry(None,100)
+        native=native_generation_schema(navigation_generation_schema(tools))
+        base=dict(observed_evidence=['Current RGB: landing.'],
+                  decision_analysis='Proceed toward stairwell.',
+                  tool='navigate_relative')
+        good=dict(base,args=dict(
+            turn_direction='LEFT',turn_degrees=90,distance_m=0.25))
+        self.assertTrue(Draft7Validator(native).is_valid(good))
+        invalid=[
+            dict(distance_m=0.25,look='down',record_id='obs_0000'),
+            dict(turn_degrees=90,distance_m=0.25),
+            dict(turn_direction='LEFT',distance_m=0.25),
+            dict(turn_direction='LEFT',turn_degrees=90),
+            dict(turn_direction='LEFT',turn_degrees=90,
+                 distance_m=0.25,look='none'),
+            dict(turn_direction='LEFT',turn_degrees=90,distance_m=0),
+        ]
+        for args in invalid:
+            with self.subTest(args=args):
+                self.assertFalse(Draft7Validator(native).is_valid(
+                    dict(base,args=args)))
+        # All branch choices are still valid when the correct args are used.
+        for name,spec in tools.items():
+            args={}
+            for key,field in spec['parameters'].get('properties',{}).items():
+                if key not in spec['parameters']['required']:
+                    continue
+                if 'enum' in field: value=field['enum'][0]
+                elif field.get('type')=='number': value=max(field.get('minimum',0),0.25)
+                elif field.get('type')=='integer': value=30
+                else: value='Observed scene evidence.'
+                args[key]=value
+            example=dict(base,tool=name,args=args)
+            self.assertTrue(Draft7Validator(native).is_valid(example),
+                            msg=name)
 
 
 if __name__ == '__main__':
