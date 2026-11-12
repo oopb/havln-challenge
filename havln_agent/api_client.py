@@ -438,9 +438,8 @@ def schema_grammar_rejection(detail):
             or ('schema' in message and
                 any(word in message for word in (
                     'compile','unimplemented','unsupported key','invalid schema')))
-            or any(word in message for word in (
-                'oneof unsupported','unsupported oneof',
-                'anyof unsupported','unsupported anyof')))
+            or (('oneof' in message or 'anyof' in message)
+                and ('unsupported' in message or 'not supported' in message)))
 
 
 def response_format_payload(mode, purpose, wire_schema, strict):
