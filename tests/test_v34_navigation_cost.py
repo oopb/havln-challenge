@@ -174,6 +174,19 @@ class Phase2PrefixCache(unittest.TestCase):
         self.assertEqual(c.request_modes[
             ('https://relay.example/v1','gpt-6-astra')]['omit_prompt_cache'],True)
 
+    def test_zero_reported_cache_reuse_disables_future_writes(self):
+        c=self.client()
+        bodies=[]
+        c._request=Mock(side_effect=lambda req,timeout,record:
+            (bodies.append(json.loads(req.data)),accepted())[1])
+        for index in range(7):
+            self.ask(c,str(index))
+        self.assertTrue(all('prompt_cache_options' in body
+                            for body in bodies[:6]))
+        self.assertNotIn('prompt_cache_options',bodies[6])
+        self.assertEqual(c.request_modes[
+            ('https://api.openai.com/v1','gpt-6-astra')]['omit_prompt_cache'],True)
+
     def test_cache_can_be_disabled_and_invalid_configuration_rejected(self):
         c=self.client(cache='off')
         bodies=[]

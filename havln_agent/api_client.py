@@ -399,6 +399,9 @@ class APIClient:
         # Learned wire parameters are scoped to the endpoint + model, never
         # confused with navigation state, schema validity or HTTP auth failures.
         self.request_modes = {}
+        # A gateway may accept cache parameters but never report any cache
+        # reuse. Avoid repeated 1.25x writes without demonstrated read hits.
+        self.prefix_cache_probes = {}
         for role in ROLES:
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
@@ -869,6 +872,22 @@ class APIClient:
                     validate(result)
                 if time.monotonic() >= deadline:
                     raise RequestDeadlineExceeded('total_request_deadline_exceeded')
+                if cache_candidate:
+                    probe=self.prefix_cache_probes.setdefault(reasoning_key,
+                        dict(successful=0,reported_cache_hits=0))
+                    probe['successful']+=1
+                    if isinstance(record.get('provider_cached_prompt_tokens'),int) and (
+                            record['provider_cached_prompt_tokens']>0):
+                        probe['reported_cache_hits']+=1
+                    if (probe['successful']>=6
+                            and probe['reported_cache_hits']==0):
+                        # Stop paying write premiums if the endpoint has not
+                        # demonstrated a single cache read in six accepted
+                        # requests. Learned only for this endpoint+model.
+                        self.request_modes.setdefault(
+                            reasoning_key,{})['omit_prompt_cache']=True
+                        record['prompt_cache_auto_disabled']=(
+                            'no_reported_cache_hits_after_6_successes')
                 if record.get('response_normalization') and record['repair_result'] != 'locally_normalized':
                     self.normalizations += 1
                     record['repair_result'] = 'locally_normalized'
