@@ -232,24 +232,31 @@ def navigation_envelope(tools):
         ('observed_evidence','decision_analysis','tool','args'))
 
 def navigation_generation_schema(tools):
-    """A flat constrained-decoding shape derived from the executable registry.
+    """A discriminated executable union: tool *and* its own required args.
 
-    Avoid a top-level oneOf (unsupported by some JSON grammar backends).
-    Every known argument keeps its native type/enum/range, but cross-field
-    and tool-specific requirements remain with navigation_schema and the
-    independent executor validator. No second, drifting tool registry.
+    Each branch is a complete JSON object with a distinct required tool const.
+    This avoids the dangerous flat-args union, where XGrammar could legally
+    generate navigate_relative without turn_direction or turn_degrees.
+    There are no siblings alongside oneOf (some backends ignore those).
+    Native JSON dialect projection is performed separately by APIClient;
+    the authoritative execution validator stays navigation_schema(tools).
     """
-    output = navigation_envelope(tools)
-    properties = {}
-    for spec in tools.values():
-        for name, field in spec['parameters'].get('properties', {}).items():
-            if name in properties and properties[name] != field:
-                raise ValueError('Conflicting navigation tool argument: ' + name)
-            properties[name] = copy.deepcopy(field)
-    output['properties']['args'] = {
-        'type': 'object', 'properties': properties,
-        'additionalProperties': False}
-    return output
+    return navigation_schema(tools)
+
+
+def navigation_choice_schema(tools):
+    """The non-executable first stage if an endpoint cannot enforce unions.
+
+    Tool selection and narrative are separate from executable arguments.
+    The second stage uses tools[choice['tool']]['parameters'] directly, so
+    neither stage can generate unrelated tool arguments.
+    """
+    return _optional(dict(
+        **copy.deepcopy(_EVIDENCE),
+        **copy.deepcopy(_PROGRESS),
+        **copy.deepcopy(_DECISION_ANALYSIS),
+        tool=dict(enum=list(tools))),
+        ('observed_evidence', 'decision_analysis', 'tool'))
 
 
 def compact_navigation_protocol(tools):

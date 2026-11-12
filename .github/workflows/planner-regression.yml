@@ -8,6 +8,7 @@ on:
       - "tests/test_adaptive_reasoning.py"
       - "tests/test_api_parameter_compat.py"
       - "tests/test_local_model_protocol.py"
+      - "tests/test_navigation_structured_protocol.py"
       - "tests/test_scheduler_liveness.py"
       - "tests/test_mission_navigation_architecture.py"
       - "tests/test_mission_history_and_headings.py"
@@ -83,6 +84,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_api_parameter_compat.py' -v
       - name: Verify local model native schema negotiation and safe normalization
         run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
+      - name: Verify per-tool navigation JSON union and typed staged fallback
+        run: python -m unittest discover -s tests -p 'test_navigation_structured_protocol.py' -v
       - name: Verify bounded scheduler format recovery and evidence liveness
         run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
       - name: Verify whole-instruction navigation, evidence Memory and RGB-D observation contracts
