@@ -553,6 +553,20 @@ class APIClient:
         # Explicit construction before the first episode is useful for preflight.
         self.begin_episode('preflight', 1, None)
 
+    def needs_navigation_staging(self, role):
+        """Use a two-stage tool protocol only for auto-mode endpoints that
+        learned the native discriminated union cannot be used.
+
+        Explicit json_object configurations retain their existing behavior.
+        The learned mode is per endpoint/model, not per episode.
+        """
+        config=model_endpoints(self.endpoints[role])[0]
+        if config['response_format'] != 'auto':
+            return False
+        mode=self.request_modes.get((config['base_url'],config['model']),{})
+        return (mode.get('omit_response_format',False)
+                or mode.get('response_format_mode') in ('json_object','omit'))
+
     def begin_episode(self, episode_id, budget, log_path):
         if budget < 1:
             raise ValueError('API request budget must be positive')
