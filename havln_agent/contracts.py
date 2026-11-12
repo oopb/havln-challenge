@@ -231,6 +231,27 @@ def navigation_envelope(tools):
         tool=dict(enum=list(tools)),args=dict(type='object')),
         ('observed_evidence','decision_analysis','tool','args'))
 
+def navigation_generation_schema(tools):
+    """A flat constrained-decoding shape derived from the executable registry.
+
+    Avoid a top-level oneOf (unsupported by some JSON grammar backends).
+    Every known argument keeps its native type/enum/range, but cross-field
+    and tool-specific requirements remain with navigation_schema and the
+    independent executor validator. No second, drifting tool registry.
+    """
+    output = navigation_envelope(tools)
+    properties = {}
+    for spec in tools.values():
+        for name, field in spec['parameters'].get('properties', {}).items():
+            if name in properties and properties[name] != field:
+                raise ValueError('Conflicting navigation tool argument: ' + name)
+            properties[name] = copy.deepcopy(field)
+    output['properties']['args'] = {
+        'type': 'object', 'properties': properties,
+        'additionalProperties': False}
+    return output
+
+
 def compact_navigation_protocol(tools):
     import json
     def signature(s):

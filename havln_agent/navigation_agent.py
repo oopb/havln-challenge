@@ -2,7 +2,7 @@
 import math
 from jsonschema import Draft7Validator
 from .contracts import (navigation_schema, compact_navigation_protocol,
-                        navigation_envelope)
+                        navigation_envelope, navigation_generation_schema)
 from .contexts import navigation_context, cost_optimized_navigation_context
 from .tool_menu import navigation_tool_menu
 from .api_client import APIError
@@ -207,5 +207,6 @@ class NavigationAgent:
             image_url=images,
             format_retry=int(bool(format_feedback)),retry_safe=True,
             protocol=compact_navigation_protocol(tools),
-            validation_schema=navigation_envelope(tools))
+            validation_schema=navigation_envelope(tools),
+            generation_schema=navigation_generation_schema(tools))
         return proposal
