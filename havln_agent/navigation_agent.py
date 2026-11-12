@@ -221,6 +221,7 @@ class NavigationAgent:
         # never block a valid tool decision when they are malformed.
         known_ids={o['observation_id'] for o in r.memory.observations}
         protocol=compact_navigation_protocol(tools)
+        generation=navigation_generation_schema(tools)
         def staged_decision(reason):
             # A backend without reliable oneOf support cannot constrain
             # tool-specific required args in one response. Split selection
@@ -259,8 +260,8 @@ class NavigationAgent:
         # Prefer a single native discriminated union whenever possible.
         # If the provider rejects oneOf, capability negotiation is cached
         # and subsequent decisions use the two-stage typed protocol.
-        if getattr(r.client,'needs_navigation_staging',lambda role:False)(
-                'navigation_agent'):
+        if getattr(r.client,'needs_navigation_staging',
+                   lambda role,schema:False)('navigation_agent',generation):
             return staged_decision('native_union_unavailable')
         try:
             return r.client.complete(
@@ -272,7 +273,7 @@ class NavigationAgent:
                 format_retry=int(bool(format_feedback)),retry_safe=True,
                 protocol=protocol,
                 validation_schema=navigation_envelope(tools),
-                generation_schema=navigation_generation_schema(tools))
+                generation_schema=generation)
         except APIError as error:
             # A JSON response can still violate a provider's purported
             # union grammar. Do not execute it or repeatedly regenerate a
@@ -281,4 +282,10 @@ class NavigationAgent:
                     'structured_field','json_schema','json_syntax')
                     or not hasattr(r.client,'needs_navigation_staging')):
                 raise
+            # A model that repeatedly violates a supposedly enforced union
+            # should use typed selection+arguments next time, even though
+            # the server accepted the native schema syntactically.
+            marker=getattr(r.client,'mark_navigation_schema_unreliable',None)
+            if marker is not None:
+                marker('navigation_agent',generation)
             return staged_decision('native_union_response_invalid')
