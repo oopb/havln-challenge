@@ -420,6 +420,29 @@ def unsupported_native_json_schema(detail):
     return (targeted and rejected) or grammar_keys_error
 
 
+def schema_fingerprint(schema):
+    """Stable native grammar identity; independent of purpose/role."""
+    return hashlib.sha256(canonical(
+        native_generation_schema(schema)).encode('utf-8')).hexdigest()
+
+
+def schema_grammar_rejection(detail):
+    """A particular JSON grammar cannot compile (not a provider-wide mode)."""
+    try:
+        data=json.loads(detail)
+        error=data.get('error',data) if isinstance(data,dict) else {}
+        message=str(error.get('message') or '').lower()
+    except (ValueError,TypeError,AttributeError):
+        return False
+    return ('grammar error' in message
+            or ('schema' in message and
+                any(word in message for word in (
+                    'compile','unimplemented','unsupported key','invalid schema')))
+            or any(word in message for word in (
+                'oneof unsupported','unsupported oneof',
+                'anyof unsupported','unsupported anyof')))
+
+
 def response_format_payload(mode, purpose, wire_schema, strict):
     if mode == 'omit':
         return None
@@ -553,19 +576,37 @@ class APIClient:
         # Explicit construction before the first episode is useful for preflight.
         self.begin_episode('preflight', 1, None)
 
-    def needs_navigation_staging(self, role):
-        """Use a two-stage tool protocol only for auto-mode endpoints that
-        learned the native discriminated union cannot be used.
+    def needs_navigation_staging(self, role, generation_schema=None):
+        """Whether the endpoint cannot constrain this particular tool union.
 
-        Explicit json_object configurations retain their existing behavior.
-        The learned mode is per endpoint/model, not per episode.
+        An unsupported union grammar must NOT disable native JSON Schema for
+        simpler, tool-specific arguments on the same model endpoint.
         """
         config=model_endpoints(self.endpoints[role])[0]
         if config['response_format'] != 'auto':
             return False
-        mode=self.request_modes.get((config['base_url'],config['model']),{})
-        return (mode.get('omit_response_format',False)
-                or mode.get('response_format_mode') in ('json_object','omit'))
+        modes=self.request_modes.get((config['base_url'],config['model']),{})
+        if (modes.get('omit_response_format',False)
+                or modes.get('response_format_mode') in ('json_object','omit')):
+            return True
+        if generation_schema is None:
+            return False
+        return modes.get('schema_format_modes',{}).get(
+            schema_fingerprint(generation_schema)) in ('json_object','omit')
+
+    def mark_navigation_schema_unreliable(self, role, generation_schema):
+        """A native union response violated its independently checked schema.
+
+        Record only the unsuitable grammar, never a guessed executable
+        argument or a provider-wide JSON Schema incompatibility.
+        """
+        config=model_endpoints(self.endpoints[role])[0]
+        if config['response_format']!='auto':
+            return
+        self.request_modes.setdefault(
+            (config['base_url'],config['model']),{}).setdefault(
+            'schema_format_modes',{})[
+            schema_fingerprint(generation_schema)]='json_object'
 
     def begin_episode(self, episode_id, budget, log_path):
         if budget < 1:
@@ -742,9 +783,11 @@ class APIClient:
         text_schema = provider_schema(schema)
         reasoning_key = (config['base_url'], config['model'])
         learned_params = self.request_modes.get(reasoning_key, {})
-        mode = learned_params.get('response_format_mode',
+        grammar_id = schema_fingerprint(wire_schema)
+        mode = learned_params.get('schema_format_modes',{}).get(
+            grammar_id, learned_params.get('response_format_mode',
             'json_schema' if config['response_format']=='auto'
-            else config['response_format'])
+            else config['response_format']))
         if learned_params.get('omit_response_format', False):
             mode = 'omit'
         plain_system = system
@@ -1131,7 +1174,14 @@ class APIClient:
                              (mode=='json_object' and
                               unsupported_chat_parameter(detail, 'response_format')))):
                         if config['response_format']=='auto':
-                            compatibility_change = ('response_format_mode',
+                            # Compilation errors are schema-specific: simple
+                            # argument schemas may still work natively.
+                            kind=('schema_format_mode'
+                                  if schema_grammar_rejection(detail)
+                                  or grammar_id in learned_params.get(
+                                      'schema_format_modes',{})
+                                  else 'response_format_mode')
+                            compatibility_change = (kind,
                                 'json_object' if mode=='json_schema' else 'omit')
                         else:
                             compatibility_change = ('omit_response_format', True)
@@ -1244,7 +1294,12 @@ class APIClient:
                         else 'temperature' if kind=='omit_temperature'
                         else 'prompt_cache' if kind=='omit_prompt_cache'
                         else 'format:' + mode)
-                    self.request_modes.setdefault(reasoning_key, {})[kind] = value
+                    if kind == 'schema_format_mode':
+                        self.request_modes.setdefault(
+                            reasoning_key,{}).setdefault(
+                            'schema_format_modes',{})[grammar_id] = value
+                    else:
+                        self.request_modes.setdefault(reasoning_key,{})[kind] = value
                     if kind == 'token_field':
                         body[value] = body.pop(token_field)
                         token_field = value
@@ -1256,7 +1311,8 @@ class APIClient:
                         cache_candidate=False
                         request_metrics['prompt_cache_requested']=False
                         request_metrics['stable_cache_prefix_chars']=0
-                    elif kind in ('response_format_mode', 'omit_response_format'):
+                    elif kind in ('schema_format_mode', 'response_format_mode',
+                                    'omit_response_format'):
                         # Keep the format parameter and prompt contract in sync.
                         mode = value if kind=='response_format_mode' else 'omit'
                         body.pop('response_format', None)
