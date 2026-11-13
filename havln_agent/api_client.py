@@ -567,7 +567,8 @@ class APIClient:
         # reuse. Avoid repeated 1.25x writes without demonstrated read hits.
         self.prefix_cache_probes = {}
         for role in ROLES:
-            if role not in endpoints:
+            if role not in endpoints or (role == 'local_control' and
+                   not endpoints.get('hybrid', {}).get('enabled', False)):
                 continue
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
