@@ -299,13 +299,25 @@ class NavigationAgent:
                     description=spec['description'],
                     required_arguments=spec['parameters']['required'],
                     prior_decision=choice))
+            wrapped = {}
+            def normalize_arguments(value):
+                normalized = normalize_navigation_staged_arguments(
+                    value, name, tools, allow_local_handoff=handoff_enabled)
+                if normalized is not value:
+                    wrapped['source_field'] = (
+                        'requested_arguments' if 'requested_arguments' in value
+                        else 'args')
+                return normalized
             arguments=r.client.complete(
                 'navigation_agent','navigation_tool_arguments',
                 MISSION_ARGUMENTS_PROMPT,arguments_context,
                 spec['parameters'],image_url=images,
                 format_retry=int(bool(format_feedback)),retry_safe=True,
-                pre_normalize=lambda value: normalize_navigation_staged_arguments(
-                    value, name, tools, allow_local_handoff=handoff_enabled))
+                pre_normalize=normalize_arguments)
+            if wrapped:
+                r.event('navigation_wrapped_arguments_normalized',
+                        source='navigation_agent',tool=name,
+                        source_field=wrapped['source_field'])
             proposal=dict(choice,args=arguments)
             validate(proposal)
             return proposal
