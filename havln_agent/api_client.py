@@ -382,6 +382,16 @@ def unsupported_chat_parameter(detail, field):
                 ('unsupported' in message or 'not supported' in message
                  or code in ('unsupported_value', 'invalid_value')))
     if field == 'response_format':
+        # Some DeepSeek-compatible gateways reject the selected format with
+        # code=invalid_request_error, param=null and the exact response:
+        # "This response_format type is unavailable now". It names the
+        # rejected WIRE FORMAT, not a malformed output or a failed model.
+        # This also covers json_object rejection so auto mode can safely
+        # attempt an omitted response_format after a rejected json_schema.
+        if re.search(
+                r'\\bresponse_format\\s+type\\s+is\\s+unavailable'
+                r'(?:\\s+now)?\\b', message):
+            return True
         return (code in ('unsupported_value', 'invalid_value') and
                 ('not supported' in message or 'unsupported' in message)
                 and ('json_object' in message or 'json_schema' in message))
