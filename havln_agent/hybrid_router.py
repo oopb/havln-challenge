@@ -147,6 +147,11 @@ class HybridRouter:
         if self.enabled and self.state == 'ESCALATE':
             self.state = 'CLOUD_DECIDE'
 
+    def finish(self):
+        if self.enabled:
+            self.state = 'FINISHED'
+            self.route = None
+
     def cloud_feedback(self):
         """A model hypothesis and provenance, never an observed route fact."""
         if not self.last_escalation:
