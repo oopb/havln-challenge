@@ -206,22 +206,45 @@ class LocalProtocolTests(unittest.TestCase):
                 self.assertEqual(client.stats()['cloud_requests'], 1)
                 self.assertEqual(client.stats()['local_requests'], 2)
 
-    def test_default_config_does_not_require_local_credentials(self):
-        # The old API-only configuration remains strictly compatible.
+    def test_original_config_reads_all_local_endpoint_values_from_env(self):
         root = Path(__file__).resolve().parents[1]
         env = dict(NAVIGATION_AGENT_BASE_URL='https://example.com/v1',
                    NAVIGATION_AGENT_MODEL='cloud-nav',
-                   NAVIGATION_AGENT_API_KEY='key',
-                   VISUAL_PERCEPTION_BASE_URL='https://example.com/v1',
+                   NAVIGATION_AGENT_API_KEY='cloud-key',
+                   VISUAL_PERCEPTION_BASE_URL='https://vision.example/v1',
                    VISUAL_PERCEPTION_MODEL='cloud-vision',
-                   VISUAL_PERCEPTION_API_KEY='key',
+                   VISUAL_PERCEPTION_API_KEY='vision-key',
+                   LOCAL_CONTROL_BASE_URL='http://127.0.0.1:18001/v1',
+                   LOCAL_CONTROL_MODEL='custom-local-vlm',
                    LOCAL_CONTROL_API_KEY='local-key')
-        with patch.dict(os.environ, env):
-            old = load_config(root/'configs/agent.yaml')
-            new = load_config(root/'configs/agent-hybrid.yaml')
-        self.assertNotIn('local_control', old)
-        self.assertTrue(new['hybrid']['enabled'])
-        self.assertEqual(new['local_control']['model'], 'havln-local')
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(root/'configs/agent.yaml')
+            self.assertTrue(config['hybrid']['enabled'])
+            self.assertEqual(config['local_control']['base_url'],
+                             env['LOCAL_CONTROL_BASE_URL'])
+            self.assertEqual(config['local_control']['model'],
+                             env['LOCAL_CONTROL_MODEL'])
+            self.assertEqual(config['local_control']['api_key_env'],
+                             'LOCAL_CONTROL_API_KEY')
+            client = APIClient(config, tempfile.mkdtemp())
+            self.assertEqual(client.keys[('local_control', 0)], 'local-key')
+
+        # The local model address/model are not baked into agent.yaml.
+        env['LOCAL_CONTROL_BASE_URL'] = 'http://192.0.2.5:9000/v1'
+        env['LOCAL_CONTROL_MODEL'] = 'another-local-model'
+        with patch.dict(os.environ, env, clear=True):
+            config = load_config(root/'configs/agent.yaml')
+            self.assertEqual(config['local_control']['base_url'],
+                             'http://192.0.2.5:9000/v1')
+            self.assertEqual(config['local_control']['model'],
+                             'another-local-model')
+
+        # A missing local endpoint fails at config load, not mid-episode.
+        del env['LOCAL_CONTROL_BASE_URL']
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError,
+                                        'LOCAL_CONTROL_BASE_URL'):
+                load_config(root/'configs/agent.yaml')
 
 
 class HybridSchedulerTests(unittest.TestCase):
