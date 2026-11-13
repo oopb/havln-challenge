@@ -43,6 +43,8 @@ class FakeClient:
         item=self.responses.pop(0)
         if isinstance(item,Exception):
             raise item
+        if kwargs.get('pre_normalize'):
+            item=kwargs['pre_normalize'](item)
         try:
             Draft7Validator(schema).validate(item)
         except ValidationError as error:
@@ -116,6 +118,90 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
                          ['prior_decision'],selection)
         self.assertEqual(runtime.events[-1]['reason'],
                          'native_union_unavailable')
+
+    def test_hybrid2_complete_turn_selection_executes_identical_args(self):
+        """The eight observed stage-one top-level turns need no regeneration."""
+        args=dict(turn_direction='RIGHT',turn_degrees=30,look='none')
+        selection=decision(tool='turn_and_observe')
+        selection.update(args)
+        selection['scene_goal']='Continue along the corridor.'
+        client=FakeClient(True,[selection])
+        result,runtime=self.decide(client)
+        self.assertEqual(result['tool'],'turn_and_observe')
+        self.assertEqual(result['args'],args)
+        self.assertEqual(result['scene_goal'],selection['scene_goal'])
+        self.assertEqual([x['purpose'] for x in client.calls],
+                         ['navigation_tool_selection'])
+        self.assertTrue(any(
+            event['event']=='navigation_complete_action_in_selection'
+            for event in runtime.events))
+
+    def test_staged_selection_accepts_only_unambiguous_uncertainty_typo(self):
+        selection=decision(tool='turn_and_observe')
+        selection['uncertainities']=[]
+        selection['uncertainties']=['Doorway is not confirmed.']
+        args=dict(turn_direction='LEFT',turn_degrees=15,look='none')
+        client=FakeClient(True,[selection,args])
+        result,_=self.decide(client)
+        self.assertNotIn('uncertainities',result)
+        self.assertEqual(result['uncertainties'],
+                         ['Doorway is not confirmed.'])
+        self.assertEqual(len(client.calls),2)
+
+    def test_hybrid2_wrapped_arguments_use_only_selected_tool_args(self):
+        selection=decision(tool='turn_and_observe')
+        args=dict(turn_direction='RIGHT',turn_degrees=45,look='none')
+        wrapped=dict(
+            observed_evidence=['Same current wall and door.'],
+            decision_analysis='Turn toward doorway.',
+            tool='turn_and_observe',
+            progress_narrative='At the stair bottom.',
+            scene_goal='Enter the room.',
+            navigation_intent='turn_and_observe',
+            uncertainties=['Room beyond doorway remains uncertain.'],
+            requested_arguments=args)
+        client=FakeClient(True,[selection,wrapped])
+        result,_=self.decide(client)
+        self.assertEqual(result['args'],args)
+        self.assertNotIn('requested_arguments',result)
+        self.assertNotIn('progress_narrative',result)
+        self.assertEqual(len(client.calls),2)
+
+    def test_invalid_or_incomplete_full_turn_does_not_autofill(self):
+        base=decision(tool='turn_and_observe')
+        attempts=[
+            dict(turn_direction='RIGHT',turn_degrees=20),
+            dict(turn_direction='WRONG',turn_degrees=20,look='none'),
+            dict(turn_direction='RIGHT',turn_degrees=181,look='none'),
+            dict(turn_direction='RIGHT',turn_degrees=20,look='none',
+                 bypass_safety=True),
+        ]
+        for parameters in attempts:
+            with self.subTest(parameters=parameters):
+                client=FakeClient(True,[dict(base,**parameters)])
+                with self.assertRaises(APIError):
+                    self.decide(client)
+                self.assertEqual(len(client.calls),1)
+
+    def test_stage_one_never_autorecovers_request_finish(self):
+        item=decision(tool='request_finish')
+        item.update(outcome='success',evidence='I think the room matches.')
+        client=FakeClient(True,[item])
+        with self.assertRaises(APIError):
+            self.decide(client)
+
+    def test_wrapped_args_must_agree_with_selected_tool(self):
+        selection=decision(tool='turn_and_observe')
+        args=dict(turn_direction='RIGHT',turn_degrees=30,look='none')
+        wrapped=dict(
+            observed_evidence=['Wall right.'],
+            decision_analysis='Turn toward the room.',
+            tool='navigate_relative',
+            requested_arguments=args)
+        client=FakeClient(True,[selection,wrapped])
+        with self.assertRaises(APIError):
+            self.decide(client)
+        self.assertEqual(len(client.calls),2)
 
     def test_invalid_union_result_recovers_with_typed_generation(self):
         selection=decision(tool='turn_and_observe')
