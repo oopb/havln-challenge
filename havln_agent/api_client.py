@@ -452,6 +452,26 @@ def schema_grammar_rejection(detail):
                 and ('unsupported' in message or 'not supported' in message)))
 
 
+def initial_response_format(config):
+    """Deterministic wire format per endpoint, before the first paid request.
+
+    Explicit response_format always wins. For 'auto', the known DeepSeek
+    family uses json_object (native JSON Schema is unavailable in the
+    confirmed DeepSeek API trace). Other OpenAI-compatible models, including
+    native-schema vLLM, retain json_schema as the initial choice. A proxy
+    serving a differently named DeepSeek model can override this in YAML.
+    """
+    configured = config['response_format']
+    if configured != 'auto':
+        return configured
+    host = (urllib.parse.urlsplit(config['base_url']).hostname or '').lower()
+    model = config['model'].lower()
+    if (host == 'api.deepseek.com' or host.endswith('.api.deepseek.com')
+            or re.search(r'(?:^|[/\\-])deepseek(?:[/\\-]|$)', model)):
+        return 'json_object'
+    return 'json_schema'
+
+
 def response_format_payload(mode, purpose, wire_schema, strict):
     if mode == 'omit':
         return None
@@ -547,8 +567,8 @@ def model_endpoints(settings):
             raise ValueError('API base_url must be an HTTP(S) URL without credentials/query')
         if config['provider']!='openai_compatible':
             raise ValueError('Only openai_compatible is supported')
-        if config['response_format'] not in ('json_schema','json_object','auto'):
-            raise ValueError('response_format must be auto, json_schema or json_object')
+        if config['response_format'] not in ('json_schema','json_object','omit','auto'):
+            raise ValueError('response_format must be auto, json_schema, json_object or omit')
         if (not isinstance(config['timeout_seconds'],(int,float)) or isinstance(config['timeout_seconds'],bool)
                 or not math.isfinite(config['timeout_seconds']) or config['timeout_seconds']<=0
                 or type(config['max_retries']) is not int or not 0<=config['max_retries']<=5
@@ -596,8 +616,8 @@ class APIClient:
         simpler, tool-specific arguments on the same model endpoint.
         """
         config=model_endpoints(self.endpoints[role])[0]
-        if config['response_format'] != 'auto':
-            return False
+        if initial_response_format(config) != 'json_schema':
+            return True
         modes=self.request_modes.get((config['base_url'],config['model']),{})
         if (modes.get('omit_response_format',False)
                 or modes.get('response_format_mode') in ('json_object','omit')):
@@ -811,8 +831,7 @@ class APIClient:
         grammar_id = schema_fingerprint(wire_schema)
         mode = learned_params.get('schema_format_modes',{}).get(
             grammar_id, learned_params.get('response_format_mode',
-            'json_schema' if config['response_format']=='auto'
-            else config['response_format']))
+            initial_response_format(config)))
         if learned_params.get('omit_response_format', False):
             mode = 'omit'
         plain_system = system

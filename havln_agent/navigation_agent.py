@@ -31,8 +31,11 @@ MISSION_BASE_PROMPT=(
 )
 CLOUD_HANDOFF_PROMPT = (
     " When a chosen forward motion starts a clear, unambiguous route, "
-    "include optional local_handoff={goal,exit_condition} only if a small "
-    "visual controller can safely continue FOLLOWING that route. "
+    "evaluate whether the next short movements can be delegated. "
+    "For a single visible corridor, straight passage, or continuous "
+    "unambiguous local route, include top-level "
+    "local_handoff={goal,exit_condition} if a small visual controller can "
+    "safely continue FOLLOWING the cloud-selected route. "
     "When hybrid_handoff_feedback is present, reassess its real images and "
     "action receipts; a local signal is a hypothesis, not a confirmed fact. Do not "
     "delegate a branch choice, stair-bottom decision, uncertain obstacle, "
@@ -44,7 +47,10 @@ MISSION_PROMPT=MISSION_BASE_PROMPT + (
 MISSION_SELECTION_PROMPT=MISSION_BASE_PROMPT + (
     "In this stage choose exactly ONE registered tool, citing 1-2 short "
     "source-grounded observed_evidence facts and one sentence of "
-    "decision_analysis. Provide optional progress only if genuinely changed. "
+    "decision_analysis. If progress changed, use ONLY top-level "
+    "progress_narrative, scene_goal, navigation_intent or uncertainties; "
+    "never a nested progress object. Include top-level local_handoff "
+    "only when enabled and the route can safely be delegated. "
     "Return 'tool' but DO NOT emit 'args' or any physical command parameters. "
     "The selected tool's required arguments are generated in a separate "
     "schema-constrained decision. No hidden chain-of-thought."
@@ -260,8 +266,11 @@ class NavigationAgent:
                 image_url=images,format_retry=int(bool(format_feedback)),
                 retry_safe=True,
                 protocol=('Return one JSON object with observed_evidence, '
-                    'decision_analysis, tool and optional progress. '
-                    'DO NOT include args. Tools: '+', '.join(tools)))
+                    'decision_analysis and tool. Optional metadata must use '
+                    'TOP-LEVEL progress_narrative, scene_goal, navigation_intent, '
+                    'uncertainties, evidence_observation_ids, route_reference_update '
+                    'and (only when enabled) local_handoff. Never emit nested '
+                    'progress. DO NOT include args. Tools: '+', '.join(tools)))
             name=choice['tool']
             spec=tools[name]
             arguments_context=dict(context,
