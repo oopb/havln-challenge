@@ -70,17 +70,30 @@ FORMAT_REGENERATIONS_PER_DECISION=3
 
 
 def format_repair_feedback(error,context):
+    """Keep repair instructions aligned with the actual inference stage."""
     detail=str(context.get('error_detail') or str(error))[:350]
     field=context.get('validation_field') or []
     if isinstance(field,str):
         field=[field]
     field_text='.'.join(map(str,field))
-    pure_turn=('distance_m' in detail or 'distance_m' in field_text)
-    return dict(
-        category=error.category,
-        failed_field=field_text or None,
-        error_detail=detail,
-        repair_instruction=(
+    purpose=context.get('purpose')
+    if purpose == 'navigation_tool_selection':
+        instruction=(
+            'No physical action executed. Regenerate ONE JSON object with '
+            'observed_evidence, decision_analysis and tool. '
+            'Do NOT include args at the selection stage. Optional '
+            'progress_narrative, scene_goal, navigation_intent, uncertainties '
+            'and local_handoff must be TOP-LEVEL fields; never output a '
+            'nested progress object. Preserve the original route intent.')
+    elif purpose == 'navigation_tool_arguments':
+        instruction=(
+            'No physical action executed. Regenerate ONLY the registered '
+            'arguments JSON object for the already-selected tool; no tool, '
+            'args wrapper, progress, or narrative. Respect every required '
+            'parameter and numeric bound; do not invent motor defaults.')
+    else:
+        pure_turn=('distance_m' in detail or 'distance_m' in field_text)
+        instruction=(
             'No physical action executed. Preserve the intended goal '
             'and observations, then regenerate ONE legal JSON object '
             'with observed_evidence, decision_analysis, tool and args. '
@@ -92,7 +105,12 @@ def format_repair_feedback(error,context):
             'field and regenerate ONE legal evidence-first JSON decision. '
             'Keep observed_evidence entries concise (max 600 characters). '
             'Do not add unregistered fields or change model intent just '
-            'to meet a numeric constraint.'))
+            'to meet a numeric constraint.')
+    return dict(
+        category=error.category,
+        failed_field=field_text or None,
+        error_detail=detail,
+        repair_instruction=instruction)
 
 
 def request(runtime,role,operation,append):
