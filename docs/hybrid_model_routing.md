@@ -24,6 +24,32 @@ variables into your private `.env` file, keeping credentials out of Git.
 To compare against API-only behavior, set `hybrid.enabled: false` in
 `configs/agent.yaml`; leave the endpoint variables configured.
 
+## API-specific JSON formats
+
+`configs/agent.yaml` is the only model configuration. Each of
+`navigation_agent`, `visual_perception`, and `local_control` has an
+independent `response_format` setting. `auto` now makes the **first**
+request using a deterministic endpoint profile:
+
+| Endpoint/model | First wire format | Navigation execution |
+| --- | --- | --- |
+| Official DeepSeek API or model ID containing DeepSeek | `json_object` | Two-stage tool selection and argument generation |
+| Native-schema OpenAI / GPT-compatible model | `json_schema` | Native full tool union, staged only if independently shown unreliable |
+| Local vLLM Qwen-VL | `json_schema` | Native full tool union, followed by strict local validation |
+
+To override an endpoint, set its existing `response_format` in
+`agent.yaml` to `json_schema`, `json_object`, or `omit`.
+`omit` sends no `response_format` parameter but still requires valid
+JSON and local Schema validation. Provider errors remain a last-resort
+compatibility safeguard, **not the initial format selection strategy**.
+A proxy with opaque model aliases should use an explicit format setting.
+
+The navigation protocol requires top-level `progress_narrative`,
+`scene_goal`, and `uncertainties`, not a nested `progress` object.
+The previously observed DeepSeek nested form is normalized only for
+known descriptive keys, with unknown/conflicting fields and executable
+arguments still strictly validated.
+
 The local model receives an observable cloud-issued route goal, about 10
 source-verified RGB frames (one CURRENT RGB and up to nine historical anchors),
 a CURRENT Depth visualization and the six most recent action receipts. Images
