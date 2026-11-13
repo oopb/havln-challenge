@@ -153,6 +153,55 @@ _PROGRESS=dict(
         required=['source_observation_id','instruction_relation']))
 
 
+
+# The historical DeepSeek JSON-object trace contains a *descriptive* nested
+# progress envelope; the canonical on-wire schema uses top-level fields.
+# Accept only observed, unambiguous aliases. Unknown fields and any conflict
+# with a canonical top-level value must still fail normal schema validation.
+_NESTED_PROGRESS_FIELDS = {
+    'narrative': 'progress_narrative',
+    'scene_goal': 'scene_goal',
+    'navigation_intent': 'navigation_intent',
+    'uncertainties': 'uncertainties',
+}
+_NESTED_PROGRESS_ECHO_TYPES = {
+    'scene_goal_source_observation_id': str,
+    'model_revision_count': int,
+}
+
+
+def normalize_navigation_progress(decision, known_observation_ids=None):
+    """Flatten safe *descriptive* progress metadata, never tool or args."""
+    if not isinstance(decision, dict) or 'progress' not in decision:
+        return decision
+    progress = decision['progress']
+    if not isinstance(progress, dict):
+        return decision
+    if set(progress) - set(_NESTED_PROGRESS_FIELDS) - set(_NESTED_PROGRESS_ECHO_TYPES):
+        return decision
+    for key, expected in _NESTED_PROGRESS_ECHO_TYPES.items():
+        if key not in progress:
+            continue
+        if type(progress[key]) is not expected:
+            return decision
+        if (key == 'scene_goal_source_observation_id'
+                and known_observation_ids is not None
+                and progress[key] not in known_observation_ids):
+            return decision
+    flattened = dict(decision)
+    for nested, canonical in _NESTED_PROGRESS_FIELDS.items():
+        if nested not in progress:
+            continue
+        value = progress[nested]
+        if (canonical in flattened and
+                (type(flattened[canonical]) is not type(value)
+                 or flattened[canonical] != value)):
+            return decision
+        flattened[canonical] = value
+    flattened.pop('progress', None)
+    return flattened
+
+
 def normalize_navigation_route_update(decision, known_observation_ids=None):
     """Normalize optional *descriptive* route metadata, never motor actions.
 
@@ -163,6 +212,7 @@ def normalize_navigation_route_update(decision, known_observation_ids=None):
     another paid completion or fabricating a waypoint. This does not bypass
     the registered executable tool schema.
     """
+    decision = normalize_navigation_progress(decision, known_observation_ids)
     if not isinstance(decision, dict) or 'route_reference_update' not in decision:
         return decision
     original=decision['route_reference_update']
