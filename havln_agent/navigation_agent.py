@@ -180,7 +180,9 @@ class NavigationAgent:
             context['history_media']=dict(
                 manifest=[],attached_historical_RGB=0,
                 historical_images_are_not_live_clearance=True)
-        schema=navigation_schema(tools)
+        handoff_enabled = bool(getattr(
+            getattr(r, 'hybrid_router', None), 'enabled', False))
+        schema=navigation_schema(tools, allow_local_handoff=handoff_enabled)
         def validate(value):
             # Truly malformed tool arguments remain format errors; the error
             # names the specific field, while physical LOOK limits belong to
@@ -227,10 +229,10 @@ class NavigationAgent:
         # IDs come from immutable sensor records; optional memory annotations
         # never block a valid tool decision when they are malformed.
         known_ids={o['observation_id'] for o in r.memory.observations}
-        handoff_prompt = (CLOUD_HANDOFF_PROMPT if
-            getattr(getattr(r, 'hybrid_router', None), 'enabled', False) else '')
+        handoff_prompt = CLOUD_HANDOFF_PROMPT if handoff_enabled else ''
         protocol=compact_navigation_protocol(tools)
-        generation=navigation_generation_schema(tools)
+        generation=navigation_generation_schema(
+            tools, allow_local_handoff=handoff_enabled)
         def staged_decision(reason):
             # A backend without reliable oneOf support cannot constrain
             # tool-specific required args in one response. Split selection
@@ -242,7 +244,7 @@ class NavigationAgent:
             choice=r.client.complete(
                 'navigation_agent','navigation_tool_selection',
                 MISSION_SELECTION_PROMPT + handoff_prompt,context,
-                navigation_choice_schema(tools),
+                navigation_choice_schema(tools, allow_local_handoff=handoff_enabled),
                 pre_normalize=lambda value: normalize_navigation_route_update(
                     value,known_ids),
                 image_url=images,format_retry=int(bool(format_feedback)),
@@ -281,7 +283,8 @@ class NavigationAgent:
                 image_url=images,
                 format_retry=int(bool(format_feedback)),retry_safe=True,
                 protocol=protocol,
-                validation_schema=navigation_envelope(tools),
+                validation_schema=navigation_envelope(
+                    tools, allow_local_handoff=handoff_enabled),
                 generation_schema=generation)
         except APIError as error:
             # A JSON response can still violate a provider's purported
