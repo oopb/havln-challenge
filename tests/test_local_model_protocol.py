@@ -91,6 +91,82 @@ class LocalModelProtocolTests(unittest.TestCase):
         self.assertIn('Return only JSON satisfying this schema',
                       bodies[1]['messages'][0]['content'])
 
+    def test_deepseek_unavailable_format_adapts_with_null_param_and_caches(self):
+        """Replays the exact DeepSeek HTTP 400 from api(4).jsonl."""
+        bodies = []
+        def handler(req, timeout, rec):
+            body = json.loads(req.data)
+            bodies.append(body)
+            if len(bodies) == 1:
+                error(req, rec,
+                    'This response_format type is unavailable now '
+                    '(request_id: d36ffe82-4f95-4a2f-95c6-ed1987041cf9)',
+                    param=None, status=400)
+            return answer({'ok': True})
+        self.client._request = Mock(side_effect=handler)
+        self.assertEqual(self.ask(), {'ok': True})
+        self.assertEqual(self.ask(), {'ok': True})
+        self.assertEqual([b['response_format']['type'] for b in bodies],
+                         ['json_schema', 'json_object', 'json_object'])
+        self.assertEqual(self.client.request_modes[
+            ('http://127.0.0.1:8000/v1', 'havln-local')]['response_format_mode'],
+            'json_object')
+        self.assertIn('Return only JSON satisfying this schema',
+                      bodies[1]['messages'][0]['content'])
+        rows = [json.loads(line) for line in
+                (Path(self.tmp.name) / 'api.jsonl').read_text().splitlines()]
+        self.assertEqual(rows[0]['validation_error_type'], 'protocol_unsupported')
+        self.assertEqual(rows[0]['retry_scheduled'], True)
+        self.assertEqual(rows[0]['request_response_format_mode'], 'json_schema')
+
+    def test_deepseek_unavailable_both_formats_falls_back_to_plain_json(self):
+        bodies = []
+        def handler(req, timeout, rec):
+            body = json.loads(req.data)
+            bodies.append(body)
+            if 'response_format' in body:
+                error(req, rec, 'This response_format type is unavailable now',
+                      param=None, status=400)
+            return answer({'ok': True})
+        self.client._request = Mock(side_effect=handler)
+        self.assertEqual(self.ask(), {'ok': True})
+        self.assertEqual(self.ask(), {'ok': True})
+        self.assertEqual([body.get('response_format', {}).get('type')
+                          for body in bodies],
+                         ['json_schema', 'json_object', None, None])
+        self.assertIn('Return only JSON satisfying this schema',
+                      bodies[2]['messages'][0]['content'])
+        self.assertEqual(self.client.request_modes[
+            ('http://127.0.0.1:8000/v1', 'havln-local')]['response_format_mode'],
+            'omit')
+
+    def test_deepseek_plain_fallback_still_rejects_invalid_json_schema(self):
+        bodies = []
+        def handler(req, timeout, rec):
+            body = json.loads(req.data)
+            bodies.append(body)
+            if 'response_format' in body:
+                error(req, rec, 'This response_format type is unavailable now',
+                      param=None, status=400)
+            return answer({'unexpected_tool': 'request_finish'})
+        self.client._request = Mock(side_effect=handler)
+        with self.assertRaises(APIError):
+            self.ask()
+        self.assertEqual(len(bodies), 3)
+        self.assertNotIn('response_format', bodies[-1])
+
+    def test_unrelated_model_unavailable_does_not_change_format(self):
+        bodies = []
+        def handler(req, timeout, rec):
+            bodies.append(json.loads(req.data))
+            error(req, rec, 'This model is unavailable now',
+                  param=None, status=400)
+        self.client._request = Mock(side_effect=handler)
+        with self.assertRaises(APIError):
+            self.ask()
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(self.client.request_modes, {})
+
     def test_vllm_grammar_compilation_error_downgrades_422(self):
         bodies = []
         def handler(req, timeout, rec):
