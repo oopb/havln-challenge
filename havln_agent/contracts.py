@@ -305,7 +305,12 @@ def normalize_navigation_staged_choice(value, tools, known_observation_ids=None)
     value = normalize_navigation_uncertainties_alias(value)
     if not isinstance(value, dict):
         return value, None
-    spec = tools.get(value.get('tool')) if isinstance(value.get('tool'), str) else None
+    # This compatibility path is limited to the observed movement tools;
+    # never turn a partial STOP, memory read, or observation request into an
+    # executable action simply because the provider used an unexpected shape.
+    if value.get('tool') not in ('navigate_relative', 'turn_and_observe'):
+        return value, None
+    spec = tools.get(value['tool'])
     if spec is None or 'args' in value or 'requested_arguments' in value:
         return value, None
     parameters = spec['parameters']
