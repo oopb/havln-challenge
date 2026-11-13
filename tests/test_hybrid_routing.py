@@ -222,5 +222,100 @@ class LocalProtocolTests(unittest.TestCase):
         self.assertEqual(new['local_control']['model'], 'havln-local')
 
 
+class HybridSchedulerTests(unittest.TestCase):
+    """The real scheduler dispatches cloud and local through one executor."""
+
+    class FakeRuntime:
+        def __init__(self, local_action='FORWARD'):
+            self.config = dict(max_steps=20, max_model_decisions=40,
+                max_unchanged_evidence_decisions=8)
+            self.memory = SimpleNamespace(
+                current=dict(observation_id='obs_0000'), actions=[],
+                note_navigation_assessment=lambda decision: {},
+                note_navigation_turn=lambda *args:None)
+            self.hybrid_router = HybridRouter(dict(enabled=True))
+            self.local_action = local_action
+            self.camera = SimpleNamespace(forward_step=.25, turn_angle=15.)
+            self.client = SimpleNamespace(availability=lambda role=None:'available')
+            self.navigation_agent = SimpleNamespace(decide=self.cloud_decide)
+            self.local_agent = SimpleNamespace(decide=self.local_decide)
+            self.done, self.decisions = False, 0
+            self.cloud_calls, self.local_calls, self.current_decision_id = 0, 0, None
+            self.navigation_liveness = None
+            self.executed = []
+            self.events = []
+
+        def start_mission(self):
+            pass
+
+        def refresh(self):
+            pass
+
+        def decision_id(self, role):
+            self.current_decision_id = role + '_' + str(self.decisions)
+
+        def event(self, name, **fields):
+            self.events.append(dict(event=name, **fields))
+
+        def cloud_decide(self, feedback):
+            self.cloud_calls += 1
+            return dict(cloud_decision(), args=dict(
+                turn_direction='NONE', turn_degrees=0, distance_m=.25))
+
+        def local_decide(self):
+            self.local_calls += 1
+            action = self.local_action
+            return (dict(action=action,
+                         count=0 if action == 'ESCALATE' else 1,
+                         signal='NEW_BRANCH' if action == 'ESCALATE' else 'NORMAL',
+                         evidence_id=self.memory.current['observation_id']),
+                    dict(status='CLEAR'))
+
+        def execute(self, command, binding):
+            self.executed.append((command, binding))
+            if command['tool'] == 'navigate_relative':
+                actions = ['MOVE_FORWARD']
+            else:
+                actions = ['TURN_LEFT']
+            self.memory.actions.append(dict(
+                action=actions[0], result=dict(visual_change=True)))
+            self.memory.current = dict(
+                observation_id='obs_%04d' % len(self.memory.actions))
+            return dict(status='ACTIONS_COMPLETED',
+                tool_call_id='tool_%04d' % len(self.executed),
+                executed_motion=actions, executed_actions=1)
+
+        def assess(self, result):
+            if len(self.memory.actions) >= 2:
+                self.done = True
+
+        def terminate(self, reason):
+            self.done = True
+
+    def test_cloud_handoff_then_local_forward_uses_same_executor(self):
+        from havln_agent.scheduler import run
+        runtime = self.FakeRuntime()
+        records = []
+        run(runtime, lambda role, item:records.append(item))
+        self.assertEqual(runtime.cloud_calls, 1)
+        self.assertEqual(runtime.local_calls, 1)
+        self.assertEqual(len(runtime.executed), 2)
+        self.assertEqual(runtime.executed[0][1]['actor'], 'navigation_agent')
+        self.assertEqual(runtime.executed[1][1]['actor'], 'local_agent')
+        self.assertEqual(runtime.hybrid_router.local_decisions, 1)
+        self.assertTrue(any(item.get('model_tier') == 'local' for item in records))
+
+    def test_local_escalation_executes_no_local_command(self):
+        from havln_agent.scheduler import run
+        runtime = self.FakeRuntime(local_action='ESCALATE')
+        run(runtime, lambda role, item:None)
+        self.assertEqual(runtime.local_calls, 1)
+        self.assertEqual(runtime.cloud_calls, 2)
+        self.assertEqual(len(runtime.executed), 2)
+        self.assertTrue(all(binding['actor'] == 'navigation_agent'
+                        for _,binding in runtime.executed))
+        self.assertEqual(runtime.hybrid_router.escalations, 1)
+
+
 if __name__ == '__main__':
     unittest.main()
