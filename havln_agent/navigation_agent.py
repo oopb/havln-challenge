@@ -32,7 +32,9 @@ MISSION_BASE_PROMPT=(
 CLOUD_HANDOFF_PROMPT = (
     " When a chosen forward motion starts a clear, unambiguous route, "
     "include optional local_handoff={goal,exit_condition} only if a small "
-    "visual controller can safely continue FOLLOWING that route. Do not "
+    "visual controller can safely continue FOLLOWING that route. "
+    "When hybrid_handoff_feedback is present, reassess its real images and "
+    "action receipts; a local signal is a hypothesis, not a confirmed fact. Do not "
     "delegate a branch choice, stair-bottom decision, uncertain obstacle, "
     "room comparison, backtrack, or final STOP. Omit if not applicable."
 )
@@ -74,6 +76,11 @@ class NavigationAgent:
         if preflight.get('status') in ('CLEAR','BLOCKED'):
             state['front_depth_preflight']=preflight
         context=cost_optimized_navigation_context(state)
+        router = getattr(r, 'hybrid_router', None)
+        if router is not None and router.enabled:
+            feedback = router.cloud_feedback()
+            if feedback is not None:
+                context['hybrid_handoff_feedback'] = feedback
         # Preserve bounded context, but allow up to five diverse, source-
         # verified historical RGB images for before/after route comparison.
         if format_feedback:
