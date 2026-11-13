@@ -146,6 +146,7 @@ def run(runtime,append):
                     local, preflight = runtime.local_agent.decide()
                     runtime.decisions += 1
                     current_id = runtime.memory.current['observation_id']
+                    router.last_local_proposal = dict(local)
                     reason = router.approve_local(
                         local, current_id, preflight.get('status', 'UNKNOWN'))
                     runtime.event('hybrid_local_proposal', source='local_agent',
