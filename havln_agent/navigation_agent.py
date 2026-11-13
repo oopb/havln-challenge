@@ -12,7 +12,9 @@ from .observation import array_hash
 from .navigation_history import navigation_visual_anchors
 from .heading import signed_turn
 from .model_angles import project_model_angles
-from .contracts import normalize_navigation_route_update
+from .contracts import (normalize_navigation_route_update,
+                        normalize_navigation_staged_choice,
+                        normalize_navigation_staged_arguments)
 
 MISSION_BASE_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
@@ -257,12 +259,23 @@ class NavigationAgent:
             r.event('navigation_tool_schema_staging',
                 source='navigation_agent',reason=reason,
                 observation_id=r.memory.current['observation_id'])
+            # JSON-object providers sometimes supply a FULL, already valid
+            # motor command at selection time (Hybrid-2: top-level
+            # turn_direction/turn_degrees/look). Keep the selected tool,
+            # validate all supplied fields and reuse that exact model action;
+            # never invent a missing argument or execute an unknown field.
+            recovered = {}
+            def normalize_selection(value):
+                selection, args = normalize_navigation_staged_choice(
+                    value, tools, known_ids)
+                if args is not None:
+                    recovered['args'] = args
+                return selection
             choice=r.client.complete(
                 'navigation_agent','navigation_tool_selection',
                 MISSION_SELECTION_PROMPT + handoff_prompt,context,
                 navigation_choice_schema(tools, allow_local_handoff=handoff_enabled),
-                pre_normalize=lambda value: normalize_navigation_route_update(
-                    value,known_ids),
+                pre_normalize=normalize_selection,
                 image_url=images,format_retry=int(bool(format_feedback)),
                 retry_safe=True,
                 protocol=('Return one JSON object with observed_evidence, '
@@ -273,16 +286,38 @@ class NavigationAgent:
                     'progress. DO NOT include args. Tools: '+', '.join(tools)))
             name=choice['tool']
             spec=tools[name]
+            if 'args' in recovered:
+                proposal=dict(choice,args=recovered['args'])
+                validate(proposal)
+                r.event('navigation_complete_action_in_selection',
+                        source='navigation_agent',tool=name,
+                        observation_id=r.memory.current['observation_id'],
+                        recovered_argument_names=sorted(recovered['args']))
+                return proposal
             arguments_context=dict(context,
                 selected_tool=dict(name=name,
                     description=spec['description'],
                     required_arguments=spec['parameters']['required'],
                     prior_decision=choice))
+            wrapped = {}
+            def normalize_arguments(value):
+                normalized = normalize_navigation_staged_arguments(
+                    value, name, tools, allow_local_handoff=handoff_enabled)
+                if normalized is not value:
+                    wrapped['source_field'] = (
+                        'requested_arguments' if 'requested_arguments' in value
+                        else 'args')
+                return normalized
             arguments=r.client.complete(
                 'navigation_agent','navigation_tool_arguments',
                 MISSION_ARGUMENTS_PROMPT,arguments_context,
                 spec['parameters'],image_url=images,
-                format_retry=int(bool(format_feedback)),retry_safe=True)
+                format_retry=int(bool(format_feedback)),retry_safe=True,
+                pre_normalize=normalize_arguments)
+            if wrapped:
+                r.event('navigation_wrapped_arguments_normalized',
+                        source='navigation_agent',tool=name,
+                        source_field=wrapped['source_field'])
             proposal=dict(choice,args=arguments)
             validate(proposal)
             return proposal

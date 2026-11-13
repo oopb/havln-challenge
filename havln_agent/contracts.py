@@ -4,6 +4,7 @@ No numbered milestones, VERIFY state transitions, route-prediction ledgers, or
 implicit semantic completion predicates are part of the execution protocol.
 """
 import copy
+from jsonschema import Draft7Validator
 from .api_client import TEXT, object_schema
 
 def _optional(properties, required=()):
@@ -268,6 +269,88 @@ def normalize_navigation_route_update(decision, known_observation_ids=None):
         normalized['outcome_observation_id']=outcome_id
     output['route_reference_update']=normalized
     return output
+
+
+def normalize_navigation_uncertainties_alias(value):
+    """Accept the observed 'uncertainities' typo only without ambiguity.
+
+    A duplicate empty misspelling carries no additional claims and may be
+    dropped. Conflicting nonempty lists remain invalid Schema fields.
+    """
+    if not isinstance(value, dict) or 'uncertainities' not in value:
+        return value
+    alias = value['uncertainities']
+    canonical = value.get('uncertainties')
+    if not isinstance(alias, list):
+        return value
+    if ('uncertainties' in value and
+            alias not in ([], canonical)):
+        return value
+    output = dict(value)
+    output.pop('uncertainities')
+    if 'uncertainties' not in output:
+        output['uncertainties'] = alias
+    return output
+
+
+def normalize_navigation_staged_choice(value, tools, known_observation_ids=None):
+    """Recover complete, explicitly model-chosen stage-1 args, never guess.
+
+    Return (selection, recovered_args_or_None). Only keys belonging to the
+    selected registered tool are lifted; incomplete/invalid or conflicting
+    action shapes stay unmodified so the strict selection Schema rejects them.
+    A recovered action still needs the full navigation validator.
+    """
+    value = normalize_navigation_route_update(value, known_observation_ids)
+    value = normalize_navigation_uncertainties_alias(value)
+    if not isinstance(value, dict):
+        return value, None
+    # This compatibility path is limited to the observed movement tools;
+    # never turn a partial STOP, memory read, or observation request into an
+    # executable action simply because the provider used an unexpected shape.
+    if value.get('tool') not in ('navigate_relative', 'turn_and_observe'):
+        return value, None
+    spec = tools.get(value['tool'])
+    if spec is None or 'args' in value or 'requested_arguments' in value:
+        return value, None
+    parameters = spec['parameters']
+    allowed_args = parameters.get('properties', {})
+    supplied = set(value) & set(allowed_args)
+    if not supplied or not set(parameters.get('required', ())) <= supplied:
+        return value, None
+    args = {key: value[key] for key in allowed_args if key in supplied}
+    if not Draft7Validator(parameters).is_valid(args):
+        return value, None
+    choice = {key: item for key, item in value.items() if key not in supplied}
+    return choice, args
+
+
+def normalize_navigation_staged_arguments(value, selected_tool, tools,
+                                           allow_local_handoff=False):
+    """Extract exact valid args from an observed full/wrapped stage-2 reply.
+
+    A mismatched tool, extra unknown key, conflicting wrapper, or invalid
+    parameter leaves the original value untouched to fail strict validation.
+    No descriptive metadata from stage 2 replaces stage-1 mission progress.
+    """
+    if not isinstance(value, dict) or value.get('tool') != selected_tool:
+        return value
+    wrappers = [key for key in ('requested_arguments', 'args') if key in value]
+    if len(wrappers) != 1:
+        return value
+    arguments = value[wrappers[0]]
+    if not isinstance(arguments, dict):
+        return value
+    spec = tools[selected_tool]
+    if not Draft7Validator(spec['parameters']).is_valid(arguments):
+        return value
+    selection = {key: item for key, item in value.items() if key != wrappers[0]}
+    contract = navigation_choice_schema(
+        tools, allow_local_handoff=allow_local_handoff)
+    if not Draft7Validator(contract).is_valid(selection):
+        return value
+    return arguments
+
 
 def _navigation_progress_fields(allow_local_handoff=False):
     result = copy.deepcopy(_PROGRESS)
