@@ -106,7 +106,11 @@ def registry(camera, max_actions, pitch_deg=0.):
             'Request STOP for whole-mission success only with current evidence of the '
             'actual FINAL destination, or abort. For a room distinguished by an occupant '
             'or activity, reaching one furnished doorway while another plausible room '
-            'is unchecked does not establish the correct room. Official scoring is external.',
+            'is unchecked does not establish the correct room. '
+            'Compare positive fixed-scene evidence (layout, requested objects and '
+            'connected entrances) against conspicuous contradictory features; '
+            'generic furnishings alone are insufficient. A person may move, '
+            'so their absence only leaves uncertainty. Official scoring is external.',
             object_schema(dict(outcome=dict(enum=['success','aborted']),evidence=dict(TEXT,minLength=1)))),
     }
     return {name:dict(description=desc,parameters=params,
