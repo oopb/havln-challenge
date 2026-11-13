@@ -188,7 +188,8 @@ def run(runtime,append):
                     runtime.navigation_liveness = liveness.diagnostic(runtime)
                     if router.use_local() and (unchanged or identical >= 2):
                         router.escalate('local_no_new_evidence', runtime)
-                except (APIError, BudgetExceeded, ValueError) as error:
+                except (APIError, BudgetExceeded, ValueError,
+                        TypeError, KeyError, OSError) as error:
                     router.escalate('local_inference_error:' + str(error)[:120],
                                     runtime)
                 continue
