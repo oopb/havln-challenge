@@ -100,17 +100,19 @@ class HybridRouterTests(unittest.TestCase):
         router, runtime, events = self.make()
         router.after_cloud(cloud_decision(), completed_move(),
                            runtime, 'obs_0041')
-        for _ in range(4):
+        for _ in range(3):
             router.after_local(dict(action='LEFT'), dict(
                 status='ACTIONS_COMPLETED', executed_actions=1,
                 executed_motion=['TURN_LEFT']), runtime)
         self.assertEqual(router.approve_local(
-            dict(action='LEFT', count=1, signal='NORMAL',
+            dict(action='LEFT', count=2, signal='NORMAL',
                  evidence_id='obs_0042'), 'obs_0042', 'CLEAR'),
             'repeated_turn_only_local')
-        router.escalate('repeated_turn_only_local', runtime)
+        router.after_local(dict(action='LOOK_UP'), dict(
+            status='ACTIONS_COMPLETED', executed_actions=1,
+            executed_motion=['LOOK_UP']), runtime)
         self.assertFalse(router.use_local())
-        self.assertEqual(router.last_escalation, 'repeated_turn_only_local')
+        self.assertEqual(router.last_escalation, 'local_observation_without_forward')
         self.assertTrue(any(name == 'hybrid_escalated' for name, _ in events))
         router.cloud_ready()
         self.assertEqual(router.state, 'CLOUD_DECIDE')
