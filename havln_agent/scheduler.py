@@ -178,10 +178,10 @@ def run(runtime,append):
                         event='tool_feedback', decision_id=runtime.current_decision_id,
                         model_tier='local', tool_call_id=result['tool_call_id'],
                         feedback=result, memory_update={}))
+                    router.after_local(local, result, runtime)
                     runtime.assess(result)
                     if runtime.done:
                         continue
-                    router.after_local(local, result, runtime)
                     unchanged = liveness.feedback(runtime)
                     identical = liveness.repeated_blocked_command(
                         runtime, command, result)
