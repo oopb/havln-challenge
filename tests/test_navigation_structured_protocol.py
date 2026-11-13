@@ -161,11 +161,15 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
             uncertainties=['Room beyond doorway remains uncertain.'],
             requested_arguments=args)
         client=FakeClient(True,[selection,wrapped])
-        result,_=self.decide(client)
+        result,runtime=self.decide(client)
         self.assertEqual(result['args'],args)
         self.assertNotIn('requested_arguments',result)
         self.assertNotIn('progress_narrative',result)
         self.assertEqual(len(client.calls),2)
+        self.assertTrue(any(
+            event['event']=='navigation_wrapped_arguments_normalized'
+            and event['source_field']=='requested_arguments'
+            for event in runtime.events))
 
     def test_invalid_or_incomplete_full_turn_does_not_autofill(self):
         base=decision(tool='turn_and_observe')
