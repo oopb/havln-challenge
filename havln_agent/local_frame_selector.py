@@ -52,7 +52,8 @@ def select_local_frames(runtime, route, max_frames=10, max_edge=448):
     recent_forwards = [a for a in reversed(memory.actions[-64:])
                        if a.get('action') == 'MOVE_FORWARD' and
                        (a.get('result') or {}).get('visual_change')]
-    for action in recent_forwards[:4]:
+    # Keep room for older route/branch anchors, not just recent motion pairs.
+    for action in recent_forwards[:2]:
         feedback = action.get('result') or {}
         add(feedback.get('observation_before'), 'recent_forward_before')
         add(feedback.get('observation_after'), 'recent_forward_after')
