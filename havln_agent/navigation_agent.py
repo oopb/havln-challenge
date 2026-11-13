@@ -238,6 +238,9 @@ class NavigationAgent:
         known_ids={o['observation_id'] for o in r.memory.observations}
         handoff_prompt = CLOUD_HANDOFF_PROMPT if handoff_enabled else ''
         protocol=compact_navigation_protocol(tools)
+        if handoff_enabled:
+            protocol += (' Optional local_handoff={goal:string,exit_condition:string}'
+                         ' ONLY for a clear cloud-selected followable route.')
         generation=navigation_generation_schema(
             tools, allow_local_handoff=handoff_enabled)
         def staged_decision(reason):
