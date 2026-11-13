@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from havln_agent.api_client import APIError
-from havln_agent.scheduler import EvidenceLivenessGuard, run
+from havln_agent.scheduler import (EvidenceLivenessGuard, format_repair_feedback, run)
 
 
 class FakeMemory:
@@ -75,6 +75,28 @@ class FakeRuntime:
     def terminate(self,reason):
         self.done=True
         self.termination=reason
+
+
+class StageAwareFormatFeedbackTests(unittest.TestCase):
+    def test_selection_repair_does_not_request_tool_arguments(self):
+        error=APIError('invalid_model_response', category='structured_field')
+        feedback=format_repair_feedback(error,dict(
+            purpose='navigation_tool_selection',
+            validation_field=['progress'],
+            error_detail='Unexpected fields at response: progress'))
+        self.assertIn('DO NOT include args', feedback['repair_instruction'])
+        self.assertIn('never output a nested progress object',
+                      feedback['repair_instruction'])
+        self.assertIn('TOP-LEVEL fields', feedback['repair_instruction'])
+
+    def test_arguments_repair_does_not_request_new_tool_choice(self):
+        error=APIError('invalid_model_response', category='structured_field')
+        feedback=format_repair_feedback(error,dict(
+            purpose='navigation_tool_arguments',
+            validation_field=['distance_m'],
+            error_detail='distance_m minimum 0.25'))
+        self.assertIn('already-selected tool', feedback['repair_instruction'])
+        self.assertIn('no tool,', feedback['repair_instruction'])
 
 
 class LivenessTests(unittest.TestCase):
