@@ -226,8 +226,9 @@ class LocalProtocolTests(unittest.TestCase):
                              env['LOCAL_CONTROL_MODEL'])
             self.assertEqual(config['local_control']['api_key_env'],
                              'LOCAL_CONTROL_API_KEY')
-            client = APIClient(config, tempfile.mkdtemp())
-            self.assertEqual(client.keys[('local_control', 0)], 'local-key')
+            with tempfile.TemporaryDirectory() as tmp:
+                client = APIClient(config, tmp)
+                self.assertEqual(client.keys[('local_control', 0)], 'local-key')
 
         # The local model address/model are not baked into agent.yaml.
         env['LOCAL_CONTROL_BASE_URL'] = 'http://192.0.2.5:9000/v1'
