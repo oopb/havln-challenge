@@ -389,8 +389,8 @@ def unsupported_chat_parameter(detail, field):
         # This also covers json_object rejection so auto mode can safely
         # attempt an omitted response_format after a rejected json_schema.
         if re.search(
-                r'\\bresponse_format\\s+type\\s+is\\s+unavailable'
-                r'(?:\\s+now)?\\b', message):
+                r'\bresponse_format\s+type\s+is\s+unavailable'
+                r'(?:\s+now)?\b', message):
             return True
         return (code in ('unsupported_value', 'invalid_value') and
                 ('not supported' in message or 'unsupported' in message)
