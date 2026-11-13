@@ -259,3 +259,5 @@ def run(runtime,append):
                 dict(error=str(error),category=error.category))
             # request() owns the only bounded format retry budget.
             runtime.terminate('api_error')
+    if getattr(runtime, 'hybrid_router', None) is not None:
+        runtime.hybrid_router.finish()
