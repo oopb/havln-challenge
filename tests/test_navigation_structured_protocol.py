@@ -183,6 +183,41 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
                     self.decide(client)
                 self.assertEqual(len(client.calls),1)
 
+    def test_cross_tool_executable_keys_and_duplicate_wrappers_are_rejected(self):
+        base=decision(tool='navigate_relative')
+        original=dict(turn_direction='NONE',turn_degrees=0,
+                      distance_m=0.5)
+        for additional in (
+            dict(look='down'),
+            dict(args=original),
+            dict(requested_arguments=original),
+        ):
+            with self.subTest(additional=additional):
+                response=dict(base,**original,**additional)
+                client=FakeClient(True,[response])
+                with self.assertRaises(APIError):
+                    self.decide(client)
+                self.assertEqual(len(client.calls),1)
+
+    def test_uncertainty_typo_conflict_is_rejected(self):
+        choice=decision(tool='navigate_relative')
+        choice.update(
+            uncertainities=['A new assertion'],
+            uncertainties=['Contradictory assertion'])
+        client=FakeClient(True,[choice])
+        with self.assertRaises(APIError):
+            self.decide(client)
+        self.assertEqual(len(client.calls),1)
+
+    def test_stage_one_complete_forward_is_validated_before_reuse(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        selection=decision(tool='navigate_relative')
+        selection.update(args)
+        client=FakeClient(True,[selection])
+        result,_=self.decide(client)
+        self.assertEqual(result['args'],args)
+        self.assertEqual(len(client.calls),1)
+
     def test_stage_one_never_autorecovers_request_finish(self):
         item=decision(tool='request_finish')
         item.update(outcome='success',evidence='I think the room matches.')
