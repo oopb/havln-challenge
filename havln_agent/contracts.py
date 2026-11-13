@@ -135,6 +135,10 @@ _PROGRESS=dict(
                        items=dict(type='string',maxLength=220)),
     evidence_observation_ids=dict(type='array',maxItems=12,uniqueItems=True,
                                   items=dict(type='string',maxLength=64)),
+    local_handoff=_optional(dict(
+        goal=dict(type='string', minLength=1, maxLength=200),
+        exit_condition=dict(type='string', minLength=1, maxLength=200)),
+        ('goal', 'exit_condition')),
     route_reference_update=dict(
         type='object',additionalProperties=False,
         properties=dict(
@@ -277,8 +281,8 @@ def compact_navigation_protocol(tools):
     return ('Return exactly one JSON object with fields in order: '
         'observed_evidence (1-2 brief source-grounded facts, not repeated '
         'history); optional progress_narrative, navigation_intent, '
-        'scene_goal, uncertainties, evidence_observation_ids and '
-        'route_reference_update (only if changed); decision_analysis '
+        'scene_goal, uncertainties, evidence_observation_ids, route_reference_update '
+        'and local_handoff (only on an unambiguous safe route to delegate); decision_analysis '
         '(one brief evidence-based sentence); tool; args (FINAL executable '
         'decision). Put tool parameters directly inside args. '
         'scene_goal is a persistent scene/room goal, NOT a motor angle, '
