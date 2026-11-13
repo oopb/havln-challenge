@@ -69,10 +69,32 @@ def load_config(path):
                          '; use configs/agent.env.example and docker exec --env-file.')
     config = yaml.safe_load(os.path.expandvars(text))
     roles = ('navigation_agent', 'visual_perception')
-    if not isinstance(config, dict) or set(config) != set(roles) | {'runtime'}:
+    base = set(roles) | {'runtime'}
+    allowed = base | {'hybrid', 'local_control'}
+    if not isinstance(config, dict) or not base <= set(config) or not set(config) <= allowed:
         raise ValueError('Expected navigation_agent, visual_perception and runtime sections')
     for role in roles:
         model_endpoints(config[role])
+    hybrid = config.get('hybrid', {'enabled': False})
+    if not isinstance(hybrid, dict) or type(hybrid.get('enabled', False)) is not bool:
+        raise ValueError('hybrid.enabled must be a boolean')
+    hybrid_keys = {'enabled', 'keyframes_max', 'image_max_edge',
+                   'max_turns_without_forward', 'local_budget'}
+    if set(hybrid) - hybrid_keys:
+        raise ValueError('Unexpected hybrid configuration keys')
+    for field, low, high in [('keyframes_max', 2, 10),
+                              ('image_max_edge', 224, 768),
+                              ('max_turns_without_forward', 1, 20),
+                              ('local_budget', 1, 10000)]:
+        if field in hybrid and (type(hybrid[field]) is not int or
+                                not low <= hybrid[field] <= high):
+            raise ValueError('Invalid hybrid.%s' % field)
+    if hybrid.get('enabled'):
+        if 'local_control' not in config:
+            raise ValueError('hybrid.enabled requires local_control model settings')
+        model_endpoints(config['local_control'])
+    elif 'local_control' in config:
+        model_endpoints(config['local_control'])
     limits = config['runtime']
     required = {'max_steps', 'api_budget', 'waypoint_distance', 'safety_margin',
                 'tool_max_actions', 'max_scene_age_seconds', 'max_depth_age_seconds',
@@ -334,8 +356,11 @@ def run_worker(task_path):
                             split=job['split'], episode_id=episode_id,
                             max_steps=task['config']['runtime']['max_steps'],
                             started_at_epoch=time.time()))
+                        runtime_settings = dict(task['config']['runtime'])
+                        runtime_settings['hybrid'] = task['config'].get(
+                            'hybrid', {'enabled': False})
                         row = run_episode(env, episode_id, camera, client,
-                                          task['config']['runtime'], directory,
+                                          runtime_settings, directory,
                                           instruction=episode.instruction.instruction_text)
                         atomic_json(directory / 'result.json', dict(fingerprint=task['fingerprint'], row=row))
                         rows.append(row)
@@ -626,7 +651,9 @@ def preflight(args):
         report['configuration'] = 'loaded'
         report['credentials_present'] = {role: all(bool(os.environ.get(endpoint['api_key_env']))
                     for endpoint in model_endpoints(config[role]))
-                    for role in ('navigation_agent','visual_perception')}
+                    for role in (('navigation_agent', 'visual_perception',
+                                  'local_control') if config.get('hybrid',{}).get('enabled')
+                                 else ('navigation_agent','visual_perception'))}
     except ValueError as error:
         report['configuration'] = str(error)
         report['credentials_present'] = {}
