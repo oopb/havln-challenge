@@ -28,7 +28,13 @@ MISSION_BASE_PROMPT=(
     "Commanded distance (0.25..3m) is nominal atomic steps, NOT measured arrival or stair descent. Cruise farther in stable corridors; shorten steps near crowds, stairs or obstacles. No verified height change or metric robot x/y/z. "
     "Use relative turn_direction plus turn_degrees in BOTH turn_and_observe and navigate_relative. Pure TURN/LOOK uses turn_and_observe; navigate_relative needs distance_m>=0.25. Camera pitch limits are recoverable; read camera_controls.allowed_look_now. "
     "When selecting an instruction-matching scene, set optional scene_goal to its durable SPATIAL target, not a camera turn. Retain across turns/MOVE; change when new positive spatial evidence justifies another scene. Before leaving for a different entrance, compare the ORIGINAL instruction and room/route layout; explain the actual contradiction or better match. A missing moving person or open door alone is insufficient. Turning to observe and evidence-backed backtracking remain allowed. For multiple plausible ROOM entrances compare actual scenes; target NOT_VISIBLE is uncertainty, not room rejection. At a junction optional route_reference_update cites real RGB and instruction-relative branch, not motor turn. Only request_finish success on final-destination evidence. "
-    "When a chosen forward motion starts a clear unambiguous route, optionally include local_handoff={goal,exit_condition}. This grants a SMALL local visual controller permission only to FOLLOW that already-chosen route. Its goal should be a short observable action, and exit_condition should name a visual route boundary or ambiguous event. NEVER grant local_handoff for a junction choice, room comparison, stair-bottom completion question, backtracking, final destination, or unresolved obstacle. Omit the field unless following can continue without global reasoning. "
+)
+CLOUD_HANDOFF_PROMPT = (
+    " When a chosen forward motion starts a clear, unambiguous route, "
+    "include optional local_handoff={goal,exit_condition} only if a small "
+    "visual controller can safely continue FOLLOWING that route. Do not "
+    "delegate a branch choice, stair-bottom decision, uncertain obstacle, "
+    "room comparison, backtrack, or final STOP. Omit if not applicable."
 )
 MISSION_PROMPT=MISSION_BASE_PROMPT + (
     "Output 1-2 SHORT source-grounded observed_evidence items (avoid paraphrasing history), then a one-sentence decision_analysis citing why this move advances the goal. Update progress_narrative, scene_goal and route references only when genuinely changed. Put the executable tool and args LAST. Return one legal registered tool; no hidden chain-of-thought."
@@ -221,6 +227,8 @@ class NavigationAgent:
         # IDs come from immutable sensor records; optional memory annotations
         # never block a valid tool decision when they are malformed.
         known_ids={o['observation_id'] for o in r.memory.observations}
+        handoff_prompt = (CLOUD_HANDOFF_PROMPT if
+            getattr(getattr(r, 'hybrid_router', None), 'enabled', False) else '')
         protocol=compact_navigation_protocol(tools)
         generation=navigation_generation_schema(tools)
         def staged_decision(reason):
@@ -233,7 +241,7 @@ class NavigationAgent:
                 observation_id=r.memory.current['observation_id'])
             choice=r.client.complete(
                 'navigation_agent','navigation_tool_selection',
-                MISSION_SELECTION_PROMPT,context,
+                MISSION_SELECTION_PROMPT + handoff_prompt,context,
                 navigation_choice_schema(tools),
                 pre_normalize=lambda value: normalize_navigation_route_update(
                     value,known_ids),
@@ -266,7 +274,7 @@ class NavigationAgent:
             return staged_decision('native_union_unavailable')
         try:
             return r.client.complete(
-                'navigation_agent','navigation_decision',MISSION_PROMPT,context,
+                'navigation_agent','navigation_decision',MISSION_PROMPT + handoff_prompt,context,
                 schema,validate=validate,
                 pre_normalize=lambda result: normalize_navigation_route_update(
                     result,known_ids),
