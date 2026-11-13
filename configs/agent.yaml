@@ -31,7 +31,7 @@ visual_perception:
   fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
 runtime:
   max_steps: 500
-  api_budget: 2500  # Total physical HTTP attempts, including retries, per episode.
+  api_budget: 2500  # Cloud HTTP attempts per episode; local inference has hybrid.local_budget.
   # Separate inference safety guards: no cap on a continuous safe MOVE sequence.
   # Changed RGB-D or physically executed actions reset evidence liveness.
   max_unchanged_evidence_decisions: 8  # Diagnostic only; it does not impose verification or steering.
