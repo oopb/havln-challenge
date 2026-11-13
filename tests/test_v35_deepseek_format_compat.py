@@ -15,7 +15,9 @@ from jsonschema import Draft7Validator
 from havln_agent.api_client import (
     APIClient, APIError, decode_response, next_reasoning_mode,
 )
-from havln_agent.contracts import navigation_envelope, navigation_schema, registry
+from havln_agent.contracts import (navigation_choice_schema, navigation_envelope,
+                                   navigation_schema, normalize_navigation_route_update,
+                                   registry)
 from havln_agent.visual_perception import SCAN_GUIDANCE_SCHEMA
 from test_api_parameter_compat import accepted, rejected, settings
 
@@ -91,6 +93,85 @@ class DeepSeekFormatCompatibility(unittest.TestCase):
         return c.complete(
             'visual_perception', 'vlm_guided_observation',
             'Describe one image', {}, SCAN_GUIDANCE_SCHEMA)
+
+    def test_hybrid1_nested_progress_is_safe_and_preserves_handoff(self):
+        """Replays the observed hybrid-1 progress envelope, not executable args."""
+        original = dict(
+            observed_evidence=['Current RGB shows a descending staircase.'],
+            decision_analysis='Follow the descending staircase.',
+            tool='navigate_relative',
+            progress=dict(
+                narrative='Descending the carpeted staircase.',
+                scene_goal='Reach the bottom landing.',
+                scene_goal_source_observation_id='obs_0004',
+                model_revision_count=5,
+                uncertainties=['Remaining stair treads unclear.']),
+            local_handoff=dict(
+                goal='Continue down the same unbranched stairs.',
+                exit_condition='The bottom landing is reached.'))
+        selection = navigation_choice_schema(TOOLS, allow_local_handoff=True)
+        c = self.client(json.dumps(original))
+        result = c.complete(
+            'navigation_agent', 'navigation_tool_selection',
+            'Return selection only', {}, selection,
+            pre_normalize=lambda value: normalize_navigation_route_update(
+                value, {'obs_0004'}))
+        self.assertEqual(result['tool'], 'navigate_relative')
+        self.assertNotIn('progress', result)
+        self.assertNotIn('model_revision_count', result)
+        self.assertNotIn('scene_goal_source_observation_id', result)
+        self.assertEqual(result['progress_narrative'],
+                         original['progress']['narrative'])
+        self.assertEqual(result['scene_goal'],
+                         original['progress']['scene_goal'])
+        self.assertEqual(result['uncertainties'],
+                         original['progress']['uncertainties'])
+        self.assertEqual(result['local_handoff'], original['local_handoff'])
+        self.assertEqual(c.calls, 1)
+
+    def test_nested_progress_never_silently_accepts_unknown_or_conflicting_keys(self):
+        choice = navigation_choice_schema(TOOLS, allow_local_handoff=True)
+        value = dict(
+            observed_evidence=['Current RGB shows a corridor.'],
+            decision_analysis='Continue forward.',
+            tool='navigate_relative')
+        for bad_progress in (
+            {'narrative': 'Move forward', 'tool': 'request_finish'},
+            {'narrative': 'Move forward', 'args': {'distance_m': 0}},
+            {'narrative': 'Move forward', 'model_revision_count': True},
+            {'narrative': 'Move forward',
+             'scene_goal_source_observation_id': 'obs_nonexistent'},
+        ):
+            candidate = dict(value, progress=bad_progress)
+            c = self.client(json.dumps(candidate))
+            with self.subTest(progress=bad_progress), self.assertRaises(APIError):
+                c.complete(
+                    'navigation_agent', 'navigation_tool_selection',
+                    'Return selection only', {}, choice,
+                    pre_normalize=lambda item: normalize_navigation_route_update(
+                        item, {'obs_0004'}))
+        duplicate = dict(value, progress_narrative='Already completed',
+                         progress={'narrative': 'Still approaching'})
+        c = self.client(json.dumps(duplicate))
+        with self.assertRaises(APIError):
+            c.complete(
+                'navigation_agent', 'navigation_tool_selection',
+                'Return selection only', {}, choice,
+                pre_normalize=normalize_navigation_route_update)
+
+    def test_nested_progress_does_not_repair_invalid_executable_arguments(self):
+        original = nav_decision(progress={'narrative': 'Continue the corridor.'},
+                                args=dict(turn_direction='NONE',
+                                          turn_degrees=0, distance_m=0))
+        c = self.client(json.dumps(original))
+        with self.assertRaises(APIError):
+            c.complete(
+                'navigation_agent', 'navigation_decision',
+                'Return one legal decision', {}, NAV_SCHEMA,
+                validation_schema=NAV_ENVELOPE,
+                pre_normalize=normalize_navigation_route_update,
+                validate=lambda item: Draft7Validator(NAV_SCHEMA).validate(item))
+        self.assertEqual(c.calls, 1)
 
     def test_echoes_of_input_state_are_ignored_without_mutating_action(self):
         original = nav_decision(
