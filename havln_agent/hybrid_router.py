@@ -90,6 +90,9 @@ class HybridRouter:
                 return 'repeated_turn_only_local'
         elif count != 1:
             return 'invalid_local_look_count'
+        if (action in ('LOOK_UP', 'LOOK_DOWN') and
+                self.turns_since_forward + count > self.max_turns_without_forward):
+            return 'repeated_look_only_local'
         return None
 
     def after_local(self, decision, receipt, runtime):
@@ -115,6 +118,8 @@ class HybridRouter:
                                                    'LOOK_UP', 'LOOK_DOWN')
                                             for a in actions)
             self.state = 'LOCAL_LOOK'
+            if self.turns_since_forward >= self.max_turns_without_forward:
+                return self.escalate('local_observation_without_forward', runtime)
         return None
 
     def escalate(self, reason, runtime):
