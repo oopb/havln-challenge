@@ -17,6 +17,8 @@ class HybridRouter:
         self.state = 'CLOUD_DECIDE'
         self.route = None
         self.last_escalation = None
+        self.last_route = None
+        self.last_local_proposal = None
         self.local_decisions = 0
         self.cloud_decisions = 0
         self.escalations = 0
@@ -37,6 +39,9 @@ class HybridRouter:
             return
         self.cloud_decisions += 1
         self.state = 'CLOUD_DECIDE'
+        self.last_route = None
+        self.last_escalation = None
+        self.last_local_proposal = None
         self.route = None
         self.turns_since_forward = 0
         grant = proposal.get('local_handoff')
@@ -129,6 +134,7 @@ class HybridRouter:
         route = deepcopy(self.route)
         self.route = None
         self.state = 'ESCALATE'
+        self.last_route = route
         self.last_escalation = reason
         self.escalations += 1
         runtime.event('hybrid_escalated', source='hybrid_router',
@@ -140,6 +146,17 @@ class HybridRouter:
         """Escalation is processed by the next ordinary cloud navigation turn."""
         if self.enabled and self.state == 'ESCALATE':
             self.state = 'CLOUD_DECIDE'
+
+    def cloud_feedback(self):
+        """A model hypothesis and provenance, never an observed route fact."""
+        if not self.last_escalation:
+            return None
+        return dict(
+            escalation_reason=self.last_escalation,
+            prior_delegated_route=deepcopy(self.last_route),
+            last_local_proposal=deepcopy(self.last_local_proposal),
+            local_proposal_is_unverified=True,
+            selected_route_requires_cloud_reassessment=True)
 
     def stats(self):
         return dict(enabled=self.enabled, state=self.state,
