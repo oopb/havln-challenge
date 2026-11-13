@@ -25,6 +25,8 @@ from .active_observation import ObservationController
 from .local_exploration import (covered_view, last_block, local_coverage,
                                 predicted_scan, bearing_from_pose, wrap_heading, same_stance)
 from .navigation_agent import NavigationAgent
+from .hybrid_router import HybridRouter
+from .local_agent import LocalAgent
 from .heading import signed_turn
 from .visual_perception import VisualPerception
 
@@ -48,6 +50,9 @@ class AgentRuntime(ToolExecutor):
         self.runtime_event_counts={}
         self.semantic_motion_policy = 'LOCAL_TERRAIN'
         self.navigation_agent = NavigationAgent(self)
+        self.hybrid_settings = self.config.get('hybrid', {'enabled': False})
+        self.hybrid_router = HybridRouter(self.hybrid_settings)
+        self.local_agent = LocalAgent(self)
         self.visual_perception = VisualPerception(self)
         self.observation_controller = ObservationController(self)
         self._authorized_action = False
