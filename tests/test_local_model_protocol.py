@@ -12,7 +12,8 @@ from unittest.mock import Mock, patch
 from jsonschema import Draft7Validator
 
 from havln_agent.api_client import (
-    APIClient, APIError, native_generation_schema, schema_fingerprint)
+    APIClient, APIError, initial_response_format,
+    native_generation_schema, schema_fingerprint)
 from havln_agent.contracts import (
     navigation_envelope, navigation_generation_schema,
     navigation_choice_schema, navigation_schema, registry,
@@ -71,6 +72,57 @@ class LocalModelProtocolTests(unittest.TestCase):
                             for b in bodies))
         self.assertTrue(all(b['response_format']['json_schema']['schema']==SIMPLE
                             for b in bodies))
+
+    def test_endpoint_profile_selects_deepseek_json_object_before_request(self):
+        config = opts('https://api.deepseek.com/v1')
+        config['model'] = 'deepseek-flash'
+        self.assertEqual(initial_response_format(config), 'json_object')
+        client = APIClient({'navigation_agent': config}, self.tmp.name)
+        client.begin_episode('deepseek-offline', 20,
+                             Path(self.tmp.name) / 'deepseek-api.jsonl')
+        # The very first navigation decision uses two typed stages, not a
+        # schema-dependent one-shot union followed by an HTTP 400 fallback.
+        self.assertTrue(client.needs_navigation_staging(
+            'navigation_agent', navigation_generation_schema(registry(None, 100))))
+        bodies = []
+        def handler(req, timeout, rec):
+            bodies.append(json.loads(req.data))
+            return answer({'ok': True})
+        client._request = Mock(side_effect=handler)
+        self.assertEqual(client.complete('navigation_agent', 'protocol_test',
+                                         'Output JSON', {}, SIMPLE), {'ok': True})
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]['response_format'], {'type': 'json_object'})
+        self.assertIn('Return only JSON satisfying this schema',
+                      bodies[0]['messages'][0]['content'])
+
+    def test_endpoint_profile_detects_deepseek_alias_through_proxy(self):
+        config = opts('https://relay.example/v1')
+        config['model'] = 'vendor/deepseek-v4'
+        self.assertEqual(initial_response_format(config), 'json_object')
+        config['model'] = 'gpt-6'
+        self.assertEqual(initial_response_format(config), 'json_schema')
+        config['response_format'] = 'json_object'
+        self.assertEqual(initial_response_format(config), 'json_object')
+        config['response_format'] = 'omit'
+        self.assertEqual(initial_response_format(config), 'omit')
+        client = APIClient({'navigation_agent': config}, self.tmp.name)
+        client.begin_episode('omit-offline', 20, None)
+        body = []
+        def handler(req, timeout, rec):
+            body.append(json.loads(req.data))
+            return answer({'ok': True})
+        client._request = Mock(side_effect=handler)
+        self.assertEqual(client.complete('navigation_agent', 'protocol_test',
+                                         'Output JSON', {}, SIMPLE), {'ok': True})
+        self.assertNotIn('response_format', body[0])
+        self.assertIn('Return only JSON satisfying this schema',
+                      body[0]['messages'][0]['content'])
+
+    def test_vllm_auto_keeps_native_schema_and_single_decision(self):
+        self.assertEqual(initial_response_format(opts()), 'json_schema')
+        self.assertFalse(self.client.needs_navigation_staging(
+            'navigation_agent', navigation_generation_schema(registry(None,100))))
 
     def test_schema_rejection_downgrades_to_object_and_remembers(self):
         bodies = []
