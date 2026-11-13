@@ -1,9 +1,28 @@
-# Hybrid cloud/local navigation (opt-in)
+# Hybrid cloud/local navigation (single configuration)
 
-Use `configs/agent-hybrid.yaml` rather than replacing the proven API-only
-`configs/agent.yaml`. The cloud model must support multimodal RGB and the
-local `havln-local` model must accept Chat Completions with image_url content.
-Set `LOCAL_CONTROL_API_KEY` alongside the two existing cloud API keys.
+Use the existing `configs/agent.yaml` for both cloud and local models;
+no separate hybrid YAML is needed. This configuration enables hybrid
+routing by default. The cloud model must support multimodal RGB and the
+local VLM must accept OpenAI-compatible Chat Completions with `image_url`
+content. Configure all three model roles using the same `.env` file:
+
+```dotenv
+NAVIGATION_AGENT_BASE_URL=https://your-provider.example/v1
+NAVIGATION_AGENT_MODEL=your-cloud-navigation-model
+NAVIGATION_AGENT_API_KEY=your-cloud-navigation-key
+VISUAL_PERCEPTION_BASE_URL=https://your-provider.example/v1
+VISUAL_PERCEPTION_MODEL=your-cloud-vision-model
+VISUAL_PERCEPTION_API_KEY=your-cloud-vision-key
+LOCAL_CONTROL_BASE_URL=http://172.17.0.1:8000/v1
+LOCAL_CONTROL_MODEL=havln-local
+LOCAL_CONTROL_API_KEY=havln-local-key
+```
+
+The local address and model ID above are examples for the existing vLLM
+deployment. They are not hardcoded in Python or YAML. Copy the additional
+variables into your private `.env` file, keeping credentials out of Git.
+To compare against API-only behavior, set `hybrid.enabled: false` in
+`configs/agent.yaml`; leave the endpoint variables configured.
 
 The local model receives an observable cloud-issued route goal, about 10
 source-verified RGB frames (one CURRENT RGB and up to nine historical anchors),
@@ -43,18 +62,19 @@ CUDA_VISIBLE_DEVICES=0 vllm serve /home/cc/ccx/datadisk/models/Qwen/Qwen2.5-VL-7
   --api-key havln-local-key
 ```
 
-With the normal existing cloud endpoint environment variables set:
+With all three model endpoints configured in the same private `.env` file:
 ```sh
 docker exec --env-file /path/to/.env -w /toolkit havln-cma \
   python /toolkit/scripts/run_api_agent.py \
-  --config /toolkit/configs/agent-hybrid.yaml \
+  --config /toolkit/configs/agent.yaml \
   --splits val_seen --episode-limit 4 --max-steps 128 \
   --gpu-ids 0 --batch 4 --terminal-log off \
   --output-dir /workspace/agent-runs/hybrid-eval
 ```
 
-The loopback model is reached via `172.17.0.1:8000` in this example.
-Override the file's local_control.base_url if that host is inaccessible.
+The local model is reached via the address configured in
+`LOCAL_CONTROL_BASE_URL`. Adjust that `.env` value if the Docker
+bridge address differs. No separate YAML edit is required.
 The cloud and local request counts have independent budgets, and the
 `api.jsonl` log contains both role-tagged requests (local uses role
 `local_control`). `navigation_agent.jsonl` and `events.jsonl` retain the
