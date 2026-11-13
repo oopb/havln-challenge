@@ -568,7 +568,8 @@ class APIClient:
         self.prefix_cache_probes = {}
         for role in ROLES:
             if role not in endpoints or (role == 'local_control' and
-                   not endpoints.get('hybrid', {}).get('enabled', False)):
+                    'hybrid' in endpoints and
+                    not endpoints['hybrid'].get('enabled', False)):
                 continue
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
