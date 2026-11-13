@@ -8,7 +8,7 @@ navigation_agent:
   base_url: ${NAVIGATION_AGENT_BASE_URL}
   api_key_env: NAVIGATION_AGENT_API_KEY
   model: ${NAVIGATION_AGENT_MODEL}
-  response_format: auto  # Prefer JSON Schema; negotiate json_object/plain JSON only on explicit rejection.
+  response_format: auto  # DeepSeek -> json_object before first call; GPT/native schema -> json_schema. Override per endpoint.
   prompt_cache: auto  # Explicit stable-prefix caching when supported; 400 fallback once per gateway/model.
   reasoning: low  # Require low-effort reasoning for navigation; no implicit high fallback.
   temperature: null  # Provider default; reasoning models may reject an explicit 0.
@@ -22,7 +22,7 @@ visual_perception:
   base_url: ${VISUAL_PERCEPTION_BASE_URL}
   api_key_env: VISUAL_PERCEPTION_API_KEY
   model: ${VISUAL_PERCEPTION_MODEL}
-  response_format: auto
+  response_format: auto  # Same per-endpoint selection as navigation_agent; explicit json_object/json_schema/omit supported.
   reasoning: low
   temperature: null  # Provider default; reasoning models may reject an explicit 0.
   timeout_seconds: 120
@@ -50,7 +50,7 @@ local_control:
   base_url: ${LOCAL_CONTROL_BASE_URL}
   api_key_env: LOCAL_CONTROL_API_KEY
   model: ${LOCAL_CONTROL_MODEL}
-  response_format: auto
+  response_format: auto  # vLLM Qwen-VL keeps native json_schema; override for incompatible servers.
   prompt_cache: 'off'
   reasoning: null
   temperature: 0.1
