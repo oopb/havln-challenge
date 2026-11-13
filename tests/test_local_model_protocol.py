@@ -96,6 +96,36 @@ class LocalModelProtocolTests(unittest.TestCase):
         self.assertIn('Return only JSON satisfying this schema',
                       bodies[0]['messages'][0]['content'])
 
+    def test_mixed_cloud_vision_local_roles_use_independent_wire_formats(self):
+        nav = opts('https://api.deepseek.com/v1')
+        nav['model'] = 'deepseek-flash'
+        vision = opts('https://api.openai.com/v1')
+        vision['model'] = 'gpt-6'
+        local = opts('http://172.17.0.1:8000/v1')
+        client = APIClient({
+            'navigation_agent': nav,
+            'visual_perception': vision,
+            'local_control': local,
+            'hybrid': {'enabled': True},
+        }, self.tmp.name)
+        client.begin_episode('mixed-offline', 20, None, local_budget=5)
+        observed = []
+        def handler(req, timeout, rec):
+            observed.append((rec['role'], json.loads(req.data)))
+            return answer({'ok': True})
+        client._request = Mock(side_effect=handler)
+        for role in ('navigation_agent', 'visual_perception', 'local_control'):
+            self.assertEqual(client.complete(
+                role, 'profile_test', 'Return JSON', {}, SIMPLE),
+                {'ok': True})
+        self.assertEqual([(role, body['response_format']['type'])
+                          for role, body in observed], [
+                              ('navigation_agent', 'json_object'),
+                              ('visual_perception', 'json_schema'),
+                              ('local_control', 'json_schema')])
+        self.assertEqual(client.cloud_calls, 2)
+        self.assertEqual(client.local_calls, 1)
+
     def test_endpoint_profile_detects_deepseek_alias_through_proxy(self):
         config = opts('https://relay.example/v1')
         config['model'] = 'vendor/deepseek-v4'
