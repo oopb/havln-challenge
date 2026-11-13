@@ -126,8 +126,13 @@ class ReplayRecorder:
             with np.load(file, allow_pickle=False) as data:
                 frame = SimpleNamespace(rgb=data['rgb'], depth=data['depth'])
                 variants = []
-                for sensor, max_edge in (('rgb', 640), ('rgb', None), ('depth', 640)):
-                    url = (depth_image_url(frame, self.camera, max_edge=640,
+                # Local controller uses compact source-verified 448px RGB-D.
+                # Recognize those as canonical renditions instead of writing
+                # duplicate per-request replay/media PNG copies.
+                for sensor, max_edge in (('rgb', 640), ('rgb', None),
+                                         ('rgb', 448), ('depth', 640),
+                                         ('depth', 448)):
+                    url = (depth_image_url(frame, self.camera, max_edge=max_edge,
                                            display_max_m=5.0)
                            if sensor == 'depth' else
                            image_url(frame, max_edge=max_edge))

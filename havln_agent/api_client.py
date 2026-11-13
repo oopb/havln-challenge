@@ -20,7 +20,7 @@ from jsonschema import Draft7Validator, ValidationError
 from scripts.export_cma_submission import atomic_json
 
 PROMPT_VERSION = 'havln-v28-grounded-navigation-feedback'
-ROLES = ('navigation_agent', 'visual_perception')
+ROLES = ('navigation_agent', 'visual_perception', 'local_control')
 
 
 def object_schema(properties):
@@ -567,6 +567,10 @@ class APIClient:
         # reuse. Avoid repeated 1.25x writes without demonstrated read hits.
         self.prefix_cache_probes = {}
         for role in ROLES:
+            if role not in endpoints or (role == 'local_control' and
+                    'hybrid' in endpoints and
+                    not endpoints['hybrid'].get('enabled', False)):
+                continue
             for index,config in enumerate(model_endpoints(endpoints[role])):
                 key = os.environ.get(config['api_key_env'])
                 if not key:
@@ -607,10 +611,14 @@ class APIClient:
             'schema_format_modes',{})[
             schema_fingerprint(generation_schema)]='json_object'
 
-    def begin_episode(self, episode_id, budget, log_path):
-        if budget < 1:
+    def begin_episode(self, episode_id, budget, log_path, local_budget=0):
+        if type(budget) is not int or budget < 1:
             raise ValueError('API request budget must be positive')
+        if type(local_budget) is not int or local_budget < 0:
+            raise ValueError('Local inference budget must be a nonnegative integer')
         self.episode_id, self.budget, self.log_path = episode_id, budget, log_path
+        # Cloud request quota never includes local loopback vLLM requests.
+        self.cloud_calls, self.local_calls, self.local_budget = 0, 0, local_budget
         self.calls, self.cache_hits, self.seconds = 0, 0, 0.0
         self.usage = {}
         self.requests_by_purpose, self.hits_by_purpose = {}, {}
@@ -621,16 +629,24 @@ class APIClient:
         self.by_endpoint = {}
         self.replay_recorder = None
 
-    def availability(self):
-        if self.calls >= self.budget:
+    def availability(self, role=None):
+        if role == 'local_control':
+            return ('available' if self.local_calls < self.local_budget
+                    else 'episode_local_budget_exhausted')
+        if self.cloud_calls >= self.budget:
             return 'episode_api_budget_exhausted'
         return 'available'
 
     def budget_state(self):
-        return dict(total=self.budget, used=self.calls, remaining=max(0, self.budget - self.calls))
+        return dict(total=self.budget, used=self.cloud_calls,
+                    remaining=max(0, self.budget - self.cloud_calls))
 
     def stats(self):
-        return dict(requests=self.calls, cache_hits=self.cache_hits,
+        return dict(requests=self.calls, cloud_requests=self.cloud_calls,
+                    local_requests=self.local_calls,
+                    local_budget=dict(total=self.local_budget, used=self.local_calls,
+                        remaining=max(0, self.local_budget - self.local_calls)),
+                    cache_hits=self.cache_hits,
                     calls_saved=self.cache_hits,
                     cache_hit_rate=self.cache_hits / max(1, self.calls + self.cache_hits),
                     requests_by_purpose=self.requests_by_purpose,
@@ -952,10 +968,14 @@ class APIClient:
         transient_retries = 0
         negotiated_fields = set()
         for attempt in range(max_attempts):
-            available = self.availability()
+            available = self.availability(role)
             if available != 'available':
                 raise BudgetExceeded(available)
             self.calls += 1
+            if role == 'local_control':
+                self.local_calls += 1
+            else:
+                self.cloud_calls += 1
             self.retries += int(attempt > 0 or endpoint_index > 0 or format_retry > 0)
             self.requests_by_purpose[purpose] = self.requests_by_purpose.get(purpose, 0) + 1
             start = time.monotonic()

@@ -135,6 +135,10 @@ _PROGRESS=dict(
                        items=dict(type='string',maxLength=220)),
     evidence_observation_ids=dict(type='array',maxItems=12,uniqueItems=True,
                                   items=dict(type='string',maxLength=64)),
+    local_handoff=_optional(dict(
+        goal=dict(type='string', minLength=1, maxLength=200),
+        exit_condition=dict(type='string', minLength=1, maxLength=200)),
+        ('goal', 'exit_condition')),
     route_reference_update=dict(
         type='object',additionalProperties=False,
         properties=dict(
@@ -211,12 +215,19 @@ def normalize_navigation_route_update(decision, known_observation_ids=None):
     output['route_reference_update']=normalized
     return output
 
-def navigation_schema(tools):
+def _navigation_progress_fields(allow_local_handoff=False):
+    result = copy.deepcopy(_PROGRESS)
+    if not allow_local_handoff:
+        result.pop('local_handoff', None)
+    return result
+
+
+def navigation_schema(tools, allow_local_handoff=False):
     branches=[]
     for name,spec in tools.items():
         branch=_optional(dict(
             **copy.deepcopy(_EVIDENCE),
-            **copy.deepcopy(_PROGRESS),
+            **_navigation_progress_fields(allow_local_handoff),
             **copy.deepcopy(_DECISION_ANALYSIS),
             tool=dict(const=name),args=spec['parameters']),
             ('observed_evidence','decision_analysis','tool','args'))
@@ -224,14 +235,15 @@ def navigation_schema(tools):
         branches.append(branch)
     return dict(oneOf=branches)
 
-def navigation_envelope(tools):
+def navigation_envelope(tools, allow_local_handoff=False):
     return _optional(dict(
-        **copy.deepcopy(_EVIDENCE),**copy.deepcopy(_PROGRESS),
+        **copy.deepcopy(_EVIDENCE),
+        **_navigation_progress_fields(allow_local_handoff),
         **copy.deepcopy(_DECISION_ANALYSIS),
         tool=dict(enum=list(tools)),args=dict(type='object')),
         ('observed_evidence','decision_analysis','tool','args'))
 
-def navigation_generation_schema(tools):
+def navigation_generation_schema(tools, allow_local_handoff=False):
     """A discriminated executable union: tool *and* its own required args.
 
     Each branch is a complete JSON object with a distinct required tool const.
@@ -241,10 +253,10 @@ def navigation_generation_schema(tools):
     Native JSON dialect projection is performed separately by APIClient;
     the authoritative execution validator stays navigation_schema(tools).
     """
-    return navigation_schema(tools)
+    return navigation_schema(tools, allow_local_handoff=allow_local_handoff)
 
 
-def navigation_choice_schema(tools):
+def navigation_choice_schema(tools, allow_local_handoff=False):
     """The non-executable first stage if an endpoint cannot enforce unions.
 
     Tool selection and narrative are separate from executable arguments.
@@ -253,7 +265,7 @@ def navigation_choice_schema(tools):
     """
     return _optional(dict(
         **copy.deepcopy(_EVIDENCE),
-        **copy.deepcopy(_PROGRESS),
+        **_navigation_progress_fields(allow_local_handoff),
         **copy.deepcopy(_DECISION_ANALYSIS),
         tool=dict(enum=list(tools))),
         ('observed_evidence', 'decision_analysis', 'tool'))

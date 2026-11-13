@@ -8,6 +8,8 @@ on:
       - "tests/test_adaptive_reasoning.py"
       - "tests/test_api_parameter_compat.py"
       - "tests/test_local_model_protocol.py"
+      - "tests/test_hybrid_routing.py"
+      - "configs/agent-hybrid.yaml"
       - "tests/test_navigation_structured_protocol.py"
       - "tests/test_scheduler_liveness.py"
       - "tests/test_mission_navigation_architecture.py"
@@ -82,6 +84,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_v35_deepseek_format_compat.py' -v
       - name: Verify complete Chat Completions request parameter negotiation
         run: python -m unittest discover -s tests -p 'test_api_parameter_compat.py' -v
+      - name: Verify hybrid router, source-linked frames, tool-free actions and separated budgets
+        run: python -m unittest discover -s tests -p 'test_hybrid_routing.py' -v
       - name: Verify local model native schema negotiation and safe normalization
         run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
       - name: Verify per-tool navigation JSON union and typed staged fallback

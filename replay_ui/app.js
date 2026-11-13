@@ -67,7 +67,8 @@ function setImage(el, placeholder, url, alt) {
 }
 function label(ev) {
   if (ev.kind === 'api') return (ev.role === 'visual_perception' ? 'ObservationAgent' :
-    ev.role === 'navigation_agent' ? 'NavigationAgent' : (ev.role || 'Model')) +
+    ev.role === 'navigation_agent' ? 'NavigationAgent' :
+    ev.role === 'local_control' ? 'LocalController' : (ev.role || 'Model')) +
     ' · ' + (ev.purpose || 'API');
   if (ev.kind === 'action') return '#'+String((ev.step ?? 0)+1)+' · '+(ev.action || 'ACTION');
   if (ev.kind === 'tool') return (ev.tool || 'Tool') + (ev.status ? ' · ' + ev.status : '');

@@ -1,0 +1,67 @@
+# Model IDs and endpoints must be supplied explicitly; no paid calls at import time.
+# IMPORTANT: NAVIGATION_AGENT_MODEL and every configured fallback MUST
+# support image_url content in OpenAI-compatible Chat Completions. The agent
+# now attaches the current real RGB to every decision. Do not configure a
+# text-only navigation model: no implicit conversion to text is performed.
+navigation_agent:
+  provider: openai_compatible
+  base_url: ${NAVIGATION_AGENT_BASE_URL}
+  api_key_env: NAVIGATION_AGENT_API_KEY
+  model: ${NAVIGATION_AGENT_MODEL}
+  response_format: auto  # Prefer JSON Schema; negotiate json_object/plain JSON only on explicit rejection.
+  prompt_cache: auto  # Explicit stable-prefix caching when supported; 400 fallback once per gateway/model.
+  reasoning: low  # Require low-effort reasoning for navigation; no implicit high fallback.
+  temperature: null  # Provider default; reasoning models may reject an explicit 0.
+  timeout_seconds: 120
+  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
+  max_tokens: 12000
+  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+visual_perception:
+  prompt_cache: 'off'  # Quote: YAML 1.1 treats unquoted off as boolean False.
+  provider: openai_compatible
+  base_url: ${VISUAL_PERCEPTION_BASE_URL}
+  api_key_env: VISUAL_PERCEPTION_API_KEY
+  model: ${VISUAL_PERCEPTION_MODEL}
+  response_format: auto
+  reasoning: low
+  temperature: null  # Provider default; reasoning models may reject an explicit 0.
+  timeout_seconds: 120
+  max_retries: 2  # Per endpoint: initial attempt + 2 safe inference retries; fresh deadline each time.
+  max_tokens: 12000
+  fallbacks: []  # Explicit role-compatible endpoints only; see docs/api_agent.md.
+runtime:
+  max_steps: 500
+  api_budget: 2500  # Total physical HTTP attempts, including retries, per episode.
+  # Separate inference safety guards: no cap on a continuous safe MOVE sequence.
+  # Changed RGB-D or physically executed actions reset evidence liveness.
+  max_unchanged_evidence_decisions: 8  # Diagnostic only; it does not impose verification or steering.
+  # Optional: max_model_decisions: 300. Default is 2 * effective max_steps.
+  waypoint_distance: 1.25
+  safety_margin: 0.05  # 5 cm beyond the actual 10 cm radius; saved smoke-8 sweep regression.
+  tool_max_actions: 3  # Legacy config compatibility; forward motion has no per-call atomic-action cap.
+  max_scene_age_seconds: 20  # Current scene semantics, independent of visual_perception.timeout_seconds.
+  max_static_landmark_age_seconds: 300  # Retain static spatial clues; revalidate geometry before movement.
+  max_human_age_seconds: 2  # Old human boxes never authorize current safety.
+  max_depth_age_seconds: 0.25
+
+# Dedicated tool-free local controller; no cloud provider fallback.
+local_control:
+  provider: openai_compatible
+  base_url: http://172.17.0.1:8000/v1
+  api_key_env: LOCAL_CONTROL_API_KEY
+  model: havln-local
+  response_format: auto
+  prompt_cache: 'off'
+  reasoning: null
+  temperature: 0.1
+  timeout_seconds: 60
+  max_retries: 0
+  max_tokens: 256
+  fallbacks: []
+
+hybrid:
+  enabled: true
+  keyframes_max: 10
+  image_max_edge: 448
+  max_turns_without_forward: 4
+  local_budget: 1200

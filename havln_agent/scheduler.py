@@ -3,6 +3,7 @@
 No TaskPlanner calls, indexed milestone review or automatic VERIFY loops.
 """
 from .api_client import APIError,BudgetExceeded,canonical
+from .local_agent import local_to_registered_command
 
 class EvidenceLivenessGuard:
     """Stop evidence-free inference without prescribing a physical action."""
@@ -132,6 +133,69 @@ def run(runtime,append):
         if len(runtime.memory.actions)>=runtime.config['max_steps']-1:
             runtime.terminate('action_budget_exhausted')
             break
+        # Local inference uses its own request quota. It is NEVER a substitute
+        # for initial route reasoning or an expired cloud route delegation.
+        router = getattr(runtime, 'hybrid_router', None)
+        if router is not None and router.use_local():
+            if runtime.client.availability('local_control') != 'available':
+                router.escalate('local_inference_budget_exhausted', runtime)
+            else:
+                try:
+                    runtime.decision_id('navigation_agent')
+                    start_step = len(runtime.memory.actions)
+                    local, preflight = runtime.local_agent.decide()
+                    runtime.decisions += 1
+                    current_id = runtime.memory.current['observation_id']
+                    router.last_local_proposal = dict(local)
+                    reason = router.approve_local(
+                        local, current_id, preflight.get('status', 'UNKNOWN'))
+                    runtime.event('hybrid_local_proposal', source='local_agent',
+                                  decision=local, route_id=router.route['route_id'],
+                                  accepted=reason is None, rejection_reason=reason)
+                    if reason is not None:
+                        router.escalate(reason, runtime)
+                        continue
+                    command = local_to_registered_command(local, runtime.camera)
+                    binding = dict(observation_id=current_id, actor='local_agent')
+                    # Preserve one canonical action receipt/history without
+                    # allowing local output to revise global mission progress.
+                    proposal = dict(
+                        tool=command['tool'], args=command['args'],
+                        observed_evidence=['Local view '+current_id],
+                        decision_analysis='Follow cloud route '+router.route['route_id'],
+                        evidence_observation_ids=[current_id],
+                        model_tier='local', local_action=local,
+                        delegated_route_id=router.route['route_id'])
+                    runtime.event('navigation_decision', source='local_agent',
+                                  decision=proposal, model_tier='local')
+                    append('navigation_agent', dict(
+                        event='navigation_decision', decision_id=runtime.current_decision_id,
+                        model_tier='local', decision=proposal))
+                    result = runtime.execute(command, binding)
+                    runtime.memory.note_navigation_turn(
+                        proposal, result, current_id, start_step,
+                        runtime.current_decision_id)
+                    append('navigation_agent', dict(
+                        event='tool_feedback', decision_id=runtime.current_decision_id,
+                        model_tier='local', tool_call_id=result['tool_call_id'],
+                        feedback=result, memory_update={}))
+                    router.after_local(local, result, runtime)
+                    runtime.assess(result)
+                    if runtime.done:
+                        continue
+                    unchanged = liveness.feedback(runtime)
+                    identical = liveness.repeated_blocked_command(
+                        runtime, command, result)
+                    runtime.navigation_liveness = liveness.diagnostic(runtime)
+                    if router.use_local() and (unchanged or identical >= 2):
+                        router.escalate('local_no_new_evidence', runtime)
+                except (APIError, BudgetExceeded, ValueError,
+                        TypeError, KeyError, OSError) as error:
+                    router.escalate('local_inference_error:' + str(error)[:120],
+                                    runtime)
+                continue
+        if router is not None:
+            router.cloud_ready()
         if runtime.client.availability()!='available':
             runtime.terminate('api_budget_exhausted')
             break
@@ -171,6 +235,9 @@ def run(runtime,append):
                 decision_id=runtime.current_decision_id,
                 feedback=result,memory_update=memory_update))
             runtime.assess(result)
+            if router is not None and not runtime.done:
+                router.after_cloud(proposal, result, runtime,
+                                   binding.get('observation_id'))
             if runtime.done:
                 continue
             unchanged=liveness.feedback(runtime)
@@ -192,3 +259,5 @@ def run(runtime,append):
                 dict(error=str(error),category=error.category))
             # request() owns the only bounded format retry budget.
             runtime.terminate('api_error')
+    if getattr(runtime, 'hybrid_router', None) is not None:
+        runtime.hybrid_router.finish()

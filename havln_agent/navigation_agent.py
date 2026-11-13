@@ -29,6 +29,15 @@ MISSION_BASE_PROMPT=(
     "Use relative turn_direction plus turn_degrees in BOTH turn_and_observe and navigate_relative. Pure TURN/LOOK uses turn_and_observe; navigate_relative needs distance_m>=0.25. Camera pitch limits are recoverable; read camera_controls.allowed_look_now. "
     "When selecting an instruction-matching scene, set optional scene_goal to its durable SPATIAL target, not a camera turn. Retain across turns/MOVE; change when new positive spatial evidence justifies another scene. Before leaving for a different entrance, compare the ORIGINAL instruction and room/route layout; explain the actual contradiction or better match. A missing moving person or open door alone is insufficient. Turning to observe and evidence-backed backtracking remain allowed. For multiple plausible ROOM entrances compare actual scenes; target NOT_VISIBLE is uncertainty, not room rejection. At a junction optional route_reference_update cites real RGB and instruction-relative branch, not motor turn. Only request_finish success on final-destination evidence. "
 )
+CLOUD_HANDOFF_PROMPT = (
+    " When a chosen forward motion starts a clear, unambiguous route, "
+    "include optional local_handoff={goal,exit_condition} only if a small "
+    "visual controller can safely continue FOLLOWING that route. "
+    "When hybrid_handoff_feedback is present, reassess its real images and "
+    "action receipts; a local signal is a hypothesis, not a confirmed fact. Do not "
+    "delegate a branch choice, stair-bottom decision, uncertain obstacle, "
+    "room comparison, backtrack, or final STOP. Omit if not applicable."
+)
 MISSION_PROMPT=MISSION_BASE_PROMPT + (
     "Output 1-2 SHORT source-grounded observed_evidence items (avoid paraphrasing history), then a one-sentence decision_analysis citing why this move advances the goal. Update progress_narrative, scene_goal and route references only when genuinely changed. Put the executable tool and args LAST. Return one legal registered tool; no hidden chain-of-thought."
 )
@@ -67,6 +76,11 @@ class NavigationAgent:
         if preflight.get('status') in ('CLEAR','BLOCKED'):
             state['front_depth_preflight']=preflight
         context=cost_optimized_navigation_context(state)
+        router = getattr(r, 'hybrid_router', None)
+        if router is not None and router.enabled:
+            feedback = router.cloud_feedback()
+            if feedback is not None:
+                context['hybrid_handoff_feedback'] = feedback
         # Preserve bounded context, but allow up to five diverse, source-
         # verified historical RGB images for before/after route comparison.
         if format_feedback:
@@ -173,7 +187,9 @@ class NavigationAgent:
             context['history_media']=dict(
                 manifest=[],attached_historical_RGB=0,
                 historical_images_are_not_live_clearance=True)
-        schema=navigation_schema(tools)
+        handoff_enabled = bool(getattr(
+            getattr(r, 'hybrid_router', None), 'enabled', False))
+        schema=navigation_schema(tools, allow_local_handoff=handoff_enabled)
         def validate(value):
             # Truly malformed tool arguments remain format errors; the error
             # names the specific field, while physical LOOK limits belong to
@@ -220,8 +236,13 @@ class NavigationAgent:
         # IDs come from immutable sensor records; optional memory annotations
         # never block a valid tool decision when they are malformed.
         known_ids={o['observation_id'] for o in r.memory.observations}
+        handoff_prompt = CLOUD_HANDOFF_PROMPT if handoff_enabled else ''
         protocol=compact_navigation_protocol(tools)
-        generation=navigation_generation_schema(tools)
+        if handoff_enabled:
+            protocol += (' Optional local_handoff={goal:string,exit_condition:string}'
+                         ' ONLY for a clear cloud-selected followable route.')
+        generation=navigation_generation_schema(
+            tools, allow_local_handoff=handoff_enabled)
         def staged_decision(reason):
             # A backend without reliable oneOf support cannot constrain
             # tool-specific required args in one response. Split selection
@@ -232,8 +253,8 @@ class NavigationAgent:
                 observation_id=r.memory.current['observation_id'])
             choice=r.client.complete(
                 'navigation_agent','navigation_tool_selection',
-                MISSION_SELECTION_PROMPT,context,
-                navigation_choice_schema(tools),
+                MISSION_SELECTION_PROMPT + handoff_prompt,context,
+                navigation_choice_schema(tools, allow_local_handoff=handoff_enabled),
                 pre_normalize=lambda value: normalize_navigation_route_update(
                     value,known_ids),
                 image_url=images,format_retry=int(bool(format_feedback)),
@@ -265,14 +286,15 @@ class NavigationAgent:
             return staged_decision('native_union_unavailable')
         try:
             return r.client.complete(
-                'navigation_agent','navigation_decision',MISSION_PROMPT,context,
+                'navigation_agent','navigation_decision',MISSION_PROMPT + handoff_prompt,context,
                 schema,validate=validate,
                 pre_normalize=lambda result: normalize_navigation_route_update(
                     result,known_ids),
                 image_url=images,
                 format_retry=int(bool(format_feedback)),retry_safe=True,
                 protocol=protocol,
-                validation_schema=navigation_envelope(tools),
+                validation_schema=navigation_envelope(
+                    tools, allow_local_handoff=handoff_enabled),
                 generation_schema=generation)
         except APIError as error:
             # A JSON response can still violate a provider's purported

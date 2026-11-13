@@ -37,7 +37,11 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
                  'steps', 'tools',
                  'safety', 'progress', 'state', 'events'):
         (directory / (name+'.jsonl')).write_text('')
-    client.begin_episode(episode_id, config['api_budget'], directory / 'api.jsonl')
+    hybrid = config.get('hybrid', {})
+    local_budget = (hybrid.get('local_budget', 4 * config['max_steps'])
+                    if hybrid.get('enabled') else 0)
+    client.begin_episode(episode_id, config['api_budget'], directory / 'api.jsonl',
+                         local_budget=local_budget)
     client.replay_recorder = ReplayRecorder(directory, camera)
     started = time.monotonic()
     event_log_index = 0
@@ -153,7 +157,8 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             stop_reason=runtime.stop_reason, finish_reason=runtime.finish_reason,
             api_failure=runtime.api_failure, navigation_liveness=runtime.navigation_liveness,
             seconds=time.monotonic()-started,
-            api=api_stats, pose=pose, decisions=runtime.decisions,
+            api=api_stats, hybrid=runtime.hybrid_router.stats(),
+            pose=pose, decisions=runtime.decisions,
             decisions_by_role=runtime.decision_counts,
             mission_progress_narrative=runtime.memory.task.progress_narrative,
             mission_navigation_intent=runtime.memory.task.navigation_intent,
