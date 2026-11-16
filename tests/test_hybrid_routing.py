@@ -186,7 +186,7 @@ class HybridRouteEvidenceTests(unittest.TestCase):
         for prompt in (HYBRID_CLOUD_DECISION_PROMPT,
                        HYBRID_CLOUD_SELECTION_PROMPT):
             self.assertIn('POSITIVE current visual support',prompt)
-            self.assertIn('actual travel direction AT the stair exit',prompt)
+            self.assertIn('direction of actual travel AT the stair exit',prompt)
             self.assertIn('hybrid_route_review',prompt)
             self.assertIn('do not repeat a stair-descent handoff',prompt.lower())
         self.assertIn('BLOCKED, NEVER choose FORWARD',LOCAL_FOLLOW_PROMPT)
