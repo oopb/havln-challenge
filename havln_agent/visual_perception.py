@@ -392,6 +392,11 @@ class VisualPerception:
             # at the start of the dialogue (see mission_memory below).
             observation_request=objective,
             requested_targets=list(target_types),
+            # Reconstructed from real changed-RGBD MOVE receipts. This can
+            # contradict a stale model-written objective such as 'find the
+            # first stair' after an actual long descent.
+            recent_forward_route_evidence=latest_observed_forward_route(
+                self.runtime.memory),
             source_observation_id=source['observation_id'],
             heading_deg=round(math.degrees(pose['heading'])%360,2),
             pitch_deg=pitch,
@@ -503,6 +508,7 @@ class VisualPerception:
             request,coordinate_schema(schema,'image_1000_xyxy'),
             image_url=images if not already else None,cache=False,
             validate=validate,
+            pre_normalize=normalize_stationary_observation_angle,
             normalize=lambda value:normalize_coordinates(value,
                 SCAN_GUIDANCE_SCHEMA,default_unit='image_1000_xyxy'),
             result_schema=schema,
