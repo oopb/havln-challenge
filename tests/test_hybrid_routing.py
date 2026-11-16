@@ -11,7 +11,11 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from havln_agent.api_client import APIClient, APIError
-from havln_agent.hybrid_router import HybridRouter
+from havln_agent.hybrid_router import HybridRouter, hybrid_route_review
+from havln_agent.model_angles import project_model_angles
+from havln_agent.local_agent import LOCAL_FOLLOW_PROMPT, LOCAL_LOOK_PROMPT
+from havln_agent.hybrid_cloud_prompt import (
+    HYBRID_CLOUD_DECISION_PROMPT, HYBRID_CLOUD_SELECTION_PROMPT)
 from havln_agent.local_agent import LOCAL_ACTION_SCHEMA, local_to_registered_command
 from havln_agent.local_frame_selector import select_local_frames
 from havln_agent.memory_records import MemoryRecords
@@ -140,6 +144,54 @@ class HybridRouterTests(unittest.TestCase):
         self.assertTrue(any(name == 'hybrid_escalated' for name, _ in events))
         router.cloud_ready()
         self.assertEqual(router.state, 'CLOUD_DECIDE')
+
+
+class HybridRouteEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.canonical=dict(memory=dict(route_continuity=dict(
+            selected_historical_forward=dict(
+                start_observation_id='obs_0008',
+                end_observation_id='obs_0020',
+                heading_deg=270,
+                executed_forward_with_RGBD_change=10),
+            separation_from_historical_forward_deg=0)))
+
+    def test_hybrid3_opposing_route_review_is_relative_source_grounded(self):
+        projected=project_model_angles(self.canonical, 90)
+        result=hybrid_route_review(projected)
+        self.assertEqual(result['historical_start_observation_id'],'obs_0008')
+        self.assertEqual(result['historical_end_observation_id'],'obs_0020')
+        self.assertEqual(result['prior_forward_actions_with_RGBD_change'],10)
+        self.assertEqual(result['heading_difference_deg'],180)
+        self.assertEqual(abs(result[
+            'historical_forward_view_offset_deg_from_current']),180)
+        self.assertTrue(result['opposing_view_does_not_prove_retrace'])
+        self.assertNotIn('heading_deg',json.dumps(result))
+        self.assertEqual(self.canonical['memory']['route_continuity'][
+            'selected_historical_forward']['heading_deg'],270)
+
+    def test_same_direction_or_unverified_motion_has_no_warning(self):
+        aligned=project_model_angles(self.canonical, 260)
+        self.assertIsNone(hybrid_route_review(aligned))
+        no_motion=project_model_angles(self.canonical, 90)
+        no_motion['memory']['route_continuity']['selected_historical_forward'][
+            'executed_forward_with_RGBD_change']=0
+        self.assertIsNone(hybrid_route_review(no_motion))
+        no_ids=project_model_angles(self.canonical, 90)
+        del no_ids['memory']['route_continuity'][
+            'selected_historical_forward']['end_observation_id']
+        self.assertIsNone(hybrid_route_review(no_ids))
+
+    def test_stair_exit_is_evidence_not_handoff_or_camera_yaw(self):
+        for prompt in (HYBRID_CLOUD_DECISION_PROMPT,
+                       HYBRID_CLOUD_SELECTION_PROMPT):
+            self.assertIn('POSITIVE current visual support',prompt)
+            self.assertIn('actual travel direction AT the stair exit',prompt)
+            self.assertIn('hybrid_route_review',prompt)
+            self.assertIn('do not repeat a stair-descent handoff',prompt.lower())
+        self.assertIn('BLOCKED, NEVER choose FORWARD',LOCAL_FOLLOW_PROMPT)
+        self.assertIn('FORWARD count=2 or 3',LOCAL_FOLLOW_PROMPT)
+        self.assertIn('ESCALATE count=0',LOCAL_LOOK_PROMPT)
 
 
 class LocalProtocolTests(unittest.TestCase):
