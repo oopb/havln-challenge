@@ -81,7 +81,7 @@ def format_repair_feedback(error,context):
         instruction=(
             'No physical action executed. Regenerate ONE JSON object with '
             'observed_evidence, decision_analysis and tool. '
-            'DO NOT include args at the selection stage. Optional '
+            'Do NOT include args at the selection stage. Optional '
             'progress_narrative, scene_goal, navigation_intent, uncertainties '
             'and local_handoff must be TOP-LEVEL fields; never output a '
             'nested progress object. Preserve the original route intent.')
