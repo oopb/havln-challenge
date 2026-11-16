@@ -139,6 +139,10 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         self.assertEqual(result['tool'],'navigate_relative')
         self.assertNotIn('type',result)
         self.assertEqual(len(client.calls),2)
+        pure=FakeClient(True,[choice])
+        with self.assertRaises(APIError):
+            self.decide(pure,hybrid=False)
+        self.assertEqual(len(pure.calls),1)
 
         # Do not strip arbitrary extra keys, altered type labels or
         # a tool omitted entirely. No executable action is guessed.
