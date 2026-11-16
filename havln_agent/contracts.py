@@ -293,7 +293,23 @@ def normalize_navigation_uncertainties_alias(value):
     return output
 
 
-def normalize_navigation_staged_choice(value, tools, known_observation_ids=None, *, allow_format_echo=False):
+def normalize_navigation_observed_evidence(value):
+    """Normalize exactly one nonempty *descriptive* fact, never a command.
+
+    Hybrid-5 DeepSeek JSON-object responses often return one fact as a
+    scalar string, although the wire contract requires a list. Preserve
+    the exact text and reject empty/overlong/ambiguous objects normally.
+    """
+    if not isinstance(value, dict):
+        return value
+    fact = value.get('observed_evidence')
+    if (isinstance(fact, str) and fact.strip()
+            and len(fact) <= 600):
+        return dict(value, observed_evidence=[fact])
+    return value
+
+
+def normalize_navigation_staged_choice(value, tools, known_observation_ids=None, *, allow_format_echo=False, allow_evidence_string=False):
     """Recover complete, explicitly model-chosen stage-1 args, never guess.
 
     Return (selection, recovered_args_or_None). Only keys belonging to the
@@ -309,6 +325,8 @@ def normalize_navigation_staged_choice(value, tools, known_observation_ids=None,
             and isinstance(value.get('tool'), str)
             and value['tool'] in tools):
         value = {k: v for k, v in value.items() if k != 'type'}
+    if allow_evidence_string:
+        value = normalize_navigation_observed_evidence(value)
     value = normalize_navigation_route_update(value, known_observation_ids)
     value = normalize_navigation_uncertainties_alias(value)
     if not isinstance(value, dict):
