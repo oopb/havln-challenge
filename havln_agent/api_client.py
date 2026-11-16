@@ -484,19 +484,20 @@ def response_format_payload(mode, purpose, wire_schema, strict):
 
 
 def next_reasoning_mode(config, current):
-    # 'thinking: enabled' is a boolean, not low effort. Likewise omitting
-    # reasoning_effort would silently relinquish the user's low setting.
-    # Fail explicitly if a provider rejects low rather than escalating it.
-    if config.get('reasoning') == 'low':
+    # Low must never silently become a boolean 'thinking: enabled' or a
+    # provider default. Likewise, NONE must not fall back to omission:
+    # DeepSeek defaults to thinking enabled if no toggle is supplied.
+    effort = config.get('reasoning')
+    if effort == 'low':
         return None
     if current == 'reasoning_effort':
         host = urllib.parse.urlsplit(config['base_url']).hostname or ''
-        # Avoid guessing a nonstandard extension on unknown gateways.
+        # DeepSeek's documented explicit alternative can disable thinking.
         if 'deepseek' in config['model'].lower() or host == 'api.deepseek.com':
             return 'thinking'
-        return 'omit'
+        return None if effort == 'none' else 'omit'
     if current == 'thinking':
-        return 'omit'
+        return None if effort == 'none' else 'omit'
     return None
 
 

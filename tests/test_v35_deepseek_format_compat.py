@@ -268,11 +268,11 @@ class DeepSeekFormatCompatibility(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_response(action)
 
-    def test_both_role_defaults_are_low_and_not_upgraded_by_boolean_fallback(self):
+    def test_both_cloud_roles_default_to_none_and_low_remains_explicit(self):
         with open('configs/agent.yaml', encoding='utf-8') as file:
             config = yaml.safe_load(file)
         for role in ('navigation_agent', 'visual_perception'):
-            self.assertEqual(config[role]['reasoning'], 'low')
+            self.assertEqual(config[role]['reasoning'], 'none')
         self.assertIsNone(next_reasoning_mode(
             {'reasoning': 'low', 'model': 'deepseek-flash',
              'base_url': 'https://api.deepseek.com/v1'},
