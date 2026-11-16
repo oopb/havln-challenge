@@ -163,6 +163,39 @@ Habitat success or provider-side structured-output guarantee is implied.
 Compare API missing-tool counts and actual movement against Hybrid-4 in
 a new output directory. Cloud `reasoning: none` remains unchanged.
 
+## Hybrid-5: observation continuity and strict JSON fields
+
+Hybrid-5's actual trace contained 8 DeepSeek staged-navigation replies with
+`observed_evidence` as one string rather than the required array; one
+ObservationAgent `finish` without `turn_deg`; and a cloud-requested
+reacquisition of the **original** stair entrance after 14 actual changed-RGBD
+local forward steps. The VLM then turned 135 degrees while searching old
+stair images.
+
+The hybrid cloud asks for `"observed_evidence":["one short fact"]`. If an
+otherwise valid JSON-object reply contains exactly one nonempty evidence
+string (<=600 characters), only that descriptive value becomes a one-element
+array. The existing tool schema, registered name, typed arguments and
+unrecognized-field checks still apply. Pure-cloud protocol is unchanged.
+
+The ObservationAgent system prompt is now about 2.5k characters rather
+than roughly 9.5k. Each view additionally receives a **source-linked latest
+executed-forward segment** (start/end observation IDs, changed-RGBD action
+count, camera-relative previous travel direction). This is not inferred
+metric displacement or completion. An old entrance-search question or stale
+progress narrative must be compared against those actual receipts and the
+CURRENT RGB-D. Historical RGB selection stays within three pairs; when the
+current view ends a long completed forward sequence, one weak episode-origin
+image may be replaced by a real later forward image. ObservationAgent still
+owns stationary TURN/LOOK and can finish without a full sweep.
+
+For `next_action` equal to `finish`, `look_up` or `look_down` only, a missing
+`turn_deg` is normalized to the physically required value 0. Missing
+angles for left/right turns, other action fields, and bad Depth/geometry
+are **not** repaired. No new YAML, state machine, route veto or additional
+image budget was introduced. Closed-loop task success requires new Habitat
+evaluation; offline protocol tests cannot prove correct stair descent.
+
 ## Example
 
 The existing vLLM service from the local experiments is reachable from the
