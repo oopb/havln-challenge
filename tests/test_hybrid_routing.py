@@ -18,6 +18,10 @@ from havln_agent.hybrid_cloud_prompt import (
     HYBRID_CLOUD_DECISION_PROMPT, HYBRID_CLOUD_SELECTION_PROMPT)
 from havln_agent.local_agent import LOCAL_ACTION_SCHEMA, local_to_registered_command
 from havln_agent.local_frame_selector import select_local_frames
+from havln_agent.navigation_history import observation_visual_anchors
+from havln_agent.visual_perception import (
+    VisualPerception, SCAN_GUIDANCE_SCHEMA, SCAN_GUIDANCE_PROMPT,
+    latest_observed_forward_route, normalize_stationary_observation_angle)
 from havln_agent.memory_records import MemoryRecords
 from havln_agent.observation import array_hash
 from havln_agent.perception import Camera, Observation
@@ -194,6 +198,103 @@ class HybridRouteEvidenceTests(unittest.TestCase):
         self.assertIn('ESCALATE count=0',LOCAL_LOOK_PROMPT)
         self.assertLess(len(HYBRID_CLOUD_SELECTION_PROMPT),2600)
         self.assertLess(len(LOCAL_FOLLOW_PROMPT),850)
+
+
+class Hybrid5ObservationContinuityTests(unittest.TestCase):
+    def route_memory(self):
+        c=camera()
+        m=MemoryRecords(c)
+        m.reset('hybrid5-source-fixture',
+                'Descend stairs then turn left to the bedroom.')
+        frames={}
+        for i in range(16):
+            identifier='obs_%04d'%i
+            image=frame(i+10)
+            frames[identifier]=image
+            item=record(identifier,image,i,heading=270)
+            item['pose']['motion_epoch']=0
+            m.observations.append(item)
+            if i:
+                m.actions.append(dict(step=i-1,action='MOVE_FORWARD',
+                    pose=dict(item['pose']),result=dict(
+                        visual_change=True,
+                        observation_before='obs_%04d'%(i-1),
+                        observation_after=identifier)))
+        m.current=m.observations[-1]
+        return m,frames
+
+    def test_recent_forward_context_is_receipts_not_invented_progress(self):
+        m,_=self.route_memory()
+        evidence=latest_observed_forward_route(m)
+        self.assertEqual(evidence['executed_forward_with_RGBD_change'],15)
+        self.assertEqual(evidence['start_observation_id'],'obs_0000')
+        self.assertEqual(evidence['end_observation_id'],'obs_0015')
+        self.assertTrue(evidence['mission_progress_not_inferred'])
+        self.assertEqual(evidence['heading_deg'],270)
+
+    def test_later_real_forward_RGB_replaces_weak_origin_not_image_budget(self):
+        m,_=self.route_memory()
+        result=observation_visual_anchors(m,'obs_0015',max_pairs=3)
+        self.assertLessEqual(len(result),3)
+        self.assertTrue(any(
+            r['selection_reason']=='later_executed_forward_RGBD'
+            for r in result),result)
+        self.assertEqual(len({r['observation_id'] for r in result}),
+                         len(result))
+        self.assertNotIn('obs_0015',[r['observation_id'] for r in result])
+
+    def test_guided_observation_receives_source_progress_and_short_prompt(self):
+        m,frames=self.route_memory()
+        c=m.camera
+        runtime=SimpleNamespace(memory=m,camera=c,pitch_deg=-30,
+            motion_controller=SimpleNamespace(pose=lambda:m.current['pose']),
+            load_observation=lambda item:frames[item['observation_id']],
+            forward_preflight=lambda stage:dict(
+                status='BLOCKED',
+                source_observation_id=m.current['observation_id']))
+        visual=VisualPerception(runtime)
+        answer=dict(observation_summary='Wall and possible side exit.',
+            evidence='Near wall in CURRENT RGB.',target_visible=False,
+            target_type='none',target_kind='UNKNOWN',confidence='low',
+            box=None,passage_box=None,uncertainty='Exit not proved.',
+            navigation_suggestion='Observe current exit, not old entry.',
+            reason='Current wall is blocking.',candidate_approach=False,
+            next_action='finish',turn_deg=0)
+        with patch.object(visual,'complete',return_value=answer) as done:
+            visual.guide_scan_view(
+                frames['obs_0015'],m.current,'Find the first staircase step',
+                ['staircase'],[],180,session=[])
+        request=done.call_args.args[3]
+        self.assertEqual(request['recent_forward_route_evidence'][
+            'executed_forward_with_RGBD_change'],15)
+        self.assertEqual(request['recent_forward_route_evidence'][
+            'end_observation_id'],'obs_0015')
+        self.assertIn('later_executed_forward_RGBD',
+            [h['selection_reason'] for h in request['historical_images']])
+        self.assertLessEqual(len(request['historical_images']),3)
+        self.assertIn('do NOT reset',SCAN_GUIDANCE_PROMPT)
+        self.assertLess(len(SCAN_GUIDANCE_PROMPT),3000)
+
+    def test_missing_zero_turn_is_recovered_only_for_stationary_actions(self):
+        from jsonschema import Draft7Validator
+        base=dict(target_visible=False,target_type='none',
+            target_kind='UNKNOWN',confidence='low',
+            box=None,passage_box=None,evidence='Current RGB.',
+            uncertainty='',reason='No more useful view.',
+            candidate_approach=False)
+        schema=Draft7Validator(SCAN_GUIDANCE_SCHEMA)
+        for action in ('finish','look_up','look_down'):
+            candidate=dict(base,next_action=action)
+            normalized=normalize_stationary_observation_angle(candidate)
+            self.assertEqual(normalized['turn_deg'],0)
+            self.assertTrue(schema.is_valid(normalized))
+            self.assertNotIn('turn_deg',candidate)
+        turning=dict(base,next_action='turn_left')
+        self.assertEqual(normalize_stationary_observation_angle(turning),
+                         turning)
+        self.assertFalse(schema.is_valid(turning))
+        self.assertEqual(normalize_stationary_observation_angle(
+            dict(base,next_action='finish',turn_deg=45))['turn_deg'],45)
 
 
 class LocalProtocolTests(unittest.TestCase):

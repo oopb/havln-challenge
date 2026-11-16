@@ -17,6 +17,10 @@ Stairs: before obeying "THEN turn left", confirm treads END and the robot
 has reached the connected lower landing. Refer LEFT to travel at the stair
 exit, not the camera orientation after scanning. If unclear, make short
 grounded progress or focused observation, not repeated turns.
+When a delegated route has MANY actually executed forward steps, an
+obstacle return is NOT a reset to that route's entrance. Observe the
+CURRENT obstacle, exit or continuation instead of searching for the
+original first step. Outdated model progress is not sensor evidence.
 For hybrid_route_review, compare cited before/after RGB with CURRENT view:
 an opposing historical forward direction is a warning, NOT proven retrace.
 People can move; compare fixed room layout.
@@ -32,15 +36,15 @@ when evidence changes; do not invent success.
 """
 
 HYBRID_CLOUD_DECISION_PROMPT = HYBRID_CLOUD_BASE_PROMPT + """
-Return ONE JSON decision with tool and args, 1 short observed_evidence item,
-and 1 short decision_analysis. Add progress changes or local_handoff only
+Return ONE JSON decision with tool and args,
+"observed_evidence": ["one short real RGB fact"] and brief decision_analysis. Add progress changes or local_handoff only
 when necessary. Tool and arguments must match the registered schema.
 """
 
 HYBRID_CLOUD_SELECTION_PROMPT = HYBRID_CLOUD_BASE_PROMPT + """
 STAGE 1: Choose a tool NOW. The FIRST JSON key MUST be "tool" with exactly
-one registered tool name. Then give observed_evidence (1 brief fact) and
-decision_analysis (1 sentence). Optional progress fields ONLY if changed;
+one registered tool name. Then give "observed_evidence": ["one short RGB fact"] (ARRAY of strings)
+and "decision_analysis": "one sentence". Optional progress fields ONLY if changed;
 local_handoff ONLY for an already chosen, clearly followable forward route.
 NO args, turn_degrees, distance_m or other motion parameters in this stage.
 """
@@ -56,7 +60,8 @@ Do not invent a safe path, motor defaults or missing observations.
 # This is a NEW model choice on fresh evidence, never Python inference.
 HYBRID_CLOUD_SELECTION_REPAIR_PROMPT = """You are the cloud navigator.
 Select exactly ONE registered tool from the CURRENT RGB and task context.
-Return JSON with "tool" as the FIRST key, observed_evidence (one short
-source-grounded fact), decision_analysis (one sentence). No args or other
+Return JSON with "tool" as the FIRST key,
+"observed_evidence": ["one source-grounded fact"] (ARRAY),
+"decision_analysis": "one sentence". No args or other
 fields unless essential. Never omit tool and never output "type".
 """

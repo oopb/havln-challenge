@@ -190,6 +190,50 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
             self.decide(client,hybrid=True)
         self.assertEqual(len(client.calls),1)
 
+    def test_hybrid5_scalar_evidence_is_safe_in_staged_and_native(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        scalar=dict(decision(),observed_evidence='A real RGB view shows stairs.')
+        staged=FakeClient(True,[scalar,args])
+        result,_=self.decide(staged,hybrid=True)
+        self.assertEqual(result['observed_evidence'],
+                         ['A real RGB view shows stairs.'])
+        self.assertEqual(result['args'],args)
+        self.assertEqual(len(staged.calls),2)
+        self.assertIn('ARRAY of strings',staged.calls[0]['kwargs']['protocol'])
+
+        native=FakeClient(False,[dict(scalar,args=args)])
+        result,_=self.decide(native,hybrid=True)
+        self.assertEqual(result['observed_evidence'],
+                         ['A real RGB view shows stairs.'])
+        self.assertEqual(len(native.calls),1)
+
+        # Pure cloud retains original strict schema, not a new format mode.
+        for use_staging,response in ((True,scalar),
+                                     (False,dict(scalar,args=args))):
+            # Native-schema failure may trigger the existing staged
+            # fallback in pure cloud; it must never execute bad evidence.
+            error=APIError('still_invalid',category='structured_field')
+            pure=FakeClient(use_staging,[response,error])
+            with self.assertRaises(APIError):
+                self.decide(pure,hybrid=False)
+
+    def test_hybrid5_scalar_evidence_never_repairs_executable_fields(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        for response in (
+                dict(decision(),observed_evidence='   '),
+                dict(decision(),observed_evidence='X'*601),
+                dict(decision(),tool='nonexistent_nav_tool',
+                     observed_evidence='Stairs to left.'),
+                dict(decision(),observed_evidence='Stairs to left.',
+                     unexpected_action='turn_left'),
+                dict(decision(),observed_evidence='Stairs to left.',
+                     args=dict(turn_direction='LEFT',turn_degrees=-90,
+                               distance_m=.5))):
+            with self.subTest(response=response):
+                client=FakeClient(True,[response])
+                with self.assertRaises(APIError):
+                    self.decide(client,hybrid=True)
+
     def test_hybrid_return_feedback_reaches_cloud_only(self):
         args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
         feedback=dict(escalation_reason='local_signal_new_branch',

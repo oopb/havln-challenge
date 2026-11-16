@@ -8,7 +8,7 @@ from .grounding import ground
 from .perception import Geometry,image_url,depth_image_url,perceive,perceive_views
 from .contexts import fields
 from .mission_history import mission_evidence
-from .navigation_history import navigation_visual_anchors
+from .navigation_history import navigation_visual_anchors, observation_visual_anchors
 from .observation import array_hash
 from .model_angles import project_model_angles, project_observation_conversation
 
@@ -85,124 +85,74 @@ SCAN_GUIDANCE_SCHEMA['required']=[
     key for key in _VLM_OUTPUT_ORDER if key in SCAN_GUIDANCE_SCHEMA['required']]
 
 SCAN_GUIDANCE_PROMPT=(
-    'You are Observation Agent helping NavigationAgent execute ONE entire '
-    'natural-language mission. You receive the ORIGINAL instruction, '
-    'revisable narrative progress and the NavigationAgent\'s current '
-    'natural-language observation request; NEVER divide them into numbered '
-    'subgoals or decide whether a milestone is officially complete. '
-    'You inspect the current REAL RGB image and calibrated Depth image '
-    '(near black, far white, invalid magenta), plus the FULL dialogue of '
-    'all earlier real RGB-D frames in this observation session. Reconcile '
-    'views by signed camera offsets relative to the CURRENT view and pitch; do not hallucinate '
-    'translation or global localization from a rotation. '
-    'The shared mission uses commanded yaw/pitch and conservative '
-    'viewpoint_generation stance IDs, NOT a measured robot x/y/z. '
-    'TURN/LOOK retain one stance ID; each actually executed forward '
-    'starts a new one, so old views are historical hypotheses only. '
-    'Do not claim meters of robot motion or completed descent from '
-    'the number of forward actions; judge visible changes only. '
-    'Report an observation_summary and navigation_suggestion in natural '
-    'language. If a useful local direction is visible, optionally mark '
-    'candidate_approach=true and give distance_m_hint (0.25..3m) only when '
-    'there is a reasoned, locally measured distance; otherwise omit it. '
-    'The box field identifies the observed OBJECT (possibly a person, '
-    'wall or railing), never automatically a route. Provide passage_box '
-    'ONLY when you can actually see a distinct, continuous FLOOR/ENTRY '
-    'region the robot might approach; it must cover the possible free '
-    'passage, NOT the person/rail/wall being avoided. If no passage '
-    'region is visually localized, use passage_box=null or omit it and '
-    'provide natural-language navigation_suggestion; a candidate '
-    'without passage_box has NO numerical navigation bearing. '
-    'A passage_box is still only visual evidence, not proof of space '
-    'for the robot, collision clearance or a physically reachable path. '
-    'The horizontal center of passage_box supplies only a source-camera '
-    'bearing. Do not confuse historical view orientation with live turn goals, off-center '
-    'image regions or past positions. Its metric distance is a hypothesis, not walkability '
-    'certificates; walls, glass, rails, drop-offs and people may intervene. '
-    'Use view_coverage.session_turn_degrees, turn_direction_reversals '
-    'and inspected_viewpoints together with mission_memory.'
-    'recent_views_at_current_stance to avoid spending the observation budget '
-    'revisiting the same measured yaw/pitch at the same stance. '
-    'History from another stance or motion epoch is only a visual clue. '
-    'When a likely useful direction or localized approach is visible, '
-    'return its evidence and navigation_suggestion, then prefer '
-    'next_action=finish so NavigationAgent can decide whether to move. '
-    'Do not automatically scan the full requested sweep; the sweep is a '
-    'maximum allowance, not a required rotation. Conversely, inspect a '
-    'new bearing whenever actual route evidence is still missing. '
-    'If a turn simply reverses earlier observation with no new visual '
-    'question or obstruction evidence, prefer finish over oscillation. '
-    'A horizontal yaw sweep at one pitch does not reveal the same yaw at '
-    'other pitches. If near-floor clearance, stair treads, or the edge of '
-    'a passage is unclear, consider LOOK_DOWN; if the camera points down '
-    'and distant corridor, doorway or landmark context is missing, '
-    'consider LOOK_UP. Use a pitch change to answer a SPECIFIC unanswered '
-    'visual question; when the existing yaw/pitch views already answer it, '
-    'report the evidence and finish the observation rather than repeat '
-    'LOOK_UP/LOOK_DOWN solely for certainty. Read mission_memory.'
-    'route_continuity when present to compare source-linked prior forward '
-    'frames with current route hypotheses. Older conflicting model visual '
-    'descriptions are NOT verified positions or task stages. '
-    'Avoid repeating unchanged views; when helpful choose the next camera '
-    'TURN/LOOK, otherwise finish. You may control stationary TURN_LEFT, '
-    'TURN_RIGHT, LOOK_UP, LOOK_DOWN or finish; NEVER MOVE or STOP. '
-    'Positive yaw is left, negative yaw right; calibrated turns are '
-    '15..90 degree multiples of actuator step, LOOK/finish uses 0 degrees. '
-    'Identify stairs, rooms, crowds and landmarks from actual pixels '
-    'without using hardcoded stair-specific completion rules. '
-    'Match instruction landmarks to the current scene: stairways, doors, '
-    'room geometry and floor connections are more stable than people. '
-    'People are dynamic and can move, appear or leave at any time; their '
-    'last-seen location is not a fixed waypoint. Describe a person/activity '
-    'only when currently visible, and do not reject a plausible room merely '
-    'because the person is absent from one view. Do not recommend leaving '
-    'a matching scene solely because a moving person was not visible; '
-    'compare stable room/route evidence first. When comparing candidate '
-    'room entrances, target not visible from this viewpoint remains uncertain; '
-    'you cannot move between entrances. If stairs are the question, report '
-    'whether the last step is still visible before the flat floor, not just '
-    'whether a distant landing is visible. '
-    'For a doorway, stairs or a moving person, locate the visually '
-    'continuous FLOOR/ENTRY corridor in passage_box rather than '
-    'the center of a large box containing handrails, legs or walls. '
-    'When the object is a person blocking the way, box should locate '
-    'the PERSON, passage_box should locate a separate possible GAP; '
-    'if gap visibility/width is unclear leave passage_box=null. Compare '
-    'visible passages to the left and right of a blocker, note which '
-    'side is occluded, and identify evidence needed for another look. '
-    'A broad object box never certifies a navigable centerline; keep '
-    'route hypotheses and live human/Depth clearance separate. '
-    'Use mission_memory as the shared evidence index: previous observation '
-    'task IDs, camera-relative viewpoint offsets, and blocked source frames. '
-    'For a recent central-depth block, read current_front_depth_preflight '
-    'and recent_forward_failures. When obstacle_focus is present, answer '
-    'its specific visual question using the CURRENT RGB-D, distinguishing '
-    'the measured near-field region from any passage BEYOND it. The local '
-    'depth blocker is not proof that every alternative route is blocked. '
-    'Do not assert that a measured occupied forward step is safe. '
-    'Use the measured blocker '
-    'focus_region_xyxy_norm / source_pixel_xy to inspect the corresponding '
-    'REAL RGB region. State whether it looks like wall, rail, human or '
-    'uncertain; do not invent metric clearance. Distinguish a pre-forward '
-    'Depth BLOCKED from STALLED_AFTER_FORWARD (physical move attempted '
-    'but RGB-D stayed unchanged, not proof of collision). '
-    'Suggest DIFFERENT visually grounded bearings after repeated failures. '
-    'Do not relabel a measured wall as passable solely to satisfy the task. '
-    'Keep uncertainty explicit, and distinguish sensed obstacles from '
-    'historical model guesses. NavigationAgent owns all movement and final '
-    'mission completion. '
-    'Generate the JSON in this order: describe observed RGB-D evidence '
-    'and target facts FIRST (observation_summary, evidence, target fields, '
-    'box, passage_box, uncertainty); then give the short visual interpretation and '
-    'navigation suggestion (navigation_suggestion, reason, '
-    'expected_progress); finally set candidate_approach and choose '
-    'next_action plus turn_deg LAST. Camera choice must follow the '
-    'observations instead of preceding them. '
-
-    'Return ONE JSON object with EACH field name occurring exactly once; '
-    'do not append a correction by repeating target_visible, uncertainty, '
-    'or any other field. Do not emit explanatory text outside JSON.'
+    'You are ObservationAgent. Answer the cloud observation_request using '
+    'CURRENT RGB+Depth, the original instruction and source-linked history. '
+    'The request and progress narrative are hypotheses: if the robot has '
+    'already made many actual forward steps, do NOT reset to finding the '
+    'original route entrance merely because an old stair is visible. '
+    'Read recent_forward_route_evidence (real receipts and source IDs). '
+    'Compare current obstacle, passage and possible exit with the earlier '
+    'forward route; changed RGB does NOT prove metric descent or arrival. '
+    'A view facing back along that route is NOT automatically a new descent. '
+    'Historical view offsets are not turn commands or live clearance. '
+    'If an observation question conflicts with recent motion, state the '
+    'conflict; do not search for the old entrance without new evidence. '
+    'Use current pixels to distinguish stairs up/down, floor and walls; '
+    'when uncertain, say so instead of declaring the task complete. '
+    'Before suggesting a post-stair turn, the last step and connected '
+    'lower landing must be supported by current pixels. '
+    'People are dynamic and can move. Compare room geometry and floor '
+    'connections; target not visible from this viewpoint is uncertainty, '
+    'not room rejection. Do not recommend leaving a plausible room solely '
+    'because a person is temporarily unseen; you cannot move between entrances. '
+    'For obstacles, distinguish measured near Depth from visible passage '
+    'beyond it; no visual box proves collision clearance. box locates '
+    'an OBJECT; passage_box only a clearly visible continuous FLOOR/ENTRY '
+    'region, else null. No unverified metric waypoint. '
+    'You control stationary TURN/LOOK or finish only, never MOVE/STOP. '
+    'If an actionable view is found, or more turning merely revisits a '
+    'known scene without new information, choose finish. You may choose '
+    'LOOK_UP or LOOK_DOWN for a specific missing view. '
+    'LEFT/RIGHT are relative to CURRENT camera. '
+    'Return EXACTLY one valid JSON object, no commentary. Include EVERY '
+    'required schema field. next_action must be allowed_camera_actions; '
+    'turn_deg is ALWAYS required: 0 for finish, look_up or look_down; '
+    'a positive value from allowed_turn_deg for turn_left or turn_right. '
+    'Describe evidence briefly, then give navigation_suggestion; '
+    'camera action and turn_deg last.'
 )
+
+def latest_observed_forward_route(memory):
+    """Compact source-linked executed action facts for VLM, never a stage claim."""
+    summary=getattr(memory,'route_progress_summary',None)
+    if not callable(summary):
+        return None
+    segments=summary(max_successful_segments=None).get('successful_segments') or []
+    if not segments:
+        return None
+    segment=segments[-1]
+    start=segment.get('start_observation_id')
+    end=segment.get('end_observation_id')
+    count=segment.get('forward_steps')
+    if not (isinstance(start,str) and start and isinstance(end,str) and end
+            and type(count) is int and count>0):
+        return None
+    return dict(
+        start_observation_id=start,end_observation_id=end,
+        executed_forward_with_RGBD_change=count,
+        heading_deg=segment.get('heading_deg'),
+        evidence_scope='executed_forward_and_changed_RGBD_only_not_verified_translation',
+        mission_progress_not_inferred=True)
+
+
+def normalize_stationary_observation_angle(value):
+    """A finish/LOOK without yaw has exactly zero degrees; no motor guessing."""
+    if (isinstance(value,dict)
+            and value.get('next_action') in ('finish','look_up','look_down')
+            and 'turn_deg' not in value):
+        return dict(value,turn_deg=0)
+    return value
+
 
 def semantic_cache_context(value):
     if isinstance(value,list):return [semantic_cache_context(v) for v in value]
@@ -442,6 +392,11 @@ class VisualPerception:
             # at the start of the dialogue (see mission_memory below).
             observation_request=objective,
             requested_targets=list(target_types),
+            # Reconstructed from real changed-RGBD MOVE receipts. This can
+            # contradict a stale model-written objective such as 'find the
+            # first stair' after an actual long descent.
+            recent_forward_route_evidence=latest_observed_forward_route(
+                self.runtime.memory),
             source_observation_id=source['observation_id'],
             heading_deg=round(math.degrees(pose['heading'])%360,2),
             pitch_deg=pitch,
@@ -502,7 +457,7 @@ class VisualPerception:
         if not session:
             by_id={v['observation_id']:v for v in
                    self.runtime.memory.observations}
-            for descriptor in navigation_visual_anchors(
+            for descriptor in observation_visual_anchors(
                     self.runtime.memory,source['observation_id'],max_pairs=3):
                 item=by_id.get(descriptor['observation_id'])
                 if item is None:continue
@@ -553,6 +508,7 @@ class VisualPerception:
             request,coordinate_schema(schema,'image_1000_xyxy'),
             image_url=images if not already else None,cache=False,
             validate=validate,
+            pre_normalize=normalize_stationary_observation_angle,
             normalize=lambda value:normalize_coordinates(value,
                 SCAN_GUIDANCE_SCHEMA,default_unit='image_1000_xyxy'),
             result_schema=schema,

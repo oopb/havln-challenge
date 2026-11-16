@@ -373,3 +373,51 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
         if len(selected)>=max_pairs:
             break
     return selected
+
+def observation_visual_anchors(memory, current_id, max_pairs=3):
+    """For a long changed-RGBD forward run, show a *later* real route view.
+
+    A current end-of-run view plus only the old entrance can falsely imply
+    the robot is back at the top. Replace one weak origin-only history image
+    with an actual midway/late forward frame; never increase image budget,
+    infer metric translation, or rewrite the canonical history.
+    """
+    selected=navigation_visual_anchors(memory,current_id,max_pairs=max_pairs)
+    if max_pairs<3 or not selected:
+        return selected
+    segments=memory.route_progress_summary(
+        max_successful_segments=None).get('successful_segments') or []
+    if not segments:
+        return selected
+    segment=segments[-1]
+    if (segment.get('end_observation_id')!=current_id
+            or (segment.get('forward_steps') or 0)<6):
+        return selected
+    weak=next((i for i in range(len(selected)-1,-1,-1)
+               if selected[i].get('selection_reason') in (
+                   'episode_origin_reference',
+                   'middle_episode_reference',
+                   'diverse_observation_checkpoint')),None)
+    if weak is None:
+        return selected
+    moves=[a for a in memory.actions
+           if (a.get('action')=='MOVE_FORWARD'
+               and segment.get('first_step',float('inf'))<=a.get('step',-1)
+                    <=segment.get('last_step',-1)
+               and (a.get('result') or {}).get('visual_change') is True)]
+    if len(moves)<6:
+        return selected
+    identifier=(moves[(len(moves)*2)//3].get('result') or {}).get(
+        'observation_after')
+    by_id={o.get('observation_id'):o for o in memory.observations}
+    current=by_id.get(current_id)
+    candidate=by_id.get(identifier)
+    if not candidate or not current or identifier==current_id:
+        return selected
+    if (_same_camera_view(candidate,current,memory.camera)
+            or any(_same_camera_view(candidate,old,memory.camera)
+                   for old in selected)):
+        return selected
+    result=list(selected)
+    result[weak]=dict(candidate,selection_reason='later_executed_forward_RGBD')
+    return result
