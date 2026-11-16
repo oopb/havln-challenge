@@ -63,6 +63,8 @@ class HybridRouter:
             route_id=str(runtime.current_decision_id),
             source_observation_id=source_observation_id,
             start_observation_id=current_id,
+            # Exclude the cloud's initial movement from LOCAL execution feedback.
+            start_action_step=len(runtime.memory.actions),
             goal=goal.strip()[:200],
             exit_condition=until.strip()[:200])
         self.state = 'LOCAL_FOLLOW'
@@ -152,14 +154,44 @@ class HybridRouter:
             self.state = 'FINISHED'
             self.route = None
 
-    def cloud_feedback(self):
-        """A model hypothesis and provenance, never an observed route fact."""
+    def cloud_feedback(self, runtime=None):
+        """Ground the returned handoff in executed atomic actions, not claims.
+
+        The stored route begins AFTER the cloud's initial forward action.
+        Counters describe action receipts only, not meters traveled, stair
+        completion, reaching a landmark or validated scene progress.
+        """
         if not self.last_escalation:
             return None
+        summary = None
+        route = self.last_route
+        if route is not None and runtime is not None:
+            start = route.get('start_action_step')
+            actions = getattr(getattr(runtime, 'memory', None), 'actions', None)
+            if type(start) is int and isinstance(actions, list) and 0 <= start <= len(actions):
+                local_actions = actions[start:]
+                count = lambda name: sum(
+                    item.get('action') == name for item in local_actions)
+                forward = [item for item in local_actions
+                           if item.get('action') == 'MOVE_FORWARD']
+                current = getattr(runtime.memory, 'current', None) or {}
+                summary = dict(
+                    start_observation_id=route.get('start_observation_id'),
+                    latest_observation_id=current.get('observation_id'),
+                    executed_forward=count('MOVE_FORWARD'),
+                    executed_left=count('TURN_LEFT'),
+                    executed_right=count('TURN_RIGHT'),
+                    executed_look_up=count('LOOK_UP'),
+                    executed_look_down=count('LOOK_DOWN'),
+                    forward_receipts_with_RGBD_change=sum(
+                        (item.get('result') or {}).get('visual_change') is True
+                        for item in forward),
+                    action_receipts_only_no_verified_displacement=True)
         return dict(
             escalation_reason=self.last_escalation,
-            prior_delegated_route=deepcopy(self.last_route),
+            prior_delegated_route=deepcopy(route),
             last_local_proposal=deepcopy(self.last_local_proposal),
+            local_execution_summary=summary,
             local_proposal_is_unverified=True,
             selected_route_requires_cloud_reassessment=True)
 
