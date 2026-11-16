@@ -129,6 +129,53 @@ class AdaptiveReasoningTests(unittest.TestCase):
         self.assertNotIn('thinking', bodies[2])
         self.assertNotIn('reasoning_effort', bodies[2])
 
+    def test_none_sends_explicit_off_for_both_cloud_roles(self):
+        client=self.client(endpoint('https://api.deepseek.com/v1',
+                                    'deepseek-flash', 'none'))
+        bodies=[]
+        def ok(request, timeout, record):
+            bodies.append(json.loads(request.data))
+            return success()
+        client._request=Mock(side_effect=ok)
+        self.assertEqual(self.call(client),{'ok': True})
+        self.assertEqual(bodies[0]['reasoning_effort'],'none')
+        self.assertNotIn('thinking',bodies[0])
+
+    def test_none_falls_back_only_to_explicit_deepseek_disabled(self):
+        client=self.client(endpoint('https://api.deepseek.com/v1',
+                                    'deepseek-flash', 'none'))
+        bodies=[]
+        def run(request,timeout,record):
+            body=json.loads(request.data)
+            bodies.append(body)
+            if len(bodies)==1:
+                reject_unknown(request,record,'reasoning_effort')
+            return success()
+        client._request=Mock(side_effect=run)
+        self.assertEqual(self.call(client),{'ok': True})
+        self.assertEqual(bodies[0]['reasoning_effort'],'none')
+        self.assertEqual(bodies[1]['thinking'],{'type':'disabled'})
+        self.assertNotIn('reasoning_effort',bodies[1])
+        self.assertEqual(client.reasoning_modes[
+            ('https://api.deepseek.com/v1','deepseek-flash')],'thinking')
+
+    def test_none_refuses_implicit_provider_default_when_no_off_toggle(self):
+        client=self.client(endpoint('https://api.deepseek.com/v1',
+                                    'deepseek-flash', 'none'))
+        bodies=[]
+        def run(request,timeout,record):
+            body=json.loads(request.data)
+            bodies.append(body)
+            reject_unknown(request,record,
+                           'reasoning_effort' if len(bodies)==1 else 'thinking')
+        client._request=Mock(side_effect=run)
+        with self.assertRaises(APIError):
+            self.call(client)
+        self.assertEqual(len(bodies),2)
+        self.assertEqual(bodies[0]['reasoning_effort'],'none')
+        self.assertEqual(bodies[1]['thinking'],{'type':'disabled'})
+        self.assertNotIn('omit',client.reasoning_modes.values())
+
     def test_bad_reasoning_value_does_not_trigger_adaptation(self):
         client = self.client()
         def run(request, timeout, record):
