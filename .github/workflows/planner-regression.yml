@@ -87,6 +87,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_api_parameter_compat.py' -v
       - name: Verify hybrid router, source-linked frames, tool-free actions and separated budgets
         run: python -m unittest discover -s tests -p 'test_hybrid_routing.py' -v
+      - name: Verify local model native schema negotiation and safe normalization
+        run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
       - name: Verify per-tool navigation JSON union and typed staged fallback
         run: python -m unittest discover -s tests -p 'test_navigation_structured_protocol.py' -v
       - name: Verify bounded scheduler format recovery and evidence liveness
@@ -143,7 +145,3 @@ jobs:
         run: node --check replay_ui/app.js
       - name: Verify independent OFFLINE RGB-D feature-registration math
         run: python -m unittest discover -s tests -p 'test_motion_consensus.py' -v
-      # Keep legacy vLLM format-compatibility checks visible without blocking
-      # independent mission/navigation regressions from executing first.
-      - name: Verify local model native schema negotiation and safe normalization
-        run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
