@@ -210,7 +210,10 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         # Pure cloud retains original strict schema, not a new format mode.
         for use_staging,response in ((True,scalar),
                                      (False,dict(scalar,args=args))):
-            pure=FakeClient(use_staging,[response])
+            # Native-schema failure may trigger the existing staged
+            # fallback in pure cloud; it must never execute bad evidence.
+            error=APIError('still_invalid',category='structured_field')
+            pure=FakeClient(use_staging,[response,error])
             with self.assertRaises(APIError):
                 self.decide(pure,hybrid=False)
 
@@ -219,7 +222,7 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         for response in (
                 dict(decision(),observed_evidence='   '),
                 dict(decision(),observed_evidence='X'*601),
-                dict(decision(),tool='navigate_local',
+                dict(decision(),tool='nonexistent_nav_tool',
                      observed_evidence='Stairs to left.'),
                 dict(decision(),observed_evidence='Stairs to left.',
                      unexpected_action='turn_left'),
