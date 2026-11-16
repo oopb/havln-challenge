@@ -17,7 +17,8 @@ from .contracts import (normalize_navigation_route_update,
                         normalize_navigation_staged_arguments)
 from .hybrid_cloud_prompt import (HYBRID_CLOUD_DECISION_PROMPT,
                                   HYBRID_CLOUD_SELECTION_PROMPT,
-                                  HYBRID_CLOUD_ARGUMENTS_PROMPT)
+                                  HYBRID_CLOUD_ARGUMENTS_PROMPT,
+                                  HYBRID_CLOUD_SELECTION_REPAIR_PROMPT)
 from .hybrid_router import hybrid_route_review
 
 MISSION_BASE_PROMPT=(
@@ -277,19 +278,47 @@ class NavigationAgent:
                 if args is not None:
                     recovered['args'] = args
                 return selection
-            choice=r.client.complete(
-                'navigation_agent','navigation_tool_selection',
-                selection_prompt,context,
-                navigation_choice_schema(tools, allow_local_handoff=handoff_enabled),
-                pre_normalize=normalize_selection,
-                image_url=images,format_retry=int(bool(format_feedback)),
-                retry_safe=True,
-                protocol=('Return one JSON object with observed_evidence, '
+            selection_schema=navigation_choice_schema(
+                tools, allow_local_handoff=handoff_enabled)
+            if handoff_enabled:
+                # The old 470-char narrative protocol competed with the
+                # required tool key in DeepSeek JSON-object mode.
+                choice_protocol=('FIRST key "tool" = one of: '+', '.join(tools)+
+                    '. Then "observed_evidence" (one short fact) and '
+                    '"decision_analysis" (one sentence). No args, no type. '
+                    'Other metadata only if changed.')
+            else:
+                choice_protocol=('Return one JSON object with observed_evidence, '
                     'decision_analysis and tool. Optional metadata must use '
                     'TOP-LEVEL progress_narrative, scene_goal, navigation_intent, '
                     'uncertainties, evidence_observation_ids, route_reference_update '
                     'and (only when enabled) local_handoff. Never emit nested '
-                    'progress. DO NOT include args. Tools: '+', '.join(tools)))
+                    'progress. DO NOT include args. Tools: '+', '.join(tools))
+            def request_choice(prompt):
+                return r.client.complete(
+                    'navigation_agent','navigation_tool_selection',
+                    prompt,context,selection_schema,
+                    pre_normalize=normalize_selection,
+                    image_url=images,format_retry=int(bool(format_feedback)),
+                    retry_safe=True,protocol=choice_protocol)
+            try:
+                choice=request_choice(selection_prompt)
+            except APIError as error:
+                # Hybrid-4: seven times DeepSeek wrote plausible progress
+                # prose but no tool. The runtime must NEVER guess a tool from
+                # that prose. Allow one fresh, short MODEL re-selection only
+                # for exactly the missing-tool case; other schema errors
+                # remain errors. Pure-cloud behavior is unchanged.
+                missing=(getattr(error,'validation_error',{}) or {}).get(
+                    'missing_fields')
+                if not (handoff_enabled and error.category=='structured_field'
+                        and missing==['tool']):
+                    raise
+                r.event('hybrid_missing_tool_reselection',
+                        source='navigation_agent',
+                        observation_id=r.memory.current['observation_id'])
+                recovered.clear()
+                choice=request_choice(HYBRID_CLOUD_SELECTION_REPAIR_PROMPT)
             name=choice['tool']
             spec=tools[name]
             if 'args' in recovered:
