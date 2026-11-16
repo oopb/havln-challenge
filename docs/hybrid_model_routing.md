@@ -1,10 +1,22 @@
-# Hybrid cloud/local navigation (single configuration)
+# Two navigation modes (one existing YAML)
 
-Use the existing `configs/agent.yaml` for both cloud and local models;
-no separate hybrid YAML is needed. This configuration enables hybrid
-routing by default. The cloud model must support multimodal RGB and the
-local VLM must accept OpenAI-compatible Chat Completions with `image_url`
-content. Configure all three model roles using the same `.env` file:
+There are TWO independent modes:
+
+| Mode | Command-line override | Navigation prompt | Execution |
+| --- | --- | --- | --- |
+| Pure cloud (legacy) | `--model-mode cloud` | Original `MISSION_PROMPT` (or original staged variants), untouched | All navigation actions and final STOP remain cloud-owned; no local calls or handoff fields |
+| Hybrid cloud + local | `--model-mode hybrid` | Dedicated `hybrid_cloud_prompt.py` prompts | Cloud selects routes and resolves ambiguity; local follows explicitly delegated route segments and escalates |
+
+Omitting `--model-mode` uses the existing `hybrid.enabled` in `configs/agent.yaml`
+(default: `true`). No second YAML file is introduced. The override applies
+to this run only, including all worker processes and output provenance, and
+does not edit `agent.yaml`.
+
+**Pure cloud** does not require `LOCAL_CONTROL_*` environment variables or
+a running local vLLM service. **Hybrid** requires them. In both modes the
+cloud navigation endpoint must accept current RGB image content.
+
+Configure all three endpoints in the same `.env` for hybrid runs:
 
 ```dotenv
 NAVIGATION_AGENT_BASE_URL=https://your-provider.example/v1
@@ -21,8 +33,9 @@ LOCAL_CONTROL_API_KEY=havln-local-key
 The local address and model ID above are examples for the existing vLLM
 deployment. They are not hardcoded in Python or YAML. Copy the additional
 variables into your private `.env` file, keeping credentials out of Git.
-To compare against API-only behavior, set `hybrid.enabled: false` in
-`configs/agent.yaml`; leave the endpoint variables configured.
+To compare against the original API-only behavior without editing YAML,
+pass `--model-mode cloud`. Alternatively set `hybrid.enabled: false` in the
+existing YAML; the local endpoint is then ignored even if not configured.
 
 ## API-specific JSON formats
 
@@ -64,7 +77,8 @@ ESCALATE and all non-NORMAL signals bypass the executor and cause the next
 cloud NavigationAgent turn. Repeated no-progress turns, blocked attempted
 motion, malformed output and local inference errors also escalate.
 
-A cloud navigation proposal may include optional:
+Only the hybrid cloud prompt may produce this OPTIONAL top-level handoff:
+
 ```json
 "local_handoff": {
   "goal": "Continue along the currently selected hallway",
@@ -75,6 +89,16 @@ The router activates this handoff only after the cloud-proposed
 `navigate_relative` actually completes a forward action. Merely observing a
 scene, an incomplete move, a speculative waypoint, or a success/STOP claim
 never grants local autonomy. Future cloud decisions revoke previous handoffs.
+
+The hybrid cloud uses three dedicated prompts: complete native JSON,
+staged tool selection, and staged typed arguments. In pure cloud all
+three original prompts are preserved. The current local controller contract
+stays `action/count/signal/evidence_id`; it cannot call tools or STOP.
+
+On escalation, cloud receives the previous delegated route and an action
+receipt summary: executed local forward/turn/look counts, source/current
+observation IDs, and number of forwards with observed RGB-D change. These
+receipts do NOT certify displacement, stair descent or semantic progress.
 
 ## Example
 
@@ -92,7 +116,7 @@ With all three model endpoints configured in the same private `.env` file:
 ```sh
 docker exec --env-file /path/to/.env -w /toolkit havln-cma \
   python /toolkit/scripts/run_api_agent.py \
-  --config /toolkit/configs/agent.yaml \
+  --config /toolkit/configs/agent.yaml --model-mode hybrid \
   --splits val_seen --episode-limit 4 --max-steps 128 \
   --gpu-ids 0 --batch 4 --terminal-log off \
   --output-dir /workspace/agent-runs/hybrid-eval
@@ -109,3 +133,29 @@ cloud/local decisions and transition reasons. Summary includes
 
 Test on saved local traces and a small closed-loop subset before full Phase 2
 evaluation. This change is not proof of navigation accuracy or latency gains.
+
+### Pure cloud A/B comparison
+
+With the same cloud credentials but without any local-model endpoint variables:
+
+```sh
+docker exec --env-file /path/to/cloud-only.env -w /toolkit havln-cma \
+  python /toolkit/scripts/run_api_agent.py \
+  --config /toolkit/configs/agent.yaml --model-mode cloud \
+  --splits val_seen --episode-limit 4 --max-steps 128 \
+  --gpu-ids 0 --batch 4 --terminal-log off \
+  --output-dir /workspace/agent-runs/cloud-eval
+```
+
+Keep `--output-dir` separate between cloud/hybrid runs. Switching modes
+changes the run fingerprint, so reusing prior outputs is intentionally rejected.
+The default `hybrid.enabled` value can still be changed in the original
+YAML; `--model-mode` takes precedence for the current invocation.
+
+Suggested regression commands (no Habitat or paid API required):
+
+```sh
+python -m unittest discover -s tests -p 'test_navigation_structured_protocol.py' -v
+python -m unittest discover -s tests -p 'test_hybrid_routing.py' -v
+python -m unittest discover -s tests -p 'test_v32_phase2_prompt_api_regression.py' -v
+```

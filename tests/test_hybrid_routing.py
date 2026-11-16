@@ -96,6 +96,30 @@ class HybridRouterTests(unittest.TestCase):
         self.assertEqual(router.approve_local(dict(valid, action='ESCALATE', count=0),
                          'obs_0042', 'CLEAR'), 'local_requested_escalation')
 
+    def test_handoff_return_summary_counts_only_executed_local_actions(self):
+        router, runtime, _ = self.make()
+        router.after_cloud(cloud_decision(), completed_move(),
+                           runtime, 'obs_0041')
+        runtime.memory.actions.extend([
+            dict(action='TURN_LEFT', result=dict(visual_change=True)),
+            dict(action='MOVE_FORWARD', result=dict(visual_change=True)),
+            dict(action='MOVE_FORWARD', result=dict(visual_change=False)),
+            dict(action='LOOK_UP', result=dict(visual_change=True))])
+        runtime.memory.current=dict(observation_id='obs_0050')
+        router.last_local_proposal=dict(action='ESCALATE', count=0,
+            signal='NEW_BRANCH', evidence_id='obs_0050')
+        router.escalate('local_signal_new_branch', runtime)
+        feedback=router.cloud_feedback(runtime)
+        summary=feedback['local_execution_summary']
+        self.assertEqual(summary['executed_forward'],2)
+        self.assertEqual(summary['executed_left'],1)
+        self.assertEqual(summary['executed_look_up'],1)
+        self.assertEqual(summary['forward_receipts_with_RGBD_change'],1)
+        self.assertEqual(summary['start_observation_id'],'obs_0042')
+        self.assertEqual(summary['latest_observation_id'],'obs_0050')
+        self.assertTrue(summary['action_receipts_only_no_verified_displacement'])
+        self.assertTrue(feedback['local_proposal_is_unverified'])
+
     def test_turn_loop_escalates_without_forcing_forward(self):
         router, runtime, events = self.make()
         router.after_cloud(cloud_decision(), completed_move(),
@@ -205,6 +229,32 @@ class LocalProtocolTests(unittest.TestCase):
                                  'episode_local_budget_exhausted')
                 self.assertEqual(client.stats()['cloud_requests'], 1)
                 self.assertEqual(client.stats()['local_requests'], 2)
+
+    def test_mode_override_preserves_cloud_without_local_configuration(self):
+        root = Path(__file__).resolve().parents[1]
+        env = dict(NAVIGATION_AGENT_BASE_URL='https://example.com/v1',
+                   NAVIGATION_AGENT_MODEL='cloud-nav',
+                   NAVIGATION_AGENT_API_KEY='cloud-key',
+                   VISUAL_PERCEPTION_BASE_URL='https://vision.example/v1',
+                   VISUAL_PERCEPTION_MODEL='cloud-vision',
+                   VISUAL_PERCEPTION_API_KEY='vision-key')
+        with patch.dict(os.environ, env, clear=True):
+            config=load_config(root/'configs/agent.yaml',model_mode='cloud')
+            self.assertFalse(config['hybrid']['enabled'])
+            self.assertNotIn('local_control',config)
+            with tempfile.TemporaryDirectory() as tmp:
+                client=APIClient(config,tmp)
+                self.assertNotIn(('local_control',0),client.keys)
+            with self.assertRaisesRegex(ValueError, 'LOCAL_CONTROL'):
+                load_config(root/'configs/agent.yaml',model_mode='hybrid')
+
+        env.update(LOCAL_CONTROL_BASE_URL='http://127.0.0.1:8000/v1',
+                   LOCAL_CONTROL_MODEL='havln-local',
+                   LOCAL_CONTROL_API_KEY='local-key')
+        with patch.dict(os.environ, env, clear=True):
+            config=load_config(root/'configs/agent.yaml',model_mode='hybrid')
+            self.assertTrue(config['hybrid']['enabled'])
+            self.assertIn('local_control',config)
 
     def test_original_config_reads_all_local_endpoint_values_from_env(self):
         root = Path(__file__).resolve().parents[1]

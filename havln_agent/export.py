@@ -60,14 +60,51 @@ def exclusive_run_directory(output_dir):
             fcntl.flock(handle.fileno(),fcntl.LOCK_UN)
 
 
-def load_config(path):
-    text = Path(path).read_text()
-    variables = set(re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', text))
-    missing = sorted(name for name in variables if not os.environ.get(name))
+def load_config(path, model_mode=None):
+    """Resolve only the endpoints used by the selected execution mode.
+
+    --model-mode overrides hybrid.enabled for this run without rewriting YAML.
+    Pure cloud mode never needs local vLLM env values or a running local API.
+    """
+    if model_mode not in (None, 'cloud', 'hybrid'):
+        raise ValueError('model_mode must be cloud or hybrid')
+    template = yaml.safe_load(Path(path).read_text())
+    if not isinstance(template, dict):
+        raise ValueError('Expected a YAML configuration mapping')
+    hybrid = template.get('hybrid', {'enabled': False})
+    if not isinstance(hybrid, dict):
+        raise ValueError('hybrid must be a mapping')
+    if model_mode is not None:
+        hybrid = dict(hybrid, enabled=(model_mode == 'hybrid'))
+        template['hybrid'] = hybrid
+    if hybrid.get('enabled') is False:
+        # Skip unused local model settings before checking env placeholders.
+        template.pop('local_control', None)
+
+    pattern = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+    missing = set()
+
+    def resolve(value):
+        if isinstance(value, dict):
+            return {key: resolve(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [resolve(item) for item in value]
+        if isinstance(value, str):
+            def replace(match):
+                name = match.group(1)
+                resolved = os.environ.get(name)
+                if not resolved:
+                    missing.add(name)
+                    return match.group(0)
+                return resolved
+            return pattern.sub(replace, value)
+        return value
+
+    config = resolve(template)
     if missing:
-        raise ValueError('Missing configuration variables: ' + ', '.join(missing) +
+        raise ValueError('Missing configuration variables: ' +
+                         ', '.join(sorted(missing)) +
                          '; use configs/agent.env.example and docker exec --env-file.')
-    config = yaml.safe_load(os.path.expandvars(text))
     roles = ('navigation_agent', 'visual_perception')
     base = set(roles) | {'runtime'}
     allowed = base | {'hybrid', 'local_control'}
@@ -647,7 +684,7 @@ def preflight(args):
               'runtime_config_exists': args.runtime_config.is_file(),
               'manifest_exists': args.phase == 'phase2' or args.manifest.is_file()}
     try:
-        config = load_config(args.config)
+        config = load_config(args.config, model_mode=getattr(args, 'model_mode', None))
         report['configuration'] = 'loaded'
         report['credentials_present'] = {role: all(bool(os.environ.get(endpoint['api_key_env']))
                     for endpoint in model_endpoints(config[role]))
@@ -666,6 +703,9 @@ def preflight(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=ROOT / 'configs/agent.yaml')
+    parser.add_argument('--model-mode', choices=('cloud', 'hybrid'),
+                        help='Override hybrid.enabled for this run: cloud uses only API; '
+                             'hybrid delegates simple motion to the local model')
     parser.add_argument('--data-root', type=Path, default=Path('/data/havln2'))
     parser.add_argument('--source-root', type=Path, default=None,
                         help='Optional HA-VLN simulator environment source checkout '
@@ -767,7 +807,7 @@ def main():
         parser.error('splits must be distinct')
     if len(set(args.gpu_ids)) != len(args.gpu_ids) or any(g < 0 for g in args.gpu_ids):
         parser.error('GPU IDs must be distinct and nonnegative')
-    config = load_config(args.config)
+    config = load_config(args.config, model_mode=getattr(args, 'model_mode', None))
     if args.max_steps is not None:
         if not 1 <= args.max_steps <= 500:
             parser.error('--max-steps must be between 1 and 500')

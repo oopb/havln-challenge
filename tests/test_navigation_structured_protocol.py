@@ -11,7 +11,10 @@ from jsonschema import Draft7Validator, ValidationError
 
 from havln_agent.api_client import APIError
 from havln_agent.contracts import registry
-from havln_agent.navigation_agent import NavigationAgent
+from havln_agent.navigation_agent import NavigationAgent, MISSION_PROMPT, MISSION_SELECTION_PROMPT
+from havln_agent.hybrid_cloud_prompt import (
+    HYBRID_CLOUD_DECISION_PROMPT, HYBRID_CLOUD_SELECTION_PROMPT,
+    HYBRID_CLOUD_ARGUMENTS_PROMPT)
 
 
 def decision(tool='navigate_relative', args=None):
@@ -77,8 +80,11 @@ def stub_context():
 
 
 class NavigationStructuredProtocolTests(unittest.TestCase):
-    def decide(self, client):
+    def decide(self, client, hybrid=False, feedback=None):
         runtime=fake_runtime(client)
+        if hybrid:
+            runtime.hybrid_router=SimpleNamespace(
+                enabled=True, cloud_feedback=lambda runtime: feedback)
         with (patch('havln_agent.navigation_agent.navigation_context',
                     return_value={}),
               patch('havln_agent.navigation_agent.cost_optimized_navigation_context',
@@ -87,6 +93,55 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
                     side_effect=lambda context,angle:context)):
             result=NavigationAgent(runtime).decide()
         return result,runtime
+
+    def test_pure_cloud_keeps_original_prompt_and_disables_handoff(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        client=FakeClient(False,[decision(args=args)])
+        self.decide(client)
+        self.assertEqual(client.calls[0]['prompt'],MISSION_PROMPT)
+        self.assertNotIn('local_handoff',str(client.calls[0]['schema']))
+
+        staged=FakeClient(True,[decision(),args])
+        self.decide(staged)
+        self.assertEqual(staged.calls[0]['prompt'],MISSION_SELECTION_PROMPT)
+        self.assertNotIn('local_handoff',str(staged.calls[0]['schema']))
+
+    def test_hybrid_native_uses_dedicated_prompt_and_handoff_schema(self):
+        args=dict(turn_direction='LEFT',turn_degrees=45,distance_m=0.5)
+        handoff=dict(goal='Follow selected left hallway',
+                     exit_condition='Main path ends or becomes unclear')
+        client=FakeClient(False,[dict(decision(args=args),local_handoff=handoff)])
+        result,_=self.decide(client,hybrid=True)
+        self.assertEqual(result['local_handoff'],handoff)
+        self.assertEqual(client.calls[0]['prompt'],HYBRID_CLOUD_DECISION_PROMPT)
+        self.assertIn('local_handoff',str(client.calls[0]['schema']))
+        self.assertNotIn('CLOUD_HANDOFF_PROMPT',client.calls[0]['prompt'])
+
+    def test_hybrid_staged_handoff_is_preserved_in_typed_args(self):
+        args=dict(turn_direction='LEFT',turn_degrees=30,distance_m=0.5)
+        handoff=dict(goal='Follow the chosen corridor',
+                     exit_condition='Branch or obstacle blocks it')
+        selection=dict(decision(),local_handoff=handoff)
+        client=FakeClient(True,[selection,args])
+        result,_=self.decide(client,hybrid=True)
+        self.assertEqual(result['local_handoff'],handoff)
+        self.assertEqual(result['args'],args)
+        self.assertEqual(client.calls[0]['prompt'],HYBRID_CLOUD_SELECTION_PROMPT)
+        self.assertEqual(client.calls[1]['prompt'],HYBRID_CLOUD_ARGUMENTS_PROMPT)
+        self.assertEqual(client.calls[1]['context']['selected_tool']
+                         ['prior_decision']['local_handoff'],handoff)
+
+    def test_hybrid_return_feedback_reaches_cloud_only(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        feedback=dict(escalation_reason='local_signal_new_branch',
+                      local_execution_summary=dict(executed_forward=5))
+        client=FakeClient(False,[decision(args=args)])
+        self.decide(client,hybrid=True,feedback=feedback)
+        self.assertEqual(client.calls[0]['context']['hybrid_handoff_feedback'],
+                         feedback)
+        pure=FakeClient(False,[decision(args=args)])
+        self.decide(pure)
+        self.assertNotIn('hybrid_handoff_feedback',pure.calls[0]['context'])
 
     def test_native_union_returns_complete_command_in_one_request(self):
         args=dict(turn_direction='LEFT',turn_degrees=90,distance_m=0.5)
