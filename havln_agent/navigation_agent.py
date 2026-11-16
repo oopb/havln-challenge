@@ -274,7 +274,8 @@ class NavigationAgent:
             recovered = {}
             def normalize_selection(value):
                 selection, args = normalize_navigation_staged_choice(
-                    value, tools, known_ids)
+                    value, tools, known_ids,
+                    allow_format_echo=handoff_enabled)
                 if args is not None:
                     recovered['args'] = args
                 return selection
