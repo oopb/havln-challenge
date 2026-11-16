@@ -99,6 +99,29 @@ class Eval39RouteContext(unittest.TestCase):
         self.assertEqual([v['observation_id'] for v in short[:2]],
                          ['obs_0019','obs_0025'])
 
+    def test_hybrid4_recent_substantial_descent_is_kept_with_early_anchor(self):
+        m=eval39_memory()
+        # Hybrid-4: early 6-step descent plus a later 4-step descent;
+        # the old long segment cannot monopolize the RGB history slots.
+        views=[frame(i,270,-45,7+i-37) for i in range(37,42)]
+        m.observations=m.observations[:7]+views+m.observations[7:]
+        for i in range(4):
+            m.actions.append(dict(step=30+i,action='MOVE_FORWARD',
+                pose=pose(270,-45,8+i),result=dict(
+                    visual_change=True,
+                    observation_before='obs_%04d'%(37+i),
+                    observation_after='obs_%04d'%(38+i),
+                    forward_depth_preflight=dict(status='CLEAR'))))
+        selected=navigation_visual_anchors(m,'obs_0084',max_pairs=5)
+        ids=[v['observation_id'] for v in selected]
+        self.assertEqual(ids[:4],[
+            'obs_0019','obs_0025','obs_0037','obs_0041'])
+        self.assertEqual(selected[2]['selection_reason'],
+                         'later_substantial_forward_start')
+        self.assertEqual(selected[3]['selection_reason'],
+                         'later_substantial_forward_end')
+        self.assertEqual(len(ids),len(set(ids)))
+
     def test_only_same_stance_candidates_have_relative_left_right(self):
         m=eval39_memory()
         m.route_candidates=[

@@ -131,6 +131,65 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         self.assertEqual(client.calls[1]['context']['selected_tool']
                          ['prior_decision']['local_handoff'],handoff)
 
+    def test_hybrid4_json_object_type_echo_is_only_a_safe_metadata_label(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
+        choice=dict(decision(), type='json_object')
+        client=FakeClient(True,[choice,args])
+        result,_=self.decide(client,hybrid=True)
+        self.assertEqual(result['tool'],'navigate_relative')
+        self.assertNotIn('type',result)
+        self.assertEqual(len(client.calls),2)
+        pure=FakeClient(True,[choice])
+        with self.assertRaises(APIError):
+            self.decide(pure,hybrid=False)
+        self.assertEqual(len(pure.calls),1)
+
+        # Do not strip arbitrary extra keys, altered type labels or
+        # a tool omitted entirely. No executable action is guessed.
+        for invalid in (dict(choice,type='other'),
+                        dict(choice, other='unexpected'),
+                        dict(type='json_object',
+                             observed_evidence=['stairs'],decision_analysis='go')):
+            with self.subTest(invalid=invalid):
+                bad=FakeClient(True,[invalid])
+                with self.assertRaises(APIError):
+                    self.decide(bad,hybrid=True)
+
+    def test_hybrid4_missing_tool_gets_one_fresh_model_selection(self):
+        missing=APIError('invalid_model_response',category='structured_field')
+        missing.validation_error={'missing_fields':['tool']}
+        args=dict(turn_direction='RIGHT',turn_degrees=15,distance_m=0.5)
+        client=FakeClient(True,[missing,decision(),args])
+        result,runtime=self.decide(client,hybrid=True)
+        self.assertEqual(result['args'],args)
+        self.assertEqual([c['purpose'] for c in client.calls],[
+            'navigation_tool_selection','navigation_tool_selection',
+            'navigation_tool_arguments'])
+        self.assertLess(len(client.calls[1]['prompt']),500)
+        self.assertIn('FIRST key',client.calls[0]['kwargs']['protocol'])
+        self.assertTrue(any(e['event']=='hybrid_missing_tool_reselection'
+                            for e in runtime.events))
+
+        # On a second malformed response, fail; never fabricate a tool.
+        twice=FakeClient(True,[missing,missing])
+        with self.assertRaises(APIError):
+            self.decide(twice,hybrid=True)
+        self.assertEqual(len(twice.calls),2)
+
+        # The original API-only mode must not inherit the new retry.
+        pure=FakeClient(True,[missing])
+        with self.assertRaises(APIError):
+            self.decide(pure,hybrid=False)
+        self.assertEqual(len(pure.calls),1)
+
+    def test_missing_tool_recovery_does_not_hide_other_schema_errors(self):
+        error=APIError('invalid_model_response',category='structured_field')
+        error.validation_error={'unexpected_fields':['unsafe_override']}
+        client=FakeClient(True,[error])
+        with self.assertRaises(APIError):
+            self.decide(client,hybrid=True)
+        self.assertEqual(len(client.calls),1)
+
     def test_hybrid_return_feedback_reaches_cloud_only(self):
         args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.5)
         feedback=dict(escalation_reason='local_signal_new_branch',

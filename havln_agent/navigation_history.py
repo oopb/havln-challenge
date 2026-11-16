@@ -294,6 +294,23 @@ def navigation_visual_anchors(memory, current_id, max_pairs=5):
                   'prior_forward_start_visual_evidence')
             offer(anchor['end_observation_id'],
                   'prior_forward_end_visual_evidence')
+            if max_pairs >= 5:
+                # Hybrid-4: the longest early stair segment (obs_0006-0015)
+                # displaced the more informative later actual descent
+                # (obs_0037-0043). Keep one substantial later BEFORE/AFTER
+                # pair when camera heading conflicts with the old segment.
+                # This is visual history, NEVER metric progress or a turn.
+                later=[seg for seg in all_segments
+                       if seg is not anchor
+                       and seg.get('last_step',-1)>anchor.get('last_step',-1)
+                       and (seg.get('forward_steps') or 0)>=2]
+                if later:
+                    recent=max(later,key=lambda seg:(
+                        seg.get('forward_steps',0),seg.get('last_step',0)))
+                    offer(recent['start_observation_id'],
+                          'later_substantial_forward_start')
+                    offer(recent['end_observation_id'],
+                          'later_substantial_forward_end')
     # One recent changed-forward image, then meaningful route candidates.
     # If it is already the important endpoint, dedup below removes it.
     for action in reversed(memory.actions):

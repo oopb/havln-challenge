@@ -293,7 +293,7 @@ def normalize_navigation_uncertainties_alias(value):
     return output
 
 
-def normalize_navigation_staged_choice(value, tools, known_observation_ids=None):
+def normalize_navigation_staged_choice(value, tools, known_observation_ids=None, *, allow_format_echo=False):
     """Recover complete, explicitly model-chosen stage-1 args, never guess.
 
     Return (selection, recovered_args_or_None). Only keys belonging to the
@@ -301,6 +301,14 @@ def normalize_navigation_staged_choice(value, tools, known_observation_ids=None)
     action shapes stay unmodified so the strict selection Schema rejects them.
     A recovered action still needs the full navigation validator.
     """
+    # Hybrid-4: DeepSeek json_object sometimes echoes its wire-format label
+    # as top-level type='json_object'. This is not a navigation field or a
+    # motor argument. Remove ONLY that exact label alongside an explicitly
+    # selected registered tool; never infer a missing tool from prose.
+    if (allow_format_echo and isinstance(value, dict) and value.get('type') == 'json_object'
+            and isinstance(value.get('tool'), str)
+            and value['tool'] in tools):
+        value = {k: v for k, v in value.items() if k != 'type'}
     value = normalize_navigation_route_update(value, known_observation_ids)
     value = normalize_navigation_uncertainties_alias(value)
     if not isinstance(value, dict):
