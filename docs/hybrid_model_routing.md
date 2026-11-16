@@ -130,6 +130,39 @@ that the robot will correctly find the stair bottom. Compare real
 closed-loop traces from the same Episode IDs and use separate output dirs
 for each run. The cloud `reasoning: none` setting from PR #125 is retained.
 
+## Hybrid-4: short prompts and strict DeepSeek staged output
+
+The hybrid cloud System Prompt is deliberately short: cloud/local ownership,
+current-vs-historical RGB evidence, stair-exit confirmation, route continuity,
+live Depth and the mandatory `tool` field. Full navigation history and the
+original instruction remain in the **model input context**, not duplicated
+as paragraphs of static policy. The cloud stage-one JSON-object request
+explicitly requires `tool` as its first field; evidence and decision
+analysis should each be one short item. The second stage only writes
+registered arguments. Pure-cloud legacy prompts are unchanged.
+
+If DeepSeek responds with a valid JSON object **missing `tool`**, the hybrid
+agent may make **one additional model call** with a very short tool-only
+selection prompt and the same current source-linked evidence. The runtime
+NEVER infers or executes a tool from free-text intent. A second malformed
+selection still fails. The exact, known non-executable top-level echo
+`"type":"json_object"` is stripped only when the model explicitly supplied
+a registered tool; arbitrary extra keys and malformed motor fields still
+fail schema validation.
+
+When an old, substantial actual-forward segment conflicts with current
+camera heading, the bounded visual history can now include an additional
+later substantial before/after RGB pair (for Hybrid-4, the descent near
+`obs_0037`–`obs_0043`), without increasing the existing image count.
+These are historical evidence, not relative motor commands or localization
+claims. Local prompts are similarly condensed while retaining BLOCKED,
+conservative stair steps, optional multi-step straight walking and escalation.
+
+These are source-grounding and protocol reliability changes; no live
+Habitat success or provider-side structured-output guarantee is implied.
+Compare API missing-tool counts and actual movement against Hybrid-4 in
+a new output directory. Cloud `reasoning: none` remains unchanged.
+
 ## Example
 
 The existing vLLM service from the local experiments is reachable from the
