@@ -8,7 +8,7 @@ from .grounding import ground
 from .perception import Geometry,image_url,depth_image_url,perceive,perceive_views
 from .contexts import fields
 from .mission_history import mission_evidence
-from .navigation_history import navigation_visual_anchors
+from .navigation_history import navigation_visual_anchors, observation_visual_anchors
 from .observation import array_hash
 from .model_angles import project_model_angles, project_observation_conversation
 
@@ -457,7 +457,7 @@ class VisualPerception:
         if not session:
             by_id={v['observation_id']:v for v in
                    self.runtime.memory.observations}
-            for descriptor in navigation_visual_anchors(
+            for descriptor in observation_visual_anchors(
                     self.runtime.memory,source['observation_id'],max_pairs=3):
                 item=by_id.get(descriptor['observation_id'])
                 if item is None:continue
