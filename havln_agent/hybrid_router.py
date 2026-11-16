@@ -10,6 +10,45 @@ LOCAL_STATES = frozenset(('LOCAL_FOLLOW', 'LOCAL_LOOK'))
 SIMPLE_ACTIONS = frozenset(('FORWARD', 'LEFT', 'RIGHT', 'LOOK_UP', 'LOOK_DOWN'))
 
 
+def hybrid_route_review(projected_context):
+    """Flag source-linked historical motion that conflicts with current view.
+
+    This is a READ-ONLY model attention cue, not a navigation veto, inferred
+    physical retrace, new state machine, or permission to turn. It operates on
+    the already camera-relative model projection so no world yaw leaks out.
+    """
+    memory = projected_context.get('memory') or {}
+    continuity = memory.get('route_continuity') or {}
+    previous = continuity.get('selected_historical_forward') or {}
+    separation = continuity.get('separation_from_historical_forward_deg')
+    if (type(separation) not in (int, float) or
+            not 105 <= separation <= 180 or
+            not isinstance(previous, dict) or
+            not all(isinstance(previous.get(key), str) and previous[key]
+                    for key in ('start_observation_id', 'end_observation_id'))):
+        return None
+    # Real atomic forward receipts, not a model's narrative of movement.
+    executed = previous.get('executed_forward_with_RGBD_change')
+    if type(executed) is not int or executed < 1:
+        return None
+    comparison = dict(
+        historical_start_observation_id=previous['start_observation_id'],
+        historical_end_observation_id=previous['end_observation_id'],
+        prior_forward_actions_with_RGBD_change=executed,
+        heading_difference_deg=round(separation, 1),
+        opposing_view_does_not_prove_retrace=True,
+        instruction_turn_reference='If the task says turn after descending, '
+            'interpret LEFT/RIGHT relative to actual travel direction at '
+            'the stair exit, not the yaw of a later camera scan.',
+        review='Compare CURRENT RGB with the source-linked forward start/end '
+            'images and actual motion receipts before claiming continued '
+            'descent, confirming the stair bottom, or handing off that route.')
+    offset = previous.get('view_offset_deg_from_current')
+    if type(offset) in (int, float) and -180 <= offset <= 180:
+        comparison['historical_forward_view_offset_deg_from_current'] = offset
+    return comparison
+
+
 class HybridRouter:
     def __init__(self, settings=None):
         settings = settings or {}

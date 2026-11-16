@@ -80,7 +80,7 @@ def stub_context():
 
 
 class NavigationStructuredProtocolTests(unittest.TestCase):
-    def decide(self, client, hybrid=False, feedback=None):
+    def decide(self, client, hybrid=False, feedback=None, memory_context=None):
         runtime=fake_runtime(client)
         if hybrid:
             runtime.hybrid_router=SimpleNamespace(
@@ -88,7 +88,7 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         with (patch('havln_agent.navigation_agent.navigation_context',
                     return_value={}),
               patch('havln_agent.navigation_agent.cost_optimized_navigation_context',
-                    side_effect=lambda _:stub_context()),
+                    side_effect=lambda _:(memory_context or stub_context())),
               patch('havln_agent.navigation_agent.project_model_angles',
                     side_effect=lambda context,angle:context)):
             result=NavigationAgent(runtime).decide()
@@ -142,6 +142,45 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
         pure=FakeClient(False,[decision(args=args)])
         self.decide(pure)
         self.assertNotIn('hybrid_handoff_feedback',pure.calls[0]['context'])
+
+    def test_hybrid_route_review_is_visible_only_in_hybrid_requests(self):
+        args=dict(turn_direction='NONE',turn_degrees=0,distance_m=0.25)
+        original=stub_context()
+        original['memory']['route_continuity']=dict(
+            selected_historical_forward=dict(
+                start_observation_id='obs_0008',
+                end_observation_id='obs_0020',
+                view_offset_deg_from_current=165,
+                executed_forward_with_RGBD_change=10),
+            separation_from_historical_forward_deg=165)
+        hybrid=FakeClient(False,[decision(args=args)])
+        self.decide(hybrid,hybrid=True,memory_context=original)
+        self.assertEqual(next(iter(hybrid.calls[0]['context'])),
+                         'hybrid_route_review')
+        review=hybrid.calls[0]['context']['hybrid_route_review']
+        self.assertEqual(review['heading_difference_deg'],165)
+        self.assertEqual(review['historical_end_observation_id'],'obs_0020')
+        self.assertNotIn('heading_deg',str(review))
+
+        cloud=FakeClient(False,[decision(args=args)])
+        self.decide(cloud,memory_context=original)
+        self.assertNotIn('hybrid_route_review',cloud.calls[0]['context'])
+
+    def test_hybrid_selection_and_arguments_share_route_review(self):
+        args=dict(turn_direction='LEFT',turn_degrees=15,distance_m=0.5)
+        original=stub_context()
+        original['memory']['route_continuity']=dict(
+            selected_historical_forward=dict(
+                start_observation_id='obs_0008',
+                end_observation_id='obs_0020',
+                view_offset_deg_from_current=-165,
+                executed_forward_with_RGBD_change=10),
+            separation_from_historical_forward_deg=165)
+        staged=FakeClient(True,[decision(),args])
+        self.decide(staged,hybrid=True,memory_context=original)
+        self.assertEqual(len(staged.calls),2)
+        for call in staged.calls:
+            self.assertIn('hybrid_route_review',call['context'])
 
     def test_native_union_returns_complete_command_in_one_request(self):
         args=dict(turn_direction='LEFT',turn_degrees=90,distance_m=0.5)

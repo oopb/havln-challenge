@@ -100,6 +100,36 @@ receipt summary: executed local forward/turn/look counts, source/current
 observation IDs, and number of forwards with observed RGB-D change. These
 receipts do NOT certify displacement, stair descent or semantic progress.
 
+## Hybrid-3 route continuity and local control repair
+
+The hybrid cloud now receives a small `hybrid_route_review` field **only
+when** its current camera bearing differs by at least 105° from a salient
+earlier **executed, changed-RGBD** forward segment. The field includes
+real source observation IDs, a camera-relative view offset, and a caution
+to compare the matching before/after RGB frames. It is not localization,
+a motion veto, a verified retrace or a new persistent state machine.
+Pure-cloud requests do not include this field.
+
+The dedicated hybrid cloud prompts require positive current evidence that
+descending treads actually ended on a connected landing before declaring
+the stair descent complete or applying the instruction's following LEFT
+turn. An instruction-relative exit turn is referenced to the travel
+direction at that exit, **not** to arbitrary LOOK rotations made earlier.
+When uncertain, the cloud retains control and rechecks the real images;
+a local `UNCERTAIN` or `GOAL_CUE` signal does not prove arrival.
+
+The local model is asked not to propose FORWARD when the current
+`front_depth_status` is BLOCKED. For an obviously straight, stable route
+it may use `count=2/3`; near stairs, people, corners, obstacles or unclear
+clearance it should use `count=1`. It may make a small same-route
+LEFT/RIGHT correction, but never pick a new branch. Every atomic forward
+still undergoes independent live Depth preflight regardless of `count`.
+
+These are evidence-presentation and prompt repairs; they do **not** prove
+that the robot will correctly find the stair bottom. Compare real
+closed-loop traces from the same Episode IDs and use separate output dirs
+for each run. The cloud `reasoning: none` setting from PR #125 is retained.
+
 ## Example
 
 The existing vLLM service from the local experiments is reachable from the

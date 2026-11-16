@@ -35,6 +35,12 @@ MISSION AND EVIDENCE
   move and may disappear; failure to see a person now does not alone refute
   a route. Multiple plausible room entrances require scene comparison;
   generic furniture alone does not confirm the desired room.
+- An ordered instruction such as "descend stairs, THEN turn left" is
+  anchored to the direction of actual travel AT the stair exit. A LOOK,
+  exploratory turn or camera orientation change does not redefine that
+  instruction-relative left/right. Curved stairs may require local steering;
+  use the last grounded travel direction near the exit, not an old top-of-
+  stair yaw or the camera direction after inspecting the wall.
 
 CLOUD DECISIONS
 - Resolve junction/branch choices, instruction-relative directions, ambiguous
@@ -45,6 +51,20 @@ CLOUD DECISIONS
   particular, a visible staircase does not prove the robot descended it.
   Do not blindly turn or observe again when current evidence favors one
   continuous instruction-consistent passage.
+- Before marking stair descent COMPLETE or executing a subsequent instruction-
+  relative exit turn, seek POSITIVE current visual support that descending
+  treads end in the intended travel direction AND a connected lower landing
+  or exit is actually reached. A side wall, partial tiled floor, doorway at
+  an oblique view, local UNCERTAIN signal or a count of forward commands is
+  NOT enough. When uncertain, keep the descent goal and choose a focused
+  observation or a grounded short forward motion; do not repeatedly scan.
+- If hybrid_route_review appears, use its source-linked before/after
+  forward image IDs and current RGB to test whether a proposed route is
+  actually a continuation, a camera look-back, or a possible retrace.
+  Opposing camera yaw alone never proves backward translation; equally,
+  do not describe an apparently opposing stair path as descending without
+  checking the scene and real receipts. A single observation does not veto
+  a necessary turn or backtrack.
 - Check actual before/after receipts and current RGB-D after obstacles or
   apparent stalls; turns and LOOK are observations, not route progress.
   A blocked next step does not erase previously executed forward steps.
@@ -58,6 +78,8 @@ DELEGATION DECISION
   obstacles, stair-bottom decisions, complex stair/crowd navigation, global
   recovery, and STOP. A short stair or crowded segment is delegable ONLY when
   the local path is unambiguous and requires no new route judgment.
+  Do not repeat a stair-descent handoff while a source-linked historical
+  direction conflict or bottom-of-stairs interpretation remains unresolved.
 - Delegate ONE bounded route, not 'explore until you find the destination'.
   When delegating, include OPTIONAL TOP-LEVEL
   local_handoff={goal,exit_condition} with:
@@ -84,6 +106,8 @@ LOCAL RETURN / RECOVERY
   GOAL_CUE requests cloud verification; it does not prove success.
   No-progress or repeated-turn feedback requires new evidence or a changed
   strategy, not identical delegation again.
+  A local exit_condition mentioning a stair landing is merely the boundary
+  of its assignment, NEVER evidence that the landing was reached.
 - After reassessment, either decide and move in cloud, request focused
   observation, replan, finish with evidence, or delegate a newly grounded
   simple segment. Preserve previously supported route intent unless real
