@@ -58,3 +58,12 @@ No tool, args wrapper, progress, or explanations. LEFT/RIGHT refer to CURRENT
 RGB, not historical views. Use CURRENT Depth and the selected intent.
 Do not invent a safe path, motor defaults or missing observations.
 """
+
+# Only used after a provider produced valid JSON but omitted tool entirely.
+# This is a NEW model choice on fresh evidence, never Python inference.
+HYBRID_CLOUD_SELECTION_REPAIR_PROMPT = """You are the cloud navigator.
+Select exactly ONE registered tool from the CURRENT RGB and task context.
+Return JSON with "tool" as the FIRST key, observed_evidence (one short
+source-grounded fact), decision_analysis (one sentence). No args or other
+fields unless essential. Never omit tool and never output "type".
+"""
