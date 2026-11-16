@@ -18,6 +18,7 @@ from .contracts import (normalize_navigation_route_update,
 from .hybrid_cloud_prompt import (HYBRID_CLOUD_DECISION_PROMPT,
                                   HYBRID_CLOUD_SELECTION_PROMPT,
                                   HYBRID_CLOUD_ARGUMENTS_PROMPT)
+from .hybrid_router import hybrid_route_review
 
 MISSION_BASE_PROMPT=(
     "You are NavigationAgent. Complete the ORIGINAL full navigation instruction. Only you choose movement, observation, replanning and STOP; ObservationAgent supplies RGB-D evidence, never motion authorization. "
@@ -232,6 +233,13 @@ class NavigationAgent:
         # Projection is read-only and runs AFTER all source frames are linked.
         context=project_model_angles(
             context,math.degrees(r.motion_controller.pose()['heading']))
+        if handoff_enabled:
+            # Alert cloud only on factual route-heading conflicts. Earlier
+            # forward photos have already been selected by the same anchor
+            # and no absolute heading enters the model request.
+            review=hybrid_route_review(context)
+            if review is not None:
+                context={'hybrid_route_review':review, **context}
         # IDs come from immutable sensor records; optional memory annotations
         # never block a valid tool decision when they are malformed.
         known_ids={o['observation_id'] for o in r.memory.observations}
