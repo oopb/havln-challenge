@@ -14,7 +14,8 @@ from .heading import signed_turn
 from .model_angles import project_model_angles
 from .contracts import (normalize_navigation_route_update,
                         normalize_navigation_staged_choice,
-                        normalize_navigation_staged_arguments)
+                        normalize_navigation_staged_arguments,
+                        normalize_navigation_observed_evidence)
 from .hybrid_cloud_prompt import (HYBRID_CLOUD_DECISION_PROMPT,
                                   HYBRID_CLOUD_SELECTION_PROMPT,
                                   HYBRID_CLOUD_ARGUMENTS_PROMPT,
@@ -275,7 +276,8 @@ class NavigationAgent:
             def normalize_selection(value):
                 selection, args = normalize_navigation_staged_choice(
                     value, tools, known_ids,
-                    allow_format_echo=handoff_enabled)
+                    allow_format_echo=handoff_enabled,
+                    allow_evidence_string=handoff_enabled)
                 if args is not None:
                     recovered['args'] = args
                 return selection
@@ -285,8 +287,9 @@ class NavigationAgent:
                 # The old 470-char narrative protocol competed with the
                 # required tool key in DeepSeek JSON-object mode.
                 choice_protocol=('FIRST key "tool" = one of: '+', '.join(tools)+
-                    '. Then "observed_evidence" (one short fact) and '
-                    '"decision_analysis" (one sentence). No args, no type. '
+                    '. Then "observed_evidence": ["one short observed fact"] '
+                    '(ARRAY of strings) and "decision_analysis": "one sentence". '
+                    'No args, no type. '
                     'Other metadata only if changed.')
             else:
                 choice_protocol=('Return one JSON object with observed_evidence, '
@@ -369,7 +372,8 @@ class NavigationAgent:
                 'navigation_agent','navigation_decision',decision_prompt,context,
                 schema,validate=validate,
                 pre_normalize=lambda result: normalize_navigation_route_update(
-                    result,known_ids),
+                    normalize_navigation_observed_evidence(result)
+                    if handoff_enabled else result,known_ids),
                 image_url=images,
                 format_retry=int(bool(format_feedback)),retry_safe=True,
                 protocol=protocol,
