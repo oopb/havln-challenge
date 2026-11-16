@@ -81,7 +81,7 @@ def load_config(path, model_mode=None):
         # Skip unused local model settings before checking env placeholders.
         template.pop('local_control', None)
 
-    pattern = re.compile(r'\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}')
+    pattern = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
     missing = set()
 
     def resolve(value):
