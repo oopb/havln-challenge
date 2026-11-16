@@ -185,13 +185,15 @@ class HybridRouteEvidenceTests(unittest.TestCase):
     def test_stair_exit_is_evidence_not_handoff_or_camera_yaw(self):
         for prompt in (HYBRID_CLOUD_DECISION_PROMPT,
                        HYBRID_CLOUD_SELECTION_PROMPT):
-            self.assertIn('POSITIVE current visual support',prompt)
-            self.assertIn('direction of actual travel AT the stair exit',prompt)
+            self.assertIn('connected lower landing',prompt)
+            self.assertIn('travel at the stair',prompt)
             self.assertIn('hybrid_route_review',prompt)
-            self.assertIn('do not repeat a stair-descent handoff',prompt.lower())
-        self.assertIn('BLOCKED, NEVER choose FORWARD',LOCAL_FOLLOW_PROMPT)
+            self.assertIn('opposing historical forward direction',prompt)
+        self.assertIn('BLOCKED: no FORWARD',LOCAL_FOLLOW_PROMPT)
         self.assertIn('FORWARD count=2 or 3',LOCAL_FOLLOW_PROMPT)
         self.assertIn('ESCALATE count=0',LOCAL_LOOK_PROMPT)
+        self.assertLess(len(HYBRID_CLOUD_SELECTION_PROMPT),2600)
+        self.assertLess(len(LOCAL_FOLLOW_PROMPT),850)
 
 
 class LocalProtocolTests(unittest.TestCase):
