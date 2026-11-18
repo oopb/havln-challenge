@@ -68,12 +68,19 @@ def preflight(args, split):
     """Read-only host/container checks; never start a Codex inference session."""
     probes = [
         ("Codex CLI", [args.codex_bin, "--version"]),
+        ("Codex authentication", [args.codex_bin, "login", "status"]),
         ("Docker access", [args.docker_bin, "exec", args.container,
                            "test", "-f", "/toolkit/scripts/havln_mcp_server.py"]),
         ("Habitat 0.1.7", [args.docker_bin, "exec", args.container, "python",
                            "-c", "import habitat, habitat_sim; assert habitat.__version__ == habitat_sim.__version__ == '0.1.7'"]),
-        ("Episode dataset", [args.docker_bin, "exec", args.container, "test",
-                             "-f", "/data/havln2/HA-R2R/" + split + "/" + split + ".json.gz"]),
+        ("Episode dataset ID", [args.docker_bin, "exec", args.container,
+                                "python", "-c",
+                                ("import gzip, json, sys; "
+                                 "path='/data/havln2/HA-R2R/'+sys.argv[1]+'/'+sys.argv[1]+'.json.gz'; "
+                                 "data=json.load(gzip.open(path,'rt')); "
+                                 "assert any(str(e['episode_id'])==sys.argv[2] "
+                                 "for e in data['episodes']), 'episode missing from dataset'"),
+                                split, str(args.episode_id)]),
     ]
     ok = True
     for title, command in probes:
