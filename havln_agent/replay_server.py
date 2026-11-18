@@ -87,7 +87,7 @@ class ReplaySource:
                 parts = name.split('/')
                 if (len(parts) != 4 or parts[0] != 'traces' or
                         parts[2] != 'observations' or
-                        not re.fullmatch(r'obs_[0-9]+\\.npz', parts[3])):
+                        not re.fullmatch(r'obs_[0-9]+\.npz', parts[3])):
                     return None
                 manifest_path = self.prefix + 'diagnostic_manifest.json'
                 if manifest_path not in self.names:
@@ -99,7 +99,7 @@ class ReplaySource:
                 alias = ((manifest.get('frame_aliases') or {})
                          .get(parts[1], {}).get(parts[3]))
                 if not isinstance(alias, str) or not re.fullmatch(
-                        r'obs_[0-9]+\\.npz', alias):
+                        r'obs_[0-9]+\.npz', alias):
                     return None
                 filename = (self.prefix + 'traces/' + parts[1] +
                             '/observations/' + alias)
