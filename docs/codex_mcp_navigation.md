@@ -42,6 +42,22 @@ Check container visibility after updating the host repository:
 If the first check fails, update the container's /toolkit checkout or bind
 mount, not just the host repository. Avoid launching a stale Docker checkout.
 
+## Free preflight before the first inference
+
+Run the same command with --preflight first. It checks the installed Codex
+CLI, your direct Docker permission, the mounted MCP server file, Habitat
+0.1.7 imports and the selected split's dataset file. No Codex model is
+called, no Habitat episode is started, and no output directory is created.
+
+    python scripts/run_codex_episode.py \
+      --phase phase2 --episode-id 1 --max-steps 128 \
+      --output-dir /workspace/agent-runs/codex-p2-episode1 \
+      --preflight
+
+PASS only means dependencies and file paths are reachable. It does not
+confirm the model is enabled for your account, that the selected episode
+exists inside the split, or that the MCP tool loop has actually run.
+
 ## First real test: Phase 2, episode 1, 128 atomic actions
 
 Run on the HOST, not inside havln-cma:
@@ -69,6 +85,8 @@ HOST (the selected log-dir):
 - codex_events.jsonl: streaming CLI events including available tool activity.
 - codex_stderr.log: diagnostics (not MCP protocol data).
 - final_message.txt: final agent reply if Codex emits one.
+- run_status.json: Codex process exit code, event type counts, Habitat
+  termination and separately marked *action export validity*.
 
 DOCKER (output-dir/traces/test-1):
 
@@ -80,11 +98,17 @@ DOCKER (output-dir/traces/test-1):
 - replay/events.jsonl: ordered action/observation/tool timeline.
 - summary.json: termination, action counts and *action-export* validity.
 - result.json: a single checked row when legal, OR failure.json if incomplete.
-- codex/: host CLI logs copied here by the launcher for future replay tooling.
+- codex/: host CLI logs copied here by the launcher for replay and archive.
+  Includes the original session JSON event stream and initial prompt.
 
-The initial replay viewer can display actions, RGB and depth from these
-canonical files. It does NOT yet present the Codex CLI event stream as native
-API/model-call cards; inspect codex_events.jsonl for that. Scores are NOT
+Replay Studio now has a **Codex 会话** filter that renders CLI events,
+their raw model/tool records, and the exact initial Prompt. It preserves
+the normal Habitat **原子动作** and tool views with canonical RGB-D before
+and after each action. The CLI event stream and Habitat action stream are
+**not** assigned artificial cross-stream timestamps or per-event frame
+matches: Codex events are grouped separately. Only Habitat events have
+precise recorded causal order. We can add exact cross-stream correlation
+IDs later after validating real CLI events. Scores are NOT
 computed from STOP or model claims.
 
 The result.json single-episode row is **not** a full Phase 2 submission.
@@ -111,9 +135,10 @@ For a standalone RGB-D diagnostic archive inside the container:
     docker exec havln-cma python /toolkit/scripts/pack_agent_diagnostics.py \
       --output-dir /workspace/agent-runs/codex-p2-episode1 --frames all
 
-The existing diagnostic packer handles the canonical episode frames and logs;
-retain the HOST codex-runs log directory separately until Codex-specific
-event packaging is added.
+The existing diagnostic packer now includes the **codex/** audit files
+alongside the canonical observations and actions. Use --frames all for a
+complete portable RGB-D archive. Retain the host log directory as an
+additional recovery copy if Docker copying fails.
 
 ## Offline tests
 
@@ -122,8 +147,9 @@ Without Docker, Codex login or Habitat:
     python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
 
 These tests exercise MCP initialization/tools, real PNG wire content,
-atomic action ordering, budget STOP, failed input handling and the
-one-session CLI command. A green offline test does not prove that an actual
+atomic action ordering, budget STOP, failed input handling, the
+one-session CLI command, no-inference preflight, Codex event viewing,
+diagnostic ZIP retention and fail-closed simulator exceptions. A green offline test does not prove that an actual
 Habitat episode or Codex account completed the route.
 
 ## Next phase (not in v1)
