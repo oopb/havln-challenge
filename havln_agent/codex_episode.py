@@ -46,6 +46,11 @@ class CodexEpisode:
         self.observation_count = 0
         self.tool_count = 0
         self.pitch_deg = 0.0
+        # Relative actions only: never expose simulator pose or infer odometry.
+        self._heading_deg = 0.0
+        self._turn_total_deg = 0.0
+        self._turn_net_deg = 0.0
+        self._recent_stalls = []
         self.done = False
         self.end_reason = None
         self.finalized = False
@@ -131,6 +136,30 @@ class CodexEpisode:
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
 
+    def _motion_hint(self, executed):
+        """Tiny, conditional factual receipt; never blocks a Codex decision."""
+        turns = [a for a in executed if a in ("TURN_LEFT", "TURN_RIGHT")]
+        batch_total = len(turns) * self.camera.turn_angle
+        batch_net = (turns.count("TURN_RIGHT") - turns.count("TURN_LEFT")) * self.camera.turn_angle
+        hint = {}
+        # Stats since the last forward with changing RGB are a visual proxy,
+        # NOT confirmation that the robot physically moved.
+        if self._turn_total_deg >= 180:
+            hint.update(turn_total_deg=self._turn_total_deg,
+                        turn_net_deg=self._turn_net_deg)
+        if batch_total >= 180:
+            hint.update(batch_turn_total_deg=batch_total,
+                        batch_turn_net_deg=batch_net)
+        recent = [(idx, heading) for idx, heading in self._recent_stalls
+                  if len(self.actions) - 1 - idx <= 16]
+        if recent:
+            # R positive, L negative, relative to the *current* camera heading.
+            hint["recent_stall_directions_deg"] = [
+                (heading - self._heading_deg + 180) % 360 - 180
+                for _, heading in recent
+            ]
+        return hint or None
+
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
         before_rgb = self.current.rgb if action == "MOVE_FORWARD" else None
@@ -157,6 +186,21 @@ class CodexEpisode:
         stalled = before_rgb is not None and np.array_equal(before_rgb, observation.rgb)
         index = len(self.actions)
         self.actions.append(action)
+        if action in ("TURN_LEFT", "TURN_RIGHT"):
+            angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
+            self._heading_deg += angle
+            self._turn_net_deg += angle
+            self._turn_total_deg += abs(angle)
+        elif action == "MOVE_FORWARD":
+            if stalled:
+                self._recent_stalls.append((index, self._heading_deg))
+                self._recent_stalls = self._recent_stalls[-2:]
+            else:
+                # Only "RGB changed", not measured displacement. Reset the
+                # local turn window and stale obstacle attempts conservatively.
+                self._turn_total_deg = 0.0
+                self._turn_net_deg = 0.0
+                self._recent_stalls.clear()
         row = {
             "step": index, "action": action, "tool_call_id": tool_id,
             "origin": origin,
@@ -218,6 +262,10 @@ class CodexEpisode:
                 if stalled:
                     result["skipped_count"] = len(requested) - requested_executed
                     result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
+                if not self.done:
+                    hint = self._motion_hint(executed)
+                    if hint:
+                        result["motion_hint"] = hint
         except (ValueError, RuntimeError) as error:
             result = self.status()
             result.update(status="TOOL_ERROR", error=str(error))

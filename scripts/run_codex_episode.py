@@ -24,10 +24,11 @@ PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
 The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
-Call step with ordered action batches; use observe when the view is needed.
-Follow the instruction's landmark order; avoid unrelated rooms and repeated scans when a clear route is visible.
-People can move between views: keep a safe gap and avoid their immediate path; re-observe if they block the route, but keep moving when passage is clear.
-When near the destination, check the exact stopping place using visible evidence; avoid excessive turn-only searching.
+Use long action batches on clear paths, short batches near people, stairs or uncertain turns; observe when a new view helps.
+Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
+Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
+People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
+Near the destination, confirm the exact stopping place using visible evidence; do not prolong turn-only searching.
 If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
 When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,

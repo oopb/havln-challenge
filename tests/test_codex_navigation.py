@@ -146,6 +146,73 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(result["skipped_count"], 0)
         self.assertEqual(self.env.actions[-2:], ["MOVE_FORWARD", "STOP"])
 
+    def test_turn_history_across_batches_exposes_full_circle_without_veto(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "circle")
+        for count in (3, 9, 6):
+            reply = agent.step(["TURN_LEFT"] * count)
+            self.assertEqual(reply["status"], "RUNNING")
+        self.assertEqual(reply["motion_hint"]["turn_total_deg"], 270)
+        self.assertEqual(reply["motion_hint"]["turn_net_deg"], -270)
+        reply = agent.step(["TURN_LEFT"] * 6)
+        self.assertEqual(reply["motion_hint"]["turn_total_deg"], 360)
+        self.assertEqual(reply["motion_hint"]["turn_net_deg"], -360)
+        self.assertEqual(agent.actions, ["TURN_LEFT"] * 24)
+        self.assertFalse(agent.done)
+
+    def test_opposite_turns_count_even_when_net_zero(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "cancel")
+        first = agent.step(["TURN_LEFT"] * 9)
+        self.assertNotIn("motion_hint", first)
+        second = agent.step(["TURN_RIGHT"] * 9)
+        self.assertEqual(second["motion_hint"]["turn_total_deg"], 270)
+        self.assertEqual(second["motion_hint"]["turn_net_deg"], 0)
+        self.assertEqual(second["executed"], ["TURN_RIGHT"] * 9)
+
+    def test_long_turn_batch_survives_visual_forward_reset(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "batchturn")
+        reply = agent.step(["TURN_LEFT"] * 15 + ["MOVE_FORWARD"])
+        self.assertEqual(reply["status"], "RUNNING")
+        self.assertEqual(reply["motion_hint"]["batch_turn_total_deg"], 225)
+        self.assertEqual(reply["motion_hint"]["batch_turn_net_deg"], -225)
+        # The forward had a different RGB, so current-place turn counts reset.
+        again = agent.step(["TURN_LEFT"])
+        self.assertNotIn("motion_hint", again)
+
+    def test_stall_directions_are_relative_and_reset_after_visual_change(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "stallhistory")
+        original = agent.env.image()
+        def blocked(action):
+            agent.env.actions.append(action)
+            return original, 0., action == "STOP", {}
+        with patch.object(agent.env, "step", side_effect=blocked):
+            first = agent.step(["MOVE_FORWARD"] * 3)
+            self.assertEqual(first["status"], "NO_VISUAL_PROGRESS")
+            self.assertEqual(first["motion_hint"]["recent_stall_directions_deg"], [0])
+            turned = agent.step(["TURN_RIGHT", "TURN_RIGHT"])
+            self.assertEqual(turned["motion_hint"]["recent_stall_directions_deg"], [-30])
+            second = agent.step(["MOVE_FORWARD"] * 2)
+            self.assertEqual(second["status"], "NO_VISUAL_PROGRESS")
+            self.assertEqual(second["motion_hint"]["recent_stall_directions_deg"],
+                             [-30, 0])
+        # A changing RGB clears short-term local obstacle attempts.
+        cleared = agent.step(["MOVE_FORWARD"])
+        self.assertEqual(cleared["status"], "RUNNING")
+        self.assertNotIn("motion_hint", cleared)
+        self.assertEqual(len(agent.actions), 5)
+
+    def test_tiny_normal_actions_do_not_add_motion_hint_or_change_export(self):
+        first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
+        self.assertNotIn("motion_hint", first)
+        last = self.controller.step(["MOVE_FORWARD"])
+        self.assertEqual(last["executed"], ["MOVE_FORWARD", "STOP"])
+        self.assertNotIn("motion_hint", last)
+        self.assertEqual(self.env.actions,
+                         ["TURN_LEFT", "MOVE_FORWARD", "MOVE_FORWARD", "STOP"])
+
     def test_ordered_batch_and_reserved_stop_produce_legal_export(self):
         first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
         self.assertEqual(first["status"], "RUNNING")
@@ -469,10 +536,14 @@ class CodexEpisodeTests(unittest.TestCase):
         # Safety guidance is prompt-only; MCP movement logic stays unchanged.
         self.assertIn("People can move between views", PROMPT)
         self.assertIn("keep a safe gap", PROMPT)
-        self.assertIn("keep moving when passage is clear", PROMPT)
-        self.assertIn("landmark order", PROMPT)
+        self.assertIn("keep moving when clear", PROMPT)
+        self.assertIn("Follow landmarks in order", PROMPT)
         self.assertIn("exact stopping place", PROMPT)
         self.assertIn("magenta=invalid", PROMPT)
+        self.assertIn("next unverified landmark", PROMPT)
+        self.assertIn("motion_hint", PROMPT)
+        self.assertIn("short batches near people", PROMPT)
+        self.assertIn("left/right at the place specified", PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
