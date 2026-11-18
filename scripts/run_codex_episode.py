@@ -383,6 +383,7 @@ def main():
 
         trace_exists, summary, warning = collect_habitat_summary(args, trace)
         run_status = {
+            "prompt_kind": "model_instructions_file",
             "codex_usage_file": (("traces/" + split + "-" + str(args.episode_id) +
                                   "/codex/codex_usage.json")
                                  if trace_exists or args.batch_child else
