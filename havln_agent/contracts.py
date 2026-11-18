@@ -142,8 +142,11 @@ _PROGRESS=dict(
                                   items=dict(type='string',maxLength=64)),
     local_handoff=_optional(dict(
         goal=dict(type='string', minLength=1, maxLength=200),
-        exit_condition=dict(type='string', minLength=1, maxLength=200)),
-        ('goal', 'exit_condition')),
+        exit_condition=dict(type='string', minLength=1, maxLength=200),
+        # Model-owned atomic execution horizon after the cloud's own move.
+        # Semantic completion is reported back, never inferred from distance.
+        max_forward_actions=dict(type='integer', minimum=1, maximum=12)),
+        ('goal', 'exit_condition', 'max_forward_actions')),
     route_reference_update=dict(
         type='object',additionalProperties=False,
         properties=dict(
