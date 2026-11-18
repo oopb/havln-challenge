@@ -57,6 +57,12 @@ def select_frames(trace, interval):
             if ident:chosen.add(ident)
     for tool in rows(trace/'tools.jsonl'):
         call, result = tool.get('call') or {}, tool.get('result') or {}
+        # Preserve every RGB frame actually shown to Codex. Otherwise a
+        # turn-heavy episode can lose model-seen images in a critical archive.
+        if call.get('tool') == 'observe':
+            ident = result.get('observation_id')
+            if isinstance(ident, str) and ident.startswith('obs_'):
+                chosen.add(ident)
         if (call.get('tool') in ('navigate_local','inspect_geometry')
                 and result.get('status') in ('BLOCKED','PARTIAL','REQUIRES_ATTENTION')):
             ident=result.get('end_observation_id')
@@ -81,14 +87,21 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
                    and '.progress.' not in p.name)}
     files.update(root.glob('worker-*.log'))
     files.update((root/'shards').glob('*.json'))
+    # Startup failures may occur before Habitat creates traces/. In this
+    # case the standalone Codex audit lives at output-dir/codex/.
+    codex_names=('prompt.txt', 'command.json', 'codex_events.jsonl',
+                 'codex_stderr.log', 'final_message.txt', 'run_status.json')
+    for name in codex_names:
+        file = root / 'codex' / name
+        if file.is_file():
+            files.add(file)
     catalog={}
     for trace in episodes:
         files.update(trace/name for name in TRACE_NAMES if (trace/name).is_file())
         # Codex is a separate agent path: preserve the CLI session audit
         # alongside Habitat receipts without mislabeling it as api.jsonl.
         # Exact allowlist avoids accidentally archiving credentials or caches.
-        for name in ('prompt.txt', 'command.json', 'codex_events.jsonl',
-                     'codex_stderr.log', 'final_message.txt', 'run_status.json'):
+        for name in codex_names:
             event_file = trace / 'codex' / name
             if event_file.is_file():
                 files.add(event_file)
@@ -121,10 +134,13 @@ def main():
     p.add_argument('--archive',type=Path)
     p.add_argument('--frames',choices=['critical','all','none'],default='critical')
     p.add_argument('--interval',type=int,default=25)
+    p.add_argument('--allow-empty', action='store_true',
+                   help='Package startup diagnostics even without a Habitat trace')
     a=p.parse_args()
     if a.interval<1:p.error('--interval must be positive')
     destination=a.archive or a.output_dir.with_name(a.output_dir.name+'-diagnostic.zip')
-    info=pack(a.output_dir,destination,a.frames,a.interval)
+    info=pack(a.output_dir,destination,a.frames,a.interval,
+              allow_empty=a.allow_empty)
     print(f'{destination}: {destination.stat().st_size/1048576:.1f} MiB')
     for key,value in info['episodes'].items():
         print(f'{key}: {value["included_frames"]}/{value["total_frames"]} RGB-D frames')
