@@ -201,17 +201,27 @@ def collect_codex_audit(args, staged_dir, trace_exists, trace):
 
 
 def archive_codex_run(args):
-    """Create one portable diagnostic ZIP *inside* --output-dir."""
-    archive = args.output_dir.rstrip("/") + "/diagnostic.zip"
-    command = [
-        args.docker_bin, "exec", args.container, "python",
-        "/toolkit/scripts/pack_agent_diagnostics.py",
-        "--output-dir", args.output_dir,
-        "--archive", archive,
-        "--frames", args.archive_frames,
-        "--allow-empty",
-    ]
-    subprocess.run(command, check=True, timeout=600)
+    """Use the EXACT automatic archive rule of the original API exporter.
+
+    Default single-episode policy: all frames. Place timestamped archives in
+    <output-dir parent>/diagnostic-archives, never inside the run directory.
+    """
+    frames = "all" if args.archive_frames == "auto" else args.archive_frames
+    program = (
+        "import sys; from havln_agent.export import auto_archive; "
+        "path = auto_archive(sys.argv[1], frames=sys.argv[2]); "
+        "assert path is not None, 'No diagnostic evidence to archive'; "
+        "print('CODEX_ARCHIVE_PATH=' + str(path))"
+    )
+    result = subprocess.run(
+        [args.docker_bin, "exec", "-w", "/toolkit", args.container,
+         "python", "-c", program, args.output_dir, frames],
+        check=True, capture_output=True, text=True, timeout=600)
+    archive = next(
+        (line.partition("=")[2] for line in result.stdout.splitlines()
+         if line.startswith("CODEX_ARCHIVE_PATH=")), None)
+    if not archive:
+        raise RuntimeError("Archive created but expected path was not reported")
     return archive
 
 
@@ -234,9 +244,9 @@ def main():
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--output-dir", required=True,
                         help="Single fresh absolute CONTAINER output directory")
-    parser.add_argument("--archive-frames", choices=("critical", "all", "none"),
-                        default="critical",
-                        help="Automatic diagnostic ZIP frame policy (default: critical)")
+    parser.add_argument("--archive-frames", choices=("auto", "critical", "all", "none"),
+                        default="auto",
+                        help="Same as API exporter: auto=all frames for one episode")
     parser.add_argument("--preflight", action="store_true",
                         help="Check Codex/Docker/Habitat without model inference or output files")
     args = parser.parse_args()
