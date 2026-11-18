@@ -45,6 +45,7 @@ def build_command(args, final_message):
         "--gpu-id", str(args.gpu_id),
         "--seed", str(args.seed),
         "--output-dir", args.output_dir,
+        "--data-root", getattr(args, "data_root", "/data/havln2"),
     ]
     if getattr(args, "batch_child", False):
         server_args.append("--batch-child")
@@ -255,6 +256,8 @@ def main():
     parser.add_argument("--reasoning-effort", default="medium",
                         choices=("low", "medium", "high", "xhigh"))
     parser.add_argument("--container", default="havln-cma")
+    parser.add_argument("--data-root", default="/data/havln2",
+                        help="Container-side HA-VLN dataset root")
     parser.add_argument("--docker-bin", default="docker")
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--output-dir", required=True,
@@ -304,7 +307,9 @@ def main():
 
     try:
         # Read-only quota queries are best-effort and never gate model execution.
-        quota_before = read_rate_limits(args.codex_bin)
+        quota_before = (read_rate_limits(args.codex_bin)
+                        if not args.batch_child else
+                        {"status": "unavailable", "reason": "use batch-level quota snapshots"})
         with tempfile.TemporaryDirectory(prefix="havln-codex-session-") as workdir:
             with (staged_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
                  (staged_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
@@ -315,7 +320,9 @@ def main():
                     stderr.write("Failed to launch Codex: " + str(error) + "\n")
                     exit_code = 127
 
-        quota_after = read_rate_limits(args.codex_bin)
+        quota_after = (read_rate_limits(args.codex_bin)
+                       if not args.batch_child else
+                       {"status": "unavailable", "reason": "use batch-level quota snapshots"})
         tokens = summarize_token_usage(staged_dir / "codex_events.jsonl")
         # Interrupted or failed sessions may have consumed additional tokens
         # without a turn.completed usage receipt. Do not claim full coverage.
