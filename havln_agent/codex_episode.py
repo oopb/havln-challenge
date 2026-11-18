@@ -149,6 +149,8 @@ class CodexEpisode:
                 "budget_guard_stop" if origin == "budget_guard" else "codex_stop")
         elif environment_done:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
+        elif self.remaining == 0:
+            self.done, self.end_reason = True, "action_budget_exhausted"
 
     def step(self, requested):
         ident = self._start_tool("step")
