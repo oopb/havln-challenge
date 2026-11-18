@@ -466,6 +466,13 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(cmd[-1], START_PROMPT)
         self.assertNotIn("Go down the stairs.", cmd[-1])
         self.assertIn("sole navigation agent", PROMPT)
+        # Safety guidance is prompt-only; MCP movement logic stays unchanged.
+        self.assertIn("People can move between views", PROMPT)
+        self.assertIn("keep a safe gap", PROMPT)
+        self.assertIn("keep moving when passage is clear", PROMPT)
+        self.assertIn("landmark order", PROMPT)
+        self.assertIn("exact stopping place", PROMPT)
+        self.assertIn("magenta=invalid", PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
