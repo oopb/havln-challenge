@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ from havln_agent.codex_episode import CodexEpisode
 from havln_agent.codex_mcp import MCPServer
 from havln_agent.replay_server import ReplaySource, EpisodeReplay
 from scripts.pack_agent_diagnostics import pack
-from scripts.run_codex_episode import preflight, summarize_codex_events
+from scripts.run_codex_episode import preflight, summarize_codex_events, run_codex_cli
 from havln_agent.perception import Camera, adapt_observation
 from scripts.run_codex_episode import build_command
 
@@ -179,6 +180,16 @@ class CodexEpisodeTests(unittest.TestCase):
                       stdout="ready", stderr="")) as run:
             self.assertEqual(preflight(args, "test"), 0)
             self.assertEqual(run.call_count, 5)
+
+    def test_codex_wall_time_limit_terminates_stalled_process(self):
+        output = Path(self.tempdir.name) / "stdout.log"
+        errors = Path(self.tempdir.name) / "stderr.log"
+        with output.open("w") as out, errors.open("w") as err:
+            status = run_codex_cli(
+                [sys.executable, "-c", "import time;time.sleep(20)"],
+                self.tempdir.name, out, err, 0.2)
+        self.assertEqual(status, 124)
+        self.assertIn("exceeded wall-time limit", errors.read_text())
 
     def test_habitat_execution_exception_is_terminal_and_not_exported(self):
         with patch.object(self.env, "step", side_effect=RuntimeError("sim failure")):
