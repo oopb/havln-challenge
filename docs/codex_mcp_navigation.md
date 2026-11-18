@@ -77,16 +77,21 @@ Do not use docker exec -t: a TTY corrupts the stdio MCP protocol.
 
 **One output directory (no --log-dir needed)**
 
-The runner writes all persistent results under the container-side
-`--output-dir`. The host uses a temporary staging directory only while
-Codex is running; it deletes that temporary copy after the audit is safely
-copied to the container. If Docker collection fails, the host recovery
-location is printed and retained instead of silently losing the logs.
+The runner keeps run output under the container-side
+`--output-dir`, exactly like the original `run_api_agent.py`. The host uses
+temporary staging only while Codex runs; it removes that copy after saving
+the audit to Docker. If collection fails, it prints and retains the host
+recovery directory.
+
+The original exporter also puts automatic archives in a **sibling**
+`diagnostic-archives/` directory and defaults to **all frames for one
+episode**. Codex now calls the same `auto_archive()` function, preserving
+its timestamped, collision-resistant, atomic ZIP naming convention.
 
 ```text
 /workspace/agent-runs/codex-p2-episode1/
 ├── run_status.json                  # Codex exit status + Habitat/export status
-├── diagnostic.zip                   # Automatically generated, critical frames
+├── test.diagnostic.json             # Valid single-episode action export
 └── traces/
     └── test-1/
         ├── episode.json            # Exact route instruction
@@ -111,11 +116,42 @@ under `output-dir/codex/`. The automatic ZIP is still created with
 `--allow-empty` so the Codex error is not lost. In a partially initialized
 episode, the CLI audit is placed next to the partial trace.
 
-The archive defaults to **critical** frames, including the first/last
-frame, movement evidence, and **every frame actually returned to Codex by
-`observe()`**. All canonical RGB-D observations remain in the uncompressed
-run directory. Choose `--archive-frames all` when a fully portable replay
-with every atomic action frame is needed; use `none` for metadata only.
+The automatic archive is stored outside the run directory, following the
+original structure:
+
+```text
+/workspace/agent-runs/
+├── codex-p2-episode1/
+│   ├── test.diagnostic.json
+│   ├── run_status.json
+│   └── traces/test-1/...
+└── diagnostic-archives/
+    └── codex-p2-episode1-YYYYMMDDTHHMMSSZ-diagnostic.zip
+```
+
+For this single-episode runner, `--archive-frames auto` (default) retains
+**all frames**. Explicit `--archive-frames critical` keeps the first and
+last images, movement evidence, and every image returned by `observe()`.
+A critical ZIP may omit frames required for per-action before/after replay;
+use `all` for complete offline playback. The uncompressed run directory
+always retains every original frame.
+
+Replay Studio correlates the Codex MCP tool stream to the exact Habitat
+`tools.jsonl` and `steps.jsonl` sequence only when tool names and arguments
+agree; mismatches are left unlinked. On completed `observe()` events it
+shows **the actual RGB returned to Codex**, plus Depth explicitly labeled
+as offline-only (not a model input). On `step()` events it shows the true
+before/after frames. Initial/thread-level Codex events remain unlinked.
+The viewer omits duplicate base64 image bytes in JSON responses, while the
+original complete Codex event stream remains in the saved ZIP.
+
+Codex gets an initial user navigation instruction at CLI launch; it is not
+an explicit model-API system message. The task instruction and RGB are
+delivered with each successful `observe()`; `step()` receives an action
+list and returns a structured execution receipt without any new image.
+Codex manages the continuous model context internally: the CLI event log
+does not record the complete hidden per-model-call system/developer
+message envelopes.
 
 Replay Studio now has a **Codex 会话** filter that renders CLI events,
 their raw model/tool records, and the exact initial Prompt. It preserves
@@ -151,14 +187,14 @@ directory with docker cp and open it locally:
     docker cp havln-cma:/workspace/agent-runs/codex-p2-episode1 /tmp/codex-p2-episode1
     python scripts/serve_agent_replay.py --output-dir /tmp/codex-p2-episode1
 
-After each run, **diagnostic.zip is automatically generated inside
---output-dir**, whether Codex succeeded or returned an error (provided Docker
-remains accessible). It contains the model/tool transcript, prompt,
-termination diagnostics and critical RGB-D evidence. You no longer need to
-run pack_agent_diagnostics.py manually.
+After each run, a timestamped ZIP is automatically generated in
+`--output-dir`'s **sibling `diagnostic-archives/` directory**, even if Codex
+failed (provided Docker remains reachable). A single episode defaults to
+`--archive-frames auto` = `all`. You no longer need to pack manually.
 
-For a shareable *all-frame* archive, select `--archive-frames all` before
-starting the episode, or use the existing packer manually afterwards.
+For earlier critical-only archives, missing frames cannot be recovered from
+the ZIP itself. Repackage from the original uncompressed run directory with
+`--frames all` if it still exists.
 
 ## Offline tests
 
