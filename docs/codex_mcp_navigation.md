@@ -68,39 +68,54 @@ Run on the HOST, not inside havln-cma:
       --timeout-seconds 2400 \
       --model gpt-6-astra --reasoning-effort medium \
       --container havln-cma \
-      --output-dir /workspace/agent-runs/codex-p2-episode1 \
-      --log-dir ./codex-runs/phase2-episode1-first
+      --output-dir /workspace/agent-runs/codex-p2-episode1
 
 This calls a single codex exec with --json, --ephemeral,
 --ignore-user-config, read-only sandbox and an
 ephemeral MCP config. It starts one Habitat server via docker exec -i.
 Do not use docker exec -t: a TTY corrupts the stdio MCP protocol.
 
-**What gets recorded**
+**One output directory (no --log-dir needed)**
 
-HOST (the selected log-dir):
+The runner writes all persistent results under the container-side
+`--output-dir`. The host uses a temporary staging directory only while
+Codex is running; it deletes that temporary copy after the audit is safely
+copied to the container. If Docker collection fails, the host recovery
+location is printed and retained instead of silently losing the logs.
 
-- prompt.txt: exact instruction/policy sent to Codex; the episode's route
-  instruction is supplied by observe and separately stored in episode.json.
-- command.json: exact CLI arguments, model, split and output paths.
-- codex_events.jsonl: streaming CLI events including available tool activity.
-- codex_stderr.log: diagnostics (not MCP protocol data).
-- final_message.txt: final agent reply if Codex emits one.
-- run_status.json: Codex process exit code, event type counts, Habitat
-  termination and separately marked *action export validity*.
+```text
+/workspace/agent-runs/codex-p2-episode1/
+├── run_status.json                  # Codex exit status + Habitat/export status
+├── diagnostic.zip                   # Automatically generated, critical frames
+└── traces/
+    └── test-1/
+        ├── episode.json            # Exact route instruction
+        ├── summary.json            # Executed action counts / stop reason
+        ├── result.json             # Legal action row, only if completed
+        ├── failure.json            # Only when Habitat episode incomplete
+        ├── steps.jsonl             # Atomic action receipts and frame references
+        ├── tools.jsonl             # observe/step arguments and results
+        ├── replay/events.jsonl     # Habitat timeline
+        ├── observations/obs_*.npz  # Canonical RGB-D observations
+        └── codex/
+            ├── prompt.txt
+            ├── command.json
+            ├── codex_events.jsonl  # Codex session model/tool events
+            ├── codex_stderr.log
+            ├── final_message.txt
+            └── run_status.json
+```
 
-DOCKER (output-dir/traces/test-1):
+If the simulator does not initialize, the same session audit instead lives
+under `output-dir/codex/`. The automatic ZIP is still created with
+`--allow-empty` so the Codex error is not lost. In a partially initialized
+episode, the CLI audit is placed next to the partial trace.
 
-- episode.json: actual navigation instruction, camera and budget.
-- observations/obs_XXXXXX.npz: canonical RGB-D frame after every atomic
-  action and explicit observation. No duplicate image files for the CLI.
-- tools.jsonl: observe/step call arguments and structured results.
-- steps.jsonl: executed actions with before/after frame references.
-- replay/events.jsonl: ordered action/observation/tool timeline.
-- summary.json: termination, action counts and *action-export* validity.
-- result.json: a single checked row when legal, OR failure.json if incomplete.
-- codex/: host CLI logs copied here by the launcher for replay and archive.
-  Includes the original session JSON event stream and initial prompt.
+The archive defaults to **critical** frames, including the first/last
+frame, movement evidence, and **every frame actually returned to Codex by
+`observe()`**. All canonical RGB-D observations remain in the uncompressed
+run directory. Choose `--archive-frames all` when a fully portable replay
+with every atomic action frame is needed; use `none` for metadata only.
 
 Replay Studio now has a **Codex 会话** filter that renders CLI events,
 their raw model/tool records, and the exact initial Prompt. It preserves
@@ -136,15 +151,14 @@ directory with docker cp and open it locally:
     docker cp havln-cma:/workspace/agent-runs/codex-p2-episode1 /tmp/codex-p2-episode1
     python scripts/serve_agent_replay.py --output-dir /tmp/codex-p2-episode1
 
-For a standalone RGB-D diagnostic archive inside the container:
+After each run, **diagnostic.zip is automatically generated inside
+--output-dir**, whether Codex succeeded or returned an error (provided Docker
+remains accessible). It contains the model/tool transcript, prompt,
+termination diagnostics and critical RGB-D evidence. You no longer need to
+run pack_agent_diagnostics.py manually.
 
-    docker exec havln-cma python /toolkit/scripts/pack_agent_diagnostics.py \
-      --output-dir /workspace/agent-runs/codex-p2-episode1 --frames all
-
-The existing diagnostic packer now includes the **codex/** audit files
-alongside the canonical observations and actions. Use --frames all for a
-complete portable RGB-D archive. Retain the host log directory as an
-additional recovery copy if Docker copying fails.
+For a shareable *all-frame* archive, select `--archive-frames all` before
+starting the episode, or use the existing packer manually afterwards.
 
 ## Offline tests
 
