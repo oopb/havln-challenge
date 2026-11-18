@@ -65,6 +65,7 @@ Run on the HOST, not inside havln-cma:
     cd ~/ccx/havln-challenge
     python scripts/run_codex_episode.py \
       --phase phase2 --episode-id 1 --max-steps 128 \
+      --timeout-seconds 2400 \
       --model gpt-6-astra --reasoning-effort medium \
       --container havln-cma \
       --output-dir /workspace/agent-runs/codex-p2-episode1 \
@@ -120,6 +121,11 @@ uses the final available movement slot without stopping, the controller
 executes a recorded budget_guard STOP so the resulting sequence remains legal.
 This is reported as budget_guard_stop, NEVER as confirmed navigation success.
 Abnormal CLI termination without STOP remains explicitly incomplete.
+The host launcher has a 2400-second default wall-clock limit, configurable
+with --timeout-seconds. On timeout it sends SIGTERM (then SIGKILL if needed)
+to the Codex process group, including the docker exec MCP child; the host
+run_status.json records exit 124/timed_out=true. Even if Habitat cannot
+finalize its trace, the host audit logs are retained.
 
 ## Replay and archive
 
