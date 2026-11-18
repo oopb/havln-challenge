@@ -82,7 +82,29 @@ class ReplaySource:
         if self.zip:
             filename = self.prefix + name
             if filename not in self.names:
-                return None
+                # A packed archive may omit byte-identical RGB-D snapshots.
+                # Resolve only a same-episode, allowlisted observation alias.
+                parts = name.split('/')
+                if (len(parts) != 4 or parts[0] != 'traces' or
+                        parts[2] != 'observations' or
+                        not re.fullmatch(r'obs_[0-9]+\\.npz', parts[3])):
+                    return None
+                manifest_path = self.prefix + 'diagnostic_manifest.json'
+                if manifest_path not in self.names:
+                    return None
+                info = self.zip.getinfo(manifest_path)
+                if info.file_size > 16 * 1024 * 1024:
+                    return None
+                manifest = _read_json(self.zip.read(manifest_path), {})
+                alias = ((manifest.get('frame_aliases') or {})
+                         .get(parts[1], {}).get(parts[3]))
+                if not isinstance(alias, str) or not re.fullmatch(
+                        r'obs_[0-9]+\\.npz', alias):
+                    return None
+                filename = (self.prefix + 'traces/' + parts[1] +
+                            '/observations/' + alias)
+                if filename not in self.names:
+                    return None
             info = self.zip.getinfo(filename)
             if info.file_size > 256 * 1024 * 1024:
                 return None
