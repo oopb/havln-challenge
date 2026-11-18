@@ -183,6 +183,26 @@ class Hybrid6HandoffTests(unittest.TestCase):
                            rt,'obs_0060')
         self.assertIsNone(router.cloud_feedback(rt))
 
+    def test_scheduler_reacquires_cloud_after_exactly_one_local_forward(self):
+        """Integration check: the scheduler must actually switch tiers."""
+        from havln_agent.scheduler import run
+        from test_hybrid_routing import HybridSchedulerTests
+        rt=HybridSchedulerTests.FakeRuntime()
+        rt.cloud_decide=lambda feedback:dict(
+            tool='navigate_relative',
+            args=dict(turn_direction='NONE',turn_degrees=0,distance_m=.25),
+            local_handoff=grant(1)['local_handoff'])
+        rt.assess=lambda result:setattr(
+            rt,'done',len(rt.memory.actions)>=3)
+        decisions=[]
+        run(rt,lambda role,value:decisions.append(value))
+        self.assertEqual(rt.local_calls,1)
+        self.assertEqual(rt.hybrid_router.escalations,1)
+        self.assertEqual(len(rt.executed),3)
+        self.assertEqual([binding['actor'] for _,binding in rt.executed],
+                         ['navigation_agent','local_agent','navigation_agent'])
+        self.assertEqual(rt.hybrid_router.local_forward_actions,1)
+
     def test_local_model_receives_remaining_horizon_as_numeric_context(self):
         rt=runtime()
         router=HybridRouter(dict(enabled=True))
