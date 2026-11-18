@@ -106,10 +106,10 @@ class CodexEpisodeTests(unittest.TestCase):
             self.env.actions.append(action)
             return before, 0., action == "STOP", {}
         with patch.object(self.env, "step", side_effect=stationary_step):
-            result = self.controller.step(["MOVE_FORWARD"] * 4)
+            result = self.controller.step(["MOVE_FORWARD"] * 3)
         self.assertEqual(result["status"], "NO_VISUAL_PROGRESS")
         self.assertEqual(result["executed"], ["MOVE_FORWARD"])
-        self.assertEqual(result["skipped_count"], 3)
+        self.assertEqual(result["skipped_count"], 2)
         self.assertFalse(result["done"])
         self.assertEqual(self.env.actions, ["MOVE_FORWARD"])
         log = [json.loads(line) for line in
@@ -118,7 +118,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(log[0]["motion_feedback"], "rgb_unchanged")
         receipt = json.loads((self.controller.directory / "tools.jsonl")
                              .read_text().splitlines()[-1])
-        self.assertEqual(receipt["result"]["skipped_count"], 3)
+        self.assertEqual(receipt["result"]["skipped_count"], 2)
         self.assertEqual(receipt["result"]["status"], "NO_VISUAL_PROGRESS")
 
         # Do not create a movement authorization lock after a stall.
