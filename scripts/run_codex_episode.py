@@ -418,6 +418,7 @@ def main():
         # The single selected output directory is now the durable copy.
         shutil.rmtree(staging_root)
         archive = None
+        archive_failed = False
         if not args.no_auto_archive and not args.batch_child:
             try:
                 archive = archive_codex_run(args)
@@ -427,7 +428,7 @@ def main():
                       file=sys.stderr)
                 print("Raw traces and Codex logs remain in " + args.output_dir,
                       file=sys.stderr)
-                return 2
+                archive_failed = True
 
         if summary:
             print("Habitat episode:", summary["stop_reason"],
@@ -448,9 +449,10 @@ def main():
               "| cached:", tokens["cached_input_tokens"],
               "| output:", tokens["output_tokens"],
               "| total:", tokens["total_tokens"])
-        for line in format_quota_summary(usage["quota"]):
-            print(line)
-        return 0 if run_status["success"] else 2
+        if not args.batch_child:
+            for line in format_quota_summary(usage["quota"]):
+                print(line)
+        return 0 if run_status["success"] and not archive_failed else 2
     finally:
         # If an unexpected error occurs before collection, do not silently
         # delete the sole copy of the Codex model/tool transcript.
