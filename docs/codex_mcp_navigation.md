@@ -227,12 +227,109 @@ included in the standard sibling diagnostic ZIP and shown in Replay Studio.
 To inspect an archived result, open Replay Studio or read
 `codex_usage.json` directly; no additional CLI flags are needed.
 
+## Concurrent multi-episode evaluation (host)
+
+`codex exec --ephemeral` can run in **independent CLI processes** at the
+same time. The batch runner launches one fresh Codex process, fresh Habitat
+MCP process, and fresh trace per episode. Model contexts and simulator
+states never leak between jobs. Concurrent sessions share the same account
+quota and available GPU/CPU resources. Start with `--batch 2` on one GPU,
+not `--batch 32` without memory testing.
+
+A recommended Phase 2 sample, preserving original episode IDs:
+
+```bash
+cd ~/ccx/havln-challenge
+python scripts/run_codex_batch.py \\
+  --phase phase2 --episode-start 1 --episode-limit 20 \\
+  --batch 2 --gpu-ids 0 --max-steps 128 \\
+  --model gpt-6.2-sol --reasoning-effort low \\
+  --output-dir /workspace/agent-runs/codex-p2-batch20
+```
+
+To sample 20 **distinct** random test IDs reproducibly from the original
+ID range `[100, 3408]`:
+
+```bash
+python scripts/run_codex_batch.py \\
+  --phase phase2 --episode-start 100 --episode-limit 20 \\
+  --random-episodes --seed 42 --batch 2 --gpu-ids 0 \\
+  --model gpt-6.2-sol --reasoning-effort low \\
+  --output-dir /workspace/agent-runs/codex-p2-random20
+```
+
+`--episode-start` is an **inclusive original dataset ID**, not a
+0-based row number. Without `--random-episodes`, the runner selects the
+next `--episode-limit` original IDs sequentially. Random mode samples
+without replacement, records the chosen IDs in `batch_plan.json`, and
+uses `--seed` for reproducibility. By default the number of processes
+per GPU is `--batch 1`. `--gpu-ids 0 1` uses both GPUs with up to
+`batch * gpu_count` independent Codex sessions. The model and reasoning
+effort remain configurable; the single-episode defaults are unchanged.
+
+Use `--preflight` to verify Codex login, Docker, dataset IDs and selected
+samples without starting model inference or creating output. Every run must
+use a **fresh** output directory; existing batches are never silently
+overwritten. Failed individual episodes do not prevent the other selected
+episodes from running. Partial batches remain marked non-official.
+
+### Batch output and diagnostic archive
+
+By default a batch generates **one** timestamped diagnostic ZIP in the
+same sibling archive directory as the existing API runner:
+
+```text
+/workspace/agent-runs/
+├── codex-p2-batch20/
+│   ├── batch_plan.json                # exact selected IDs/settings
+│   ├── batch_worker_results.json      # one result per child
+│   ├── batch_status.json              # validated exports and token summary
+│   ├── batch_quota.json               # account-wide before/after limits
+│   ├── codex_usage.json               # aggregated per-episode token usage
+│   ├── run_status.json
+│   ├── test.diagnostic.json           # legal completed rows, NOT official
+│   ├── worker-test-<id>.log
+│   └── traces/test-<id>/
+│       ├── summary.json
+│       ├── steps.jsonl
+│       ├── observations/obs_*.npz
+│       └── codex/codex_events.jsonl
+└── diagnostic-archives/
+    └── codex-p2-batch20-YYYYMMDDTHHMMSSZ-diagnostic.zip
+```
+
+The container's `/workspace/agent-runs` is the existing mounted workspace
+used by the API runner (typically `havln-workspace/agent-runs` on the host,
+depending on the Docker bind mount). Use `--no-auto-archive` to retain raw
+runs **without** generating the test diagnostic ZIP. Use
+`--archive-frames auto|all|critical|none` to control which RGB-D
+frames the ZIP contains; auto means **all for one episode** and
+**critical for multi-episode** batch runs. All model-seen observe frames
+are always retained logically in critical mode. Exact duplicate NPZ
+snapshots are stored once with alias metadata, so Replay Studio can open
+every original observation ID, including from a ZIP. The full unmodified
+run directory stays on the server.
+
+Run a batch ZIP in Replay Studio just like a single-episode ZIP, selecting
+any episode from the dropdown. If the MCP server fails before producing
+traces, a startup-only diagnostic ZIP can still show the original Codex
+CLI error events and logs. The Replay UI now separates MCP request
+arguments from completed tool outputs and retains the full raw event tab;
+Codex does **not** expose full internal model request envelopes.
+
+The root quota snapshots describe the whole batch time window. Individual
+Codex quota percentages overlap in parallel execution and must **never**
+be added; token totals, by contrast, are aggregated from disjoint episode
+event streams. No partial run is mislabeled as a full official Phase 2
+submission.
+
 ## Offline tests
 
 Without Docker, Codex login or Habitat:
 
     python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
     python -m unittest discover -s tests -p 'test_codex_usage.py' -v
+    python -m unittest discover -s tests -p 'test_codex_batch.py' -v
 
 These tests exercise MCP initialization/tools, real PNG wire content,
 atomic action ordering, budget STOP, failed input handling, the
