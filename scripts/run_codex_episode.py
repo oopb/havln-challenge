@@ -26,8 +26,8 @@ The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
 Use long action batches on clear paths, short batches near people, stairs or uncertain turns; observe when a new view helps.
 Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
-Use step motion_hint (relative turn totals and recent stalled directions) to avoid revisiting the same view or retrying a failed approach; it is evidence, not a motion guarantee or a rule.
-People can move between views: keep a safe gap and avoid their immediate path; re-observe if they block the route, but keep moving when passage is clear.
+Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
+People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
 Near the destination, confirm the exact stopping place using visible evidence; do not prolong turn-only searching.
 If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
 When the goal has been reached, execute STOP using step.
