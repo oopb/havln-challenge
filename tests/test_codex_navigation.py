@@ -11,7 +11,7 @@ import tempfile
 import sys
 import unittest
 from zipfile import ZipFile
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock, Mock
 
 import numpy as np
 
@@ -193,6 +193,21 @@ class CodexEpisodeTests(unittest.TestCase):
                 self.tempdir.name, out, err, 0.2)
         self.assertEqual(status, 124)
         self.assertIn("exceeded wall-time limit", errors.read_text())
+
+    def test_ctrl_c_also_terminates_codex_and_preserves_cleanup_path(self):
+        process = SimpleNamespace(pid=12345,
+                                  wait=Mock(side_effect=[KeyboardInterrupt(), 0]))
+        manager = MagicMock()
+        manager.__enter__.return_value = process
+        stderr = io.StringIO()
+        with patch("scripts.run_codex_episode.subprocess.Popen",
+                   return_value=manager), \
+             patch("scripts.run_codex_episode.os.killpg") as kill:
+            code = run_codex_cli(["codex", "exec"], self.tempdir.name,
+                                 io.StringIO(), stderr, 120)
+        self.assertEqual(code, 130)
+        self.assertIn("interrupted by user", stderr.getvalue())
+        kill.assert_called_once()
 
     def test_habitat_execution_exception_is_terminal_and_not_exported(self):
         with patch.object(self.env, "step", side_effect=RuntimeError("sim failure")):
