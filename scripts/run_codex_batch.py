@@ -113,6 +113,7 @@ def build_child_command(args, split, episode_id, gpu):
         "--model", args.model, "--reasoning-effort", args.reasoning_effort,
         "--docker-bin", args.docker_bin, "--codex-bin", args.codex_bin,
         "--container", args.container, "--output-dir", args.output_dir,
+        "--data-root", args.data_root,
         "--batch-child", "--no-auto-archive",
     ]
 
