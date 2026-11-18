@@ -200,19 +200,58 @@ class HybridRouter:
                 return self.escalate('local_observation_without_forward', runtime)
         return None
 
+    @staticmethod
+    def _execution_summary(runtime, route):
+        """Snapshot actual local receipts, excluding future cloud turns."""
+        if not isinstance(route, dict):
+            return None, None
+        start=route.get('start_action_step')
+        actions=getattr(getattr(runtime,'memory',None),'actions',None)
+        if type(start) is not int or not isinstance(actions,list) or not (
+                0 <= start <= len(actions)):
+            return None, None
+        segment=actions[start:]
+        count=lambda kind:sum(a.get('action')==kind for a in segment)
+        forward=[a for a in segment if a.get('action')=='MOVE_FORWARD']
+        current=(getattr(runtime.memory,'current',None) or {})
+        heading=None
+        for action in reversed(forward):
+            angle=(action.get('pose') or {}).get('heading')
+            if type(angle) in (int,float) and isfinite(angle):
+                heading=float(angle)
+                break
+        summary=dict(
+            start_observation_id=route.get('start_observation_id'),
+            latest_observation_id=current.get('observation_id'),
+            executed_forward=count('MOVE_FORWARD'),
+            executed_left=count('TURN_LEFT'),
+            executed_right=count('TURN_RIGHT'),
+            executed_look_up=count('LOOK_UP'),
+            executed_look_down=count('LOOK_DOWN'),
+            forward_receipts_with_RGBD_change=sum(
+                (item.get('result') or {}).get('visual_change') is True
+                for item in forward),
+            handoff_forward_limit=route.get('max_forward_actions'),
+            action_receipts_only_no_verified_displacement=True)
+        return summary,heading
+
     def escalate(self, reason, runtime):
         if not self.enabled:
             return reason
-        previous = self.state
-        route = deepcopy(self.route)
-        self.route = None
-        self.state = 'ESCALATE'
-        self.last_route = route
-        self.last_escalation = reason
-        self.escalations += 1
-        runtime.event('hybrid_escalated', source='hybrid_router',
-                      from_state=previous, reason=reason,
-                      route=route, model_tier='cloud_next')
+        previous=self.state
+        route=deepcopy(self.route)
+        self.last_local_summary,self.last_forward_heading_rad=(
+            self._execution_summary(runtime,route))
+        self.last_return_action_step=len(runtime.memory.actions)
+        self.route=None
+        self.state='ESCALATE'
+        self.last_route=route
+        self.last_escalation=reason
+        self.escalations+=1
+        runtime.event('hybrid_escalated',source='hybrid_router',
+            from_state=previous,reason=reason,route=route,
+            model_tier='cloud_next',
+            executed_forward_actions=self.local_forward_actions)
         return reason
 
     def cloud_ready(self):
@@ -226,45 +265,46 @@ class HybridRouter:
             self.route = None
 
     def cloud_feedback(self, runtime=None):
-        """Ground the returned handoff in executed atomic actions, not claims.
+        """Read-only handoff evidence retained through cloud-only scans.
 
-        The stored route begins AFTER the cloud's initial forward action.
-        Counters describe action receipts only, not meters traveled, stair
-        completion, reaching a landmark or validated scene progress.
+        Preserve last executed forward orientation as a RELATIVE historical
+        view offset, never an absolute heading or a movement command.
         """
         if not self.last_escalation:
             return None
-        summary = None
-        route = self.last_route
-        if route is not None and runtime is not None:
-            start = route.get('start_action_step')
-            actions = getattr(getattr(runtime, 'memory', None), 'actions', None)
-            if type(start) is int and isinstance(actions, list) and 0 <= start <= len(actions):
-                local_actions = actions[start:]
-                count = lambda name: sum(
-                    item.get('action') == name for item in local_actions)
-                forward = [item for item in local_actions
-                           if item.get('action') == 'MOVE_FORWARD']
-                current = getattr(runtime.memory, 'current', None) or {}
-                summary = dict(
-                    start_observation_id=route.get('start_observation_id'),
-                    latest_observation_id=current.get('observation_id'),
-                    executed_forward=count('MOVE_FORWARD'),
-                    executed_left=count('TURN_LEFT'),
-                    executed_right=count('TURN_RIGHT'),
-                    executed_look_up=count('LOOK_UP'),
-                    executed_look_down=count('LOOK_DOWN'),
-                    forward_receipts_with_RGBD_change=sum(
-                        (item.get('result') or {}).get('visual_change') is True
-                        for item in forward),
-                    action_receipts_only_no_verified_displacement=True)
-        return dict(
+        current=(getattr(getattr(runtime,'memory',None),'current',None) or {})
+        result=dict(
             escalation_reason=self.last_escalation,
-            prior_delegated_route=deepcopy(route),
+            prior_delegated_route=deepcopy(self.last_route),
             last_local_proposal=deepcopy(self.last_local_proposal),
-            local_execution_summary=summary,
+            local_execution_summary=deepcopy(self.last_local_summary),
+            current_observation_id=current.get('observation_id'),
             local_proposal_is_unverified=True,
             selected_route_requires_cloud_reassessment=True)
+        if runtime is not None:
+            actions=getattr(runtime.memory,'actions',None)
+            start=self.last_return_action_step
+            if isinstance(actions,list) and type(start) is int and (
+                    0 <= start <= len(actions)):
+                newer=actions[start:]
+                result['cloud_actions_since_local_return']=dict(
+                    forward=sum(a.get('action')=='MOVE_FORWARD' for a in newer),
+                    turns=sum(a.get('action') in ('TURN_LEFT','TURN_RIGHT')
+                              for a in newer),
+                    looks=sum(a.get('action') in ('LOOK_UP','LOOK_DOWN')
+                              for a in newer))
+            angle=(current.get('pose') or {}).get('heading')
+            if angle is None:
+                controller=getattr(runtime,'motion_controller',None)
+                if controller is not None:
+                    angle=controller.pose().get('heading')
+            if (type(angle) in (int,float) and isfinite(angle)
+                    and self.last_forward_heading_rad is not None):
+                result['last_local_forward_view_offset_deg_from_current']=(
+                    relative_bearing(degrees(self.last_forward_heading_rad),
+                                     degrees(angle)))
+                result['last_local_forward_is_historical_view_not_motor_target']=True
+        return result
 
     def stats(self):
         return dict(enabled=self.enabled, state=self.state,
