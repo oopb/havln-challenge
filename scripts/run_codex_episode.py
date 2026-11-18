@@ -25,7 +25,10 @@ Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
 The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
 Call step with ordered action batches; use observe when the view is needed.
-Reason about stairs, crossings, dynamic people and the route instruction.
+Follow the instruction's landmark order; avoid unrelated rooms and repeated scans when a clear route is visible.
+People can move between views: keep a safe gap and avoid their immediate path; re-observe if they block the route, but keep moving when passage is clear.
+When near the destination, check the exact stopping place using visible evidence; avoid excessive turn-only searching.
+If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
 When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.
