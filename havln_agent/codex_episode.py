@@ -207,6 +207,7 @@ class CodexEpisode:
                     if unchanged:
                         stalled = True
                         break  # The remaining actions, including STOP, are not executed.
+                requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
                     self._atomic("STOP", ident, "budget_guard")
@@ -216,7 +217,7 @@ class CodexEpisode:
                                       "NO_VISUAL_PROGRESS" if stalled else "RUNNING"),
                               executed=executed, requested=requested)
                 if stalled:
-                    result["skipped_count"] = len(requested) - len(executed)
+                    result["skipped_count"] = len(requested) - requested_executed
                     result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
         except (ValueError, RuntimeError) as error:
             result = self.status()
