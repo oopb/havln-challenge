@@ -173,12 +173,12 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(summary["events_by_type"]["turn.completed"], 2)
         self.assertEqual(summary["malformed_events"], 1)
         args = SimpleNamespace(codex_bin="codex", docker_bin="docker",
-                               container="havln-cma")
+                               container="havln-cma", episode_id=1)
         with patch("scripts.run_codex_episode.subprocess.run",
                    return_value=SimpleNamespace(returncode=0,
                       stdout="ready", stderr="")) as run:
             self.assertEqual(preflight(args, "test"), 0)
-            self.assertEqual(run.call_count, 4)
+            self.assertEqual(run.call_count, 5)
 
     def test_habitat_execution_exception_is_terminal_and_not_exported(self):
         with patch.object(self.env, "step", side_effect=RuntimeError("sim failure")):
