@@ -121,7 +121,8 @@ class NavigationStructuredProtocolTests(unittest.TestCase):
     def test_hybrid_staged_handoff_is_preserved_in_typed_args(self):
         args=dict(turn_direction='LEFT',turn_degrees=30,distance_m=0.5)
         handoff=dict(goal='Follow the chosen corridor',
-                     exit_condition='Branch or obstacle blocks it')
+                     exit_condition='Branch or obstacle blocks it',
+                     max_forward_actions=4)
         selection=dict(decision(),local_handoff=handoff)
         client=FakeClient(True,[selection,args])
         result,_=self.decide(client,hybrid=True)
