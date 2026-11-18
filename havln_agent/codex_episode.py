@@ -21,7 +21,8 @@ from .submission_contract import ACTIONS, atomic_json, check_rows
 
 
 class CodexEpisode:
-    def __init__(self, env, camera, episode_id, split, max_steps, output_dir):
+    def __init__(self, env, camera, episode_id, split, max_steps, output_dir,
+                 batch_mode=False):
         if type(max_steps) is not int or not 1 <= max_steps <= 500:
             raise ValueError("max_steps must be an integer in [1, 500]")
         if split not in ("test", "val_seen", "val_unseen"):
@@ -32,6 +33,7 @@ class CodexEpisode:
         self.env, self.camera = env, camera
         self.episode_id, self.split = str(episode_id), split
         self.max_steps = max_steps
+        self.batch_mode = batch_mode
         self.directory = Path(output_dir) / "traces" / (split + "-" + self.episode_id)
         if self.directory.exists():
             raise FileExistsError("Refusing to overwrite an existing Codex episode: " +
@@ -240,8 +242,9 @@ class CodexEpisode:
             })
             # Match the original run_api_agent.py root-level diagnostic format.
             # One-episode runs are never full official split submissions.
-            atomic_json(self.directory.parents[1] /
-                        (self.split + ".diagnostic.json"), {
+            if not self.batch_mode:
+                atomic_json(self.directory.parents[1] /
+                            (self.split + ".diagnostic.json"), {
                             "format_version": 1, "split": self.split,
                             "episodes": [row],
                         })

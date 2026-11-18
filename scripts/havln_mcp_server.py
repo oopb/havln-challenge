@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--runtime-config", type=Path,
                         default=Path("/app/config/challenge_submission.yaml"))
     parser.add_argument("--source-root", type=Path)
+    parser.add_argument("--batch-child", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="Container-side run root (contains traces/)")
     args = parser.parse_args()
@@ -61,7 +63,8 @@ def main():
                     raise ValueError("Episode ID not uniquely present in selected split")
                 env.habitat_env.episode_iterator = iter(episodes)
                 controller = CodexEpisode(env, camera, args.episode_id, split,
-                                          args.max_steps, args.output_dir)
+                                          args.max_steps, args.output_dir,
+                                          batch_mode=args.batch_child)
                 MCPServer(controller, writer=protocol_stdout).serve()
     finally:
         if controller is not None:

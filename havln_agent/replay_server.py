@@ -55,10 +55,14 @@ class ReplaySource:
             matches = [n.split('/traces/', 1)[0] + '/' for n in self.names
                        if '/traces/' in n]
             if not matches:
-                raise ValueError('Archive contains no traces/')
+                matches = [n.split('/codex/', 1)[0] + '/' for n in self.names
+                           if n.endswith('/codex/codex_events.jsonl')]
+            if not matches:
+                raise ValueError('Archive contains neither traces/ nor a Codex startup audit')
             self.prefix = matches[0]
-        elif not (self.path / 'traces').is_dir():
-            raise ValueError('Expected run output with traces/ directory')
+        elif not ((self.path / 'traces').is_dir() or
+                  (self.path / 'codex' / 'codex_events.jsonl').is_file()):
+            raise ValueError('Expected traces/ or Codex startup audit')
         else:
             self.prefix = ''
 
@@ -66,8 +70,11 @@ class ReplaySource:
         if self.zip:
             return [n[len(self.prefix):] for n in self.names
                     if n.startswith(self.prefix)]
-        return [str(p.relative_to(self.path)) for p in
-                (self.path / 'traces').rglob('*') if p.is_file()]
+        if (self.path / 'traces').is_dir():
+            return [str(p.relative_to(self.path)) for p in
+                    (self.path / 'traces').rglob('*') if p.is_file()]
+        return ['codex/codex_events.jsonl'] if (
+            self.path / 'codex' / 'codex_events.jsonl').is_file() else []
 
     def read(self, name):
         if name.startswith('/') or '..' in Path(name).parts:
@@ -75,7 +82,29 @@ class ReplaySource:
         if self.zip:
             filename = self.prefix + name
             if filename not in self.names:
-                return None
+                # A packed archive may omit byte-identical RGB-D snapshots.
+                # Resolve only a same-episode, allowlisted observation alias.
+                parts = name.split('/')
+                if (len(parts) != 4 or parts[0] != 'traces' or
+                        parts[2] != 'observations' or
+                        not re.fullmatch(r'obs_[0-9]+\.npz', parts[3])):
+                    return None
+                manifest_path = self.prefix + 'diagnostic_manifest.json'
+                if manifest_path not in self.names:
+                    return None
+                info = self.zip.getinfo(manifest_path)
+                if info.file_size > 16 * 1024 * 1024:
+                    return None
+                manifest = _read_json(self.zip.read(manifest_path), {})
+                alias = ((manifest.get('frame_aliases') or {})
+                         .get(parts[1], {}).get(parts[3]))
+                if not isinstance(alias, str) or not re.fullmatch(
+                        r'obs_[0-9]+\.npz', alias):
+                    return None
+                filename = (self.prefix + 'traces/' + parts[1] +
+                            '/observations/' + alias)
+                if filename not in self.names:
+                    return None
             info = self.zip.getinfo(filename)
             if info.file_size > 256 * 1024 * 1024:
                 return None
@@ -85,17 +114,27 @@ class ReplaySource:
             return None
         return file.read_bytes()
 
+    @lru_cache(maxsize=1)
     def episodes(self):
-        names = set()
-        for file in self.files():
-            parts = file.split('/')
-            if len(parts) >= 3 and parts[0] == 'traces' and _SAFE.fullmatch(parts[1]):
-                names.add(parts[1])
-        return sorted(names)
+        # Avoid enumerating every saved RGB-D frame in large batch runs.
+        if not self.zip:
+            traces = self.path / 'traces'
+            names = sorted(p.name for p in traces.iterdir()
+                           if p.is_dir() and _SAFE.fullmatch(p.name)) if traces.is_dir() else []
+        else:
+            names = sorted({p[1] for name in self.names
+                            if (p := name[len(self.prefix):].split('/')) and
+                            len(p) >= 3 and p[0] == 'traces' and _SAFE.fullmatch(p[1])
+                            and name.startswith(self.prefix)})
+        if not names and self.read('codex/codex_events.jsonl') is not None:
+            return ['codex-startup']
+        return names
 
     def trace(self, episode, name):
         if not _SAFE.fullmatch(episode):
             raise KeyError('Invalid episode')
+        if episode == 'codex-startup':
+            return self.read(name)
         return self.read('traces/' + episode + '/' + name)
 
     def json(self, episode, name):
@@ -152,6 +191,8 @@ class EpisodeReplay:
         self.meta = source.json(episode, 'episode.json')
         self.summary = source.json(episode, 'summary.json')
         self.failure = source.json(episode, 'failure.json')
+        if episode == 'codex-startup':
+            self.failure = _read_json(source.read('run_status.json'), {})
         self.memory = source.json(episode, 'memory.json')
         self.camera = self.meta.get('camera')
         if not self.camera:
@@ -299,9 +340,16 @@ class EpisodeReplay:
                     item = row.get('item') or {}
                     if not isinstance(item, dict):
                         item = {}
+                    response = item.get('result') or {}
+                    if not isinstance(response, dict):
+                        response = {}
                     p.update(event_type=row.get('type', 'event'),
                              item_type=item.get('type'),
-                             status=row.get('status'),
+                             status=item.get('status', row.get('status')),
+                             error=bool(row.get('error') or item.get('error') or
+                                        item.get('is_error') or
+                                        response.get('isError') or
+                                        response.get('is_error')),
                              item_id=item.get('id'))
                     linked = self.codex_links.get(item.get('id'))
                     if linked:

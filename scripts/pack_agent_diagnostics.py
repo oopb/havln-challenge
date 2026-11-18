@@ -1,5 +1,6 @@
 """Build compact shareable run archives without duplicate RGB-D frames."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -73,6 +74,29 @@ def select_frames(trace, interval):
     return chosen
 
 
+def _distinct_frames(frames):
+    """Deduplicate byte-identical .npz files without changing observation IDs.
+
+    The archive manifest supplies aliases for all omitted observation names,
+    and ReplaySource resolves them transparently for both RGB and depth.
+    The original on-disk run is never modified.
+    """
+    unique, aliases, hashes = set(), {}, {}
+    for file in sorted(frames):
+        digest = hashlib.sha256()
+        with file.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        fingerprint = digest.hexdigest()
+        old = hashes.get(fingerprint)
+        if old is not None:
+            aliases[file.name] = old.name
+        else:
+            hashes[fingerprint] = file
+            unique.add(file)
+    return unique, aliases
+
+
 def pack(root, destination, frames='critical', interval=25, allow_empty=False):
     root, destination = Path(root), Path(destination)
     trace_root=root/'traces'
@@ -97,6 +121,7 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
         if file.is_file():
             files.add(file)
     catalog={}
+    frame_aliases={}
     for trace in episodes:
         files.update(trace/name for name in TRACE_NAMES if (trace/name).is_file())
         # Codex is a separate agent path: preserve the CLI session audit
@@ -115,12 +140,20 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
         images=sorted((trace/'observations').glob('obs_*.npz'))
         selected=({x.stem for x in images} if frames=='all' else
                   select_frames(trace,interval) if frames=='critical' else set())
-        files.update(x for x in images if x.stem in selected)
+        chosen=[x for x in images if x.stem in selected]
+        unique, aliases = _distinct_frames(chosen)
+        files.update(unique)
+        if aliases:
+            frame_aliases[trace.name]=aliases
         catalog[trace.name]=dict(total_frames=len(images),
-            included_frames=sum(x.stem in selected for x in images))
+            included_frames=len(chosen), stored_frames=len(unique))
     destination.parent.mkdir(parents=True,exist_ok=True)
     manifest=dict(format='havln-diagnostic-v1',frames=frames,episodes=catalog,
-        note='Critical mode retains first/last and movement evidence; full traces remain on server.')
+        frame_aliases=frame_aliases,
+        note=('Critical mode retains first/last, model-observed and movement '
+              'evidence; byte-identical snapshots have aliases and can be '
+              'opened under every original observation ID. Full traces remain '
+              'on the server.'))
     with ZipFile(destination,'w',compression=ZIP_DEFLATED,compresslevel=6) as z:
         for file in sorted(files):
             if file.is_file():

@@ -45,7 +45,10 @@ def build_command(args, final_message):
         "--gpu-id", str(args.gpu_id),
         "--seed", str(args.seed),
         "--output-dir", args.output_dir,
+        "--data-root", getattr(args, "data_root", "/data/havln2"),
     ]
+    if getattr(args, "batch_child", False):
+        server_args.append("--batch-child")
     # JSON arrays/strings are valid TOML inline config values. Unlike
     # permanent MCP registration, these overrides apply only to this run.
     overrides = [
@@ -157,12 +160,16 @@ def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
 
 def require_fresh_container_output(args):
     """Fail before paid inference rather than append to another run."""
+    # Batch children share the run root but must never reuse an episode trace.
+    target = (args.output_dir.rstrip("/") + "/traces/" +
+              (args.split or ("test" if args.phase == "phase2" else "val_seen")) +
+              "-" + str(args.episode_id)) if getattr(args, "batch_child", False) else args.output_dir
     probe = subprocess.run(
-        [args.docker_bin, "exec", args.container, "test", "-e", args.output_dir],
+        [args.docker_bin, "exec", args.container, "test", "-e", target],
         text=True, capture_output=True, check=False, timeout=30)
     if probe.returncode == 0:
         raise ValueError("Output directory already exists in container: " +
-                         args.output_dir + ". Choose a new --output-dir.")
+                         target + ". Choose a new --output-dir.")
     if probe.returncode != 1 or probe.stderr.strip():
         raise RuntimeError("Cannot verify new output directory via Docker: " +
                            (probe.stderr.strip() or str(probe.returncode)))
@@ -195,14 +202,15 @@ def collect_codex_audit(args, staged_dir, trace_exists, trace):
     A partial Habitat trace still receives its CLI history. On MCP startup
     failure, use output-dir/codex and preserve the startup error in the ZIP.
     """
-    parent = trace if trace_exists else args.output_dir
+    parent = trace if trace_exists or getattr(args, "batch_child", False) else args.output_dir
     subprocess.run([args.docker_bin, "exec", args.container,
                     "mkdir", "-p", parent], check=True, timeout=60)
     subprocess.run([args.docker_bin, "cp", str(staged_dir),
                     args.container + ":" + parent], check=True, timeout=120)
-    subprocess.run([args.docker_bin, "cp", str(staged_dir / "run_status.json"),
-                    args.container + ":" + args.output_dir + "/run_status.json"],
-                   check=True, timeout=60)
+    if not getattr(args, "batch_child", False):
+        subprocess.run([args.docker_bin, "cp", str(staged_dir / "run_status.json"),
+                        args.container + ":" + args.output_dir + "/run_status.json"],
+                       check=True, timeout=60)
 
 
 def archive_codex_run(args):
@@ -214,13 +222,16 @@ def archive_codex_run(args):
     frames = "all" if args.archive_frames == "auto" else args.archive_frames
     program = (
         "import sys; from havln_agent.export import auto_archive; "
-        "path = auto_archive(sys.argv[1], frames=sys.argv[2]); "
+        "path = auto_archive(sys.argv[1], "
+        "archive_dir=(sys.argv[3] if len(sys.argv)>3 else None), "
+        "frames=sys.argv[2]); "
         "assert path is not None, 'No diagnostic evidence to archive'; "
         "print('CODEX_ARCHIVE_PATH=' + str(path))"
     )
+    extra = ([args.archive_dir] if getattr(args, "archive_dir", None) else [])
     result = subprocess.run(
         [args.docker_bin, "exec", "-w", "/toolkit", args.container,
-         "python", "-c", program, args.output_dir, frames],
+         "python", "-c", program, args.output_dir, frames] + extra,
         check=True, capture_output=True, text=True, timeout=600)
     archive = next(
         (line.partition("=")[2] for line in result.stdout.splitlines()
@@ -245,6 +256,8 @@ def main():
     parser.add_argument("--reasoning-effort", default="medium",
                         choices=("low", "medium", "high", "xhigh"))
     parser.add_argument("--container", default="havln-cma")
+    parser.add_argument("--data-root", default="/data/havln2",
+                        help="Container-side HA-VLN dataset root")
     parser.add_argument("--docker-bin", default="docker")
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--output-dir", required=True,
@@ -252,6 +265,11 @@ def main():
     parser.add_argument("--archive-frames", choices=("auto", "critical", "all", "none"),
                         default="auto",
                         help="Same as API exporter: auto=all frames for one episode")
+    parser.add_argument("--archive-dir",
+                        help="Optional container archive directory; defaults to sibling diagnostic-archives")
+    parser.add_argument("--no-auto-archive", action="store_true",
+                        help="Keep run traces only; do not create diagnostic ZIP")
+    parser.add_argument("--batch-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--preflight", action="store_true",
                         help="Check Codex/Docker/Habitat without model inference or output files")
     args = parser.parse_args()
@@ -289,7 +307,9 @@ def main():
 
     try:
         # Read-only quota queries are best-effort and never gate model execution.
-        quota_before = read_rate_limits(args.codex_bin)
+        quota_before = (read_rate_limits(args.codex_bin)
+                        if not args.batch_child else
+                        {"status": "unavailable", "reason": "use batch-level quota snapshots"})
         with tempfile.TemporaryDirectory(prefix="havln-codex-session-") as workdir:
             with (staged_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
                  (staged_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
@@ -300,7 +320,9 @@ def main():
                     stderr.write("Failed to launch Codex: " + str(error) + "\n")
                     exit_code = 127
 
-        quota_after = read_rate_limits(args.codex_bin)
+        quota_after = (read_rate_limits(args.codex_bin)
+                       if not args.batch_child else
+                       {"status": "unavailable", "reason": "use batch-level quota snapshots"})
         tokens = summarize_token_usage(staged_dir / "codex_events.jsonl")
         # Interrupted or failed sessions may have consumed additional tokens
         # without a turn.completed usage receipt. Do not claim full coverage.
@@ -325,7 +347,10 @@ def main():
 
         trace_exists, summary, warning = collect_habitat_summary(args, trace)
         run_status = {
-            "codex_usage_file": "codex/codex_usage.json",
+            "codex_usage_file": (("traces/" + split + "-" + str(args.episode_id) +
+                                  "/codex/codex_usage.json")
+                                 if trace_exists or args.batch_child else
+                                 "codex/codex_usage.json"),
             "agent_path": "codex_mcp_v1",
             "codex_exit_code": exit_code,
             "wall_time_limit_seconds": args.timeout_seconds,
@@ -355,15 +380,17 @@ def main():
 
         # The single selected output directory is now the durable copy.
         shutil.rmtree(staging_root)
-        try:
-            archive = archive_codex_run(args)
-        except (OSError, subprocess.CalledProcessError,
-                subprocess.TimeoutExpired) as error:
-            print("Automatic diagnostic archive failed: " + str(error),
-                  file=sys.stderr)
-            print("Raw traces and Codex logs remain in " + args.output_dir,
-                  file=sys.stderr)
-            return 2
+        archive = None
+        if not args.no_auto_archive and not args.batch_child:
+            try:
+                archive = archive_codex_run(args)
+            except (OSError, subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired) as error:
+                print("Automatic diagnostic archive failed: " + str(error),
+                      file=sys.stderr)
+                print("Raw traces and Codex logs remain in " + args.output_dir,
+                      file=sys.stderr)
+                return 2
 
         if summary:
             print("Habitat episode:", summary["stop_reason"],
@@ -373,8 +400,11 @@ def main():
             print("Habitat episode has no finalized summary: " +
                   str(warning or "unknown"), file=sys.stderr)
         print("Output:", args.output_dir)
-        print("Diagnostic ZIP:", archive,
-              "(frames=" + args.archive_frames + ")")
+        if archive:
+            print("Diagnostic ZIP:", archive,
+                  "(frames=" + args.archive_frames + ")")
+        else:
+            print("Diagnostic ZIP: disabled (raw traces retained)")
         print("Codex exit code:", exit_code)
         print("Codex token usage:", tokens["status"],
               "| input:", tokens["input_tokens"],
