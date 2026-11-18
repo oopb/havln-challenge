@@ -123,8 +123,14 @@ class CodexEpisode:
 
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
-        raw, _, environment_done, info = self.env.step(action)
+        try:
+            raw, _, environment_done, info = self.env.step(action)
+        except Exception as error:
+            # An uncertain side effect cannot safely be retried or replayed.
+            self.done, self.end_reason = True, "habitat_action_exception"
+            raise RuntimeError("Habitat action failed; execution stopped") from error
         if isinstance(info, dict) and info.get("error"):
+            self.done, self.end_reason = True, "habitat_action_rejected"
             raise RuntimeError("Habitat rejected action: " + str(action))
         if action == "LOOK_UP":
             self.pitch_deg += self.camera.tilt_angle
