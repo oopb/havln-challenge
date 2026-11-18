@@ -310,12 +310,23 @@ function renderDetail(detail) {
   const media = row.replay?.current_media || [];
   const gallery = $('mediaGallery');
   media.forEach((ref, i) => gallery.append(mediaCard(ref,i)));
+  // Codex only receives RGB on completed observe(), optionally Depth.
+  if (ev.kind === 'codex' && ev.linked_tool === 'observe' &&
+      ev.event_type === 'item.completed' && ev.observation_id) {
+    gallery.append(mediaCard({kind:'observation',
+      observation_id:ev.observation_id, sensor:'rgb'}, 0));
+    if (ev.depth_sent === true)
+      gallery.append(mediaCard({kind:'observation',
+        observation_id:ev.observation_id, sensor:'depth'}, 1));
+  }
   $('mediaNote').textContent = ev.kind === 'api' ?
     (row.replay ? media.length + ' 张当前图片，历史图片见输入' :
     '历史日志未记录完整发送图片') :
     ev.kind === 'codex' ?
       (ev.linked_tool === 'observe' && ev.observation_id ?
-        '对应本次 observe() 真正返回给 Codex 的 RGB；Depth 仅供离线分析，并未发送给 Codex' :
+        (ev.depth_sent === true ?
+         '本次 observe() 实际向 Codex 返回 RGB + Depth 两张图片' :
+         '本次 observe() 只向 Codex 返回 RGB；右侧 Depth 为离线分析画面') :
        ev.linked_tool === 'step' && ev.observation_id ?
         '对应本次 step() 执行前/后的真实画面；step() 只返回执行回执，不向 Codex 发送图像' :
         '该 Codex 事件没有经过验证的图像关联，不展示猜测的画面') :
@@ -417,6 +428,7 @@ function renderDetail(detail) {
       } else if (state.tab === 'output') {
         body.append(section('原子动作 / 执行后信息', {
           step:row.step, action:row.action, post_file:row.post_file,
+          motion_feedback:row.motion_feedback,
           pose_after:row.pose_after, safety:row.safety
         }, true));
       } else body.append(section('完整原子动作原始记录', row, true));

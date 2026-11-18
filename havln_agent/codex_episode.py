@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 from .habitat_adapter import read_current_observation
-from .perception import adapt_observation
+from .perception import Geometry, adapt_observation, depth_image_url
 from .replay_capture import ReplayRecorder
 from .submission_contract import ACTIONS, atomic_json, check_rows
 
@@ -111,6 +111,12 @@ class CodexEpisode:
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
+        # A conservative near-center Depth obstacle is only a reason to
+        # show Codex the Depth image, never a permission check for movement.
+        obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
+        depth_data = None
+        if obstacle["confirmed"]:
+            depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
         info = {
             "episode_id": self.episode_id,
             "instruction": self.instruction,
@@ -119,12 +125,16 @@ class CodexEpisode:
             "remaining_actions": self.remaining,
             "done": self.done,
             "reason": self.end_reason,
+            "depth_sent": depth_data is not None,
         }
+        if depth_data is not None:
+            info["front_obstacle_m"] = obstacle["nearest_along_m"]
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
-        return info, base64.b64encode(buffer.getvalue()).decode("ascii")
+        return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
 
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
+        before_rgb = self.current.rgb if action == "MOVE_FORWARD" else None
         try:
             raw, _, environment_done, info = self.env.step(action)
         except Exception as error:
@@ -142,6 +152,10 @@ class CodexEpisode:
         observation.pitch_deg = self.pitch_deg
         self.current = observation
         self.current_id = self._save(observation)
+        # Only exact pixel identity is a stall: no motion estimation, geometry
+        # veto or image-difference threshold. Dynamic scene changes may evade
+        # detection; never infer actual displacement from a changed RGB image.
+        stalled = before_rgb is not None and np.array_equal(before_rgb, observation.rgb)
         index = len(self.actions)
         self.actions.append(action)
         row = {
@@ -150,6 +164,8 @@ class CodexEpisode:
             "input_file": "observations/" + before + ".npz",
             "post_file": "observations/" + self.current_id + ".npz",
         }
+        if stalled:
+            row["motion_feedback"] = "rgb_unchanged"
         self._append("steps.jsonl", row)
         self.replay.action(row)
         if action == "STOP":
@@ -159,6 +175,7 @@ class CodexEpisode:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
+        return stalled
 
     def step(self, requested):
         ident = self._start_tool("step")
@@ -181,18 +198,27 @@ class CodexEpisode:
                         len(requested) == self.remaining and requested[-1] == "STOP"):
                     raise ValueError("batch exceeds remaining action budget; reserve final STOP")
                 executed = []
+                stalled = False
                 for action in requested:
                     if self.done:
                         break
-                    self._atomic(action, ident, "codex")
+                    unchanged = self._atomic(action, ident, "codex")
                     executed.append(action)
+                    if unchanged:
+                        stalled = True
+                        break  # The remaining actions, including STOP, are not executed.
+                requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
                     self._atomic("STOP", ident, "budget_guard")
                     executed.append("STOP")
                 result = self.status()
-                result.update(status="DONE" if self.done else "RUNNING",
+                result.update(status=("DONE" if self.done else
+                                      "NO_VISUAL_PROGRESS" if stalled else "RUNNING"),
                               executed=executed, requested=requested)
+                if stalled:
+                    result["skipped_count"] = len(requested) - requested_executed
+                    result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
         except (ValueError, RuntimeError) as error:
             result = self.status()
             result.update(status="TOOL_ERROR", error=str(error))

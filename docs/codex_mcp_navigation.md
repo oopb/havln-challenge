@@ -13,10 +13,19 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
 - Controller: havln_agent/codex_episode.py owns public RGB-D captures,
   legal six-action stepping, budgets, replay receipts and STOP/export checks.
 - MCP: havln_agent/codex_mcp.py exposes ONLY observe() and step(actions).
-  observe returns the instruction, fresh RGB PNG as an MCP image, and budget.
+  observe returns the instruction, fresh RGB and budget; it adds Depth
+  **only** when conservative public-Depth evidence finds a near obstacle
+  directly ahead. No obstacle => only one RGB image.
   step executes an ordered list of allowed atomic actions and returns receipts.
-- The agent sees **RGB only**. Depth is saved for replay but not supplied
-  to Codex. No ground-truth pose, reference route or goal coordinates exposed.
+  If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
+  and the remaining requested batch actions are skipped; only executed actions
+  consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
+  remains active. No Depth is sent merely because a stall occurred, and step()
+  never sends an image.
+- This is not a geometry authorization gate or motion odometry: a changed
+  RGB does not certify actual displacement; the obstacle heuristic only
+  selects whether Depth is shown. No hidden pose, reference trajectory, goal
+  coordinates or extra models are exposed.
 
 The existing cloud/hybrid scheduler, model API clients and config YAML
 are untouched. The CLI model selection is independent of .env API settings.

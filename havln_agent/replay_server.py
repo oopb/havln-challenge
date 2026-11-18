@@ -258,6 +258,8 @@ class EpisodeReplay:
                 if isinstance(observation_id, str) and re.fullmatch(
                         r'obs_[0-9]+', observation_id):
                     linked['observation_id'] = observation_id
+                    # Only recorded when observe actually provided Depth.
+                    linked['depth_sent'] = result.get('depth_sent') is True
             else:
                 actions = steps_by_call.get(call_id) or []
                 if actions:
@@ -357,7 +359,7 @@ class EpisodeReplay:
                         if (linked['linked_tool'] == 'observe' and
                                 row.get('type') != 'item.completed'):
                             linked = {k: v for k, v in linked.items()
-                                      if k != 'observation_id'}
+                                      if k not in ('observation_id', 'depth_sent')}
                         # step() returns receipts, not a new image.
                         if (linked['linked_tool'] == 'step' and
                                 row.get('type') != 'item.completed'):

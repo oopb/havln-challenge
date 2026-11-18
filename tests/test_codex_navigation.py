@@ -67,13 +67,81 @@ class CodexEpisodeTests(unittest.TestCase):
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
-            info, encoded = self.controller.observe()
+            info, encoded, depth = self.controller.observe()
         self.assertEqual(info["instruction"], "Go down the stairs.")
         self.assertEqual(base64.b64decode(encoded)[:8],
                          bytes([137, 80, 78, 71, 13, 10, 26, 10]))
         self.assertEqual(self.env.actions, [])
+        self.assertIsNone(depth)
+        self.assertFalse(info["depth_sent"])
         self.assertTrue((self.controller.directory /
                          ("observations/" + info["observation_id"] + ".npz")).exists())
+
+    def test_front_obstacle_alone_triggers_optional_depth_image(self):
+        # No motion gate: only the contents of observe() change.
+        base = self.env.image()
+        base["depth"] = np.full((12, 16), 0.2, dtype=np.float32)
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   return_value=adapt_observation(base, camera())):
+            info, rgb, depth = self.controller.observe()
+        self.assertTrue(info["depth_sent"])
+        self.assertLess(info["front_obstacle_m"], camera().forward_step + camera().robot_radius)
+        self.assertEqual(base64.b64decode(rgb)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
+        self.assertEqual(base64.b64decode(depth)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
+        self.assertEqual(self.env.actions, [])
+
+        # MCP image order is RGB first, Depth second, only for this trigger.
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   return_value=adapt_observation(base, camera())):
+            result = MCPServer(self.controller)._dispatch("tools/call", {
+                "name": "observe", "arguments": {}})
+        self.assertEqual([part["type"] for part in result["content"]],
+                         ["text", "image", "image"])
+        self.assertTrue(json.loads(result["content"][0]["text"])["depth_sent"])
+        self.assertNotEqual(result["content"][1]["data"], result["content"][2]["data"])
+
+    def test_exact_unchanged_rgb_interrupts_only_remaining_batch_actions(self):
+        before = self.env.image()
+        def stationary_step(action):
+            self.env.actions.append(action)
+            return before, 0., action == "STOP", {}
+        with patch.object(self.env, "step", side_effect=stationary_step):
+            result = self.controller.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(result["status"], "NO_VISUAL_PROGRESS")
+        self.assertEqual(result["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(result["skipped_count"], 2)
+        self.assertFalse(result["done"])
+        self.assertEqual(self.env.actions, ["MOVE_FORWARD"])
+        log = [json.loads(line) for line in
+               (self.controller.directory / "steps.jsonl").read_text().splitlines()]
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log[0]["motion_feedback"], "rgb_unchanged")
+        receipt = json.loads((self.controller.directory / "tools.jsonl")
+                             .read_text().splitlines()[-1])
+        self.assertEqual(receipt["result"]["skipped_count"], 2)
+        self.assertEqual(receipt["result"]["status"], "NO_VISUAL_PROGRESS")
+
+        # Do not create a movement authorization lock after a stall.
+        # Turning is allowed even when the RGB is unchanged.
+        with patch.object(self.env, "step", side_effect=stationary_step):
+            turning = self.controller.step(["TURN_LEFT"])
+        self.assertEqual(turning["status"], "RUNNING")
+        self.assertEqual(turning["executed"], ["TURN_LEFT"])
+
+    def test_stall_with_reserved_stop_does_not_miscount_skipped_actions(self):
+        before = self.env.image()
+        def stationary_step(action):
+            self.env.actions.append(action)
+            return before, 0., action == "STOP", {}
+        with patch.object(self.env, "step", side_effect=stationary_step):
+            self.controller.step(["TURN_LEFT", "TURN_RIGHT"])
+            # One MOVE_FORWARD uses the last non-STOP action; reserved STOP
+            # is still appended by the pre-existing budget guard.
+            result = self.controller.step(["MOVE_FORWARD"])
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(result["executed"], ["MOVE_FORWARD", "STOP"])
+        self.assertEqual(result["skipped_count"], 0)
+        self.assertEqual(self.env.actions[-2:], ["MOVE_FORWARD", "STOP"])
 
     def test_ordered_batch_and_reserved_stop_produce_legal_export(self):
         first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
@@ -176,7 +244,7 @@ class CodexEpisodeTests(unittest.TestCase):
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
-            received, _ = self.controller.observe()
+            received, _, _ = self.controller.observe()
         self.controller.step(["TURN_LEFT", "STOP"])
         folder = self.controller.directory / "codex"
         folder.mkdir()
@@ -357,7 +425,7 @@ class CodexEpisodeTests(unittest.TestCase):
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
-            info, _ = agent.observe()
+            info, _, _ = agent.observe()
         agent.step(["TURN_LEFT"] * 20)
         agent.finish()
         archive = root / "diagnostic.zip"
