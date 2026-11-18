@@ -315,7 +315,8 @@ class CodexEpisodeTests(unittest.TestCase):
                 archive,
                 "/workspace/agent-runs/diagnostic-archives/codex-one-20261118T123456Z-diagnostic.zip")
             cmd = run.call_args.args[0]
-            self.assertIn("from havln_agent.export import auto_archive", cmd)
+            self.assertIn("from havln_agent.export import auto_archive",
+                          cmd[cmd.index("-c") + 1])
             self.assertEqual(cmd[-2:], [args.output_dir, "critical"])
             args.archive_frames = "auto"
             archive_codex_run(args)
