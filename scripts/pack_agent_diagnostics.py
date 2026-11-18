@@ -90,7 +90,8 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
     # Startup failures may occur before Habitat creates traces/. In this
     # case the standalone Codex audit lives at output-dir/codex/.
     codex_names=('prompt.txt', 'command.json', 'codex_events.jsonl',
-                 'codex_stderr.log', 'final_message.txt', 'run_status.json')
+                 'codex_stderr.log', 'final_message.txt', 'run_status.json',
+                  'codex_usage.json')
     for name in codex_names:
         file = root / 'codex' / name
         if file.is_file():
