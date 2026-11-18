@@ -9,6 +9,7 @@ on:
       - "tests/test_api_parameter_compat.py"
       - "tests/test_local_model_protocol.py"
       - "tests/test_hybrid_routing.py"
+      - "tests/test_hybrid6_handoff_lifecycle.py"
       - "configs/agent.env.example"
       - "docs/hybrid_model_routing.md"
       - "tests/test_navigation_structured_protocol.py"
@@ -87,10 +88,12 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_api_parameter_compat.py' -v
       - name: Verify hybrid router, source-linked frames, tool-free actions and separated budgets
         run: python -m unittest discover -s tests -p 'test_hybrid_routing.py' -v
-      - name: Verify local model native schema negotiation and safe normalization
-        run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
+      - name: Verify Hybrid-6 finite handoff and travel direction continuity
+        run: python -m unittest discover -s tests -p 'test_hybrid6_handoff_lifecycle.py' -v
       - name: Verify per-tool navigation JSON union and typed staged fallback
         run: python -m unittest discover -s tests -p 'test_navigation_structured_protocol.py' -v
+      - name: Verify local model native schema negotiation and safe normalization
+        run: python -m unittest discover -s tests -p 'test_local_model_protocol.py' -v
       - name: Verify bounded scheduler format recovery and evidence liveness
         run: python -m unittest discover -s tests -p 'test_scheduler_liveness.py' -v
       - name: Verify whole-instruction navigation, evidence Memory and RGB-D observation contracts

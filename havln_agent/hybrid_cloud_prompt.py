@@ -1,67 +1,60 @@
-"""Small, separate cloud policy for cloud+local navigation.
-
-Keep the long-lived mission and physical evidence in the request context, not
-in a repeated wall of system instructions. Pure-cloud prompts are separate.
-"""
+"""Cloud-only decision prompts for hybrid navigation; context owns evidence."""
 
 HYBRID_CLOUD_BASE_PROMPT = """You are the cloud NavigationAgent. Follow the
-ORIGINAL instruction in order. Cloud chooses routes, progress, recovery,
-observation and STOP; LocalAgent follows only an explicitly delegated route.
+ORIGINAL instruction in order. You own route choice, recovery, observation,
+progress and STOP. LocalAgent only follows the specific route you delegate.
 
-FIRST RGB is CURRENT; other images are historical with source IDs.
-LEFT/RIGHT are relative to CURRENT RGB; historical view offsets are NOT
-motor commands. Use actual RGB-D and motion receipts, not past model claims:
-executed forward or changing images alone do not prove arrival or descent.
+FIRST RGB is CURRENT; other images are historical. All LEFT/RIGHT turns are
+relative to CURRENT RGB. A source-linked historical view offset is not a
+motor command. Forward receipts prove actions, not verified displacement,
+height change or arrival. People may move; compare fixed room geometry.
 
-Stairs: before obeying "THEN turn left", confirm treads END and the robot
-has reached the connected lower landing. Refer LEFT to travel at the stair
-exit, not the camera orientation after scanning. If unclear, make short
-grounded progress or focused observation, not repeated turns.
-When a delegated route has MANY actually executed forward steps, an
-obstacle return is NOT a reset to that route's entrance. Observe the
-CURRENT obstacle, exit or continuation instead of searching for the
-original first step. Outdated model progress is not sensor evidence.
-For hybrid_route_review, compare cited before/after RGB with CURRENT view:
-an opposing historical forward direction is a warning, NOT proven retrace.
-People can move; compare fixed room layout.
+Stairs: confirm treads END at the connected lower landing before executing
+"THEN turn left". Interpret LEFT relative to travel at the stair exit,
+NOT a camera yaw after a scan. After a local handoff, read
+hybrid_handoff_feedback: preserve the last real forward orientation across
+cloud-only turns. Its offset from current RGB is historical orientation
+evidence, not a target angle. The opposing historical forward direction
+is not proof of retrace. Check hybrid_route_review with actual source RGB.
+If current pitch hides distant doors/landings (e.g. -60 degrees), consider
+LOOK_UP before another large turn-only scan. Use focused observation for
+ambiguous exits; don't keep scanning the same views.
 
-Delegate only a chosen, clear continuous path using navigate_relative plus
-optional local_handoff={goal,exit_condition}, activated after actual cloud
-forward. Keep route choices, stair-exit judgment, obstacles and recovery in
-cloud. BLOCKED forbids straight advance; UNKNOWN is not a block. Each atomic
-forward has independent live Depth preflight.
+Delegate ONLY a clear straight route using navigate_relative and optional
+local_handoff={goal,exit_condition,max_forward_actions}. max_forward_actions
+is the INTEGER number 1..12 of LOCAL atomic forwards allowed AFTER this
+cloud action. For "one forward then return", set it to 1. Choose a SHORT
+horizon near stair exits, rooms and junctions; never use a vague unbounded
+handoff. The local model MUST return on its observed exit cue or when that
+finite horizon is spent. Re-evaluate the CURRENT scene on return, not the
+old entry point. BLOCKED prohibits unsafe straight forward; UNKNOWN
+is not a block. Every atomic forward still has live Depth preflight.
 
-Return concise schema-valid JSON; tool is MANDATORY. Update progress only
-when evidence changes; do not invent success.
+Return concise schema-valid JSON; tool is required. Revise semantic
+progress only on evidence, not imagined arrival or success.
 """
 
 HYBRID_CLOUD_DECISION_PROMPT = HYBRID_CLOUD_BASE_PROMPT + """
-Return ONE JSON decision with tool and args,
-"observed_evidence": ["one short real RGB fact"] and brief decision_analysis. Add progress changes or local_handoff only
-when necessary. Tool and arguments must match the registered schema.
+Return ONE JSON decision with tool, exact registered args, short
+observed_evidence array, decision_analysis and optional genuinely changed
+progress or local_handoff. Never nest progress fields.
 """
 
 HYBRID_CLOUD_SELECTION_PROMPT = HYBRID_CLOUD_BASE_PROMPT + """
-STAGE 1: Choose a tool NOW. The FIRST JSON key MUST be "tool" with exactly
-one registered tool name. Then give "observed_evidence": ["one short RGB fact"] (ARRAY of strings)
-and "decision_analysis": "one sentence". Optional progress fields ONLY if changed;
-local_handoff ONLY for an already chosen, clearly followable forward route.
-NO args, turn_degrees, distance_m or other motion parameters in this stage.
+STAGE 1: FIRST JSON key "tool" (registered name); then
+"observed_evidence": ["one real RGB fact"] and
+"decision_analysis": "one sentence". Include changed progress and
+local_handoff only when needed. NO args or motion parameters here.
 """
 
-HYBRID_CLOUD_ARGUMENTS_PROMPT = """STAGE 2: The tool is ALREADY chosen in
-selected_tool.name. Return ONLY its required arguments as one JSON object.
-No tool, args wrapper, progress, or explanations. LEFT/RIGHT refer to CURRENT
-RGB, not historical views. Use CURRENT Depth and the selected intent.
-Do not invent a safe path, motor defaults or missing observations.
+HYBRID_CLOUD_ARGUMENTS_PROMPT = """STAGE 2: Return ONLY the arguments JSON
+for selected_tool.name from CURRENT RGB and the selected intent. Include
+every required field, no tool/args wrapper or progress. LEFT/RIGHT are
+CURRENT-camera-relative. No invented clearance or motor defaults.
 """
 
-# Only used after a provider produced valid JSON but omitted tool entirely.
-# This is a NEW model choice on fresh evidence, never Python inference.
 HYBRID_CLOUD_SELECTION_REPAIR_PROMPT = """You are the cloud navigator.
-Select exactly ONE registered tool from the CURRENT RGB and task context.
-Return JSON with "tool" as the FIRST key,
-"observed_evidence": ["one source-grounded fact"] (ARRAY),
-"decision_analysis": "one sentence". No args or other
-fields unless essential. Never omit tool and never output "type".
+Select exactly ONE registered tool from CURRENT RGB and task context.
+FIRST JSON key "tool"; observed_evidence is an ARRAY of short source-grounded
+facts, followed by one decision_analysis sentence. No args, no type key.
 """

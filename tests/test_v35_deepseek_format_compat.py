@@ -108,7 +108,8 @@ class DeepSeekFormatCompatibility(unittest.TestCase):
                 uncertainties=['Remaining stair treads unclear.']),
             local_handoff=dict(
                 goal='Continue down the same unbranched stairs.',
-                exit_condition='The bottom landing is reached.'))
+                exit_condition='The bottom landing is reached.',
+                max_forward_actions=4))
         selection = navigation_choice_schema(TOOLS, allow_local_handoff=True)
         c = self.client(json.dumps(original))
         result = c.complete(

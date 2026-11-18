@@ -52,7 +52,8 @@ def record(identifier, image, index, heading=0., stance=None):
 def cloud_decision():
     return dict(tool='navigate_relative', local_handoff=dict(
         goal='Continue along the same corridor',
-        exit_condition='The corridor ends or forks'))
+        exit_condition='The corridor ends or forks',
+        max_forward_actions=4))
 
 
 def completed_move():

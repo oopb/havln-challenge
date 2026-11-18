@@ -3,26 +3,30 @@ from .api_client import APIError
 from .local_frame_selector import select_local_frames
 
 LOCAL_FOLLOW_PROMPT = (
-    'Follow ONLY the cloud-selected local_goal, never replan or STOP. '
-    'Last RGB and Depth are CURRENT; older frames show history, not clearance. '
-    'LEFT/RIGHT are relative to current RGB. '
-    'BLOCKED: no FORWARD; ESCALATE count=0 signal=BLOCKED unless an obvious '
-    'same-route small turn is safe. UNKNOWN is not BLOCKED. '
-    'On a clear straight passage choose FORWARD count=2 or 3; near stairs, '
-    'corners, people or uncertainty choose count=1. Minor LEFT/RIGHT corrections '
-    'on the same route are allowed. At a branch, route conflict or stair exit '
-    'needing judgment, ESCALATE count=0 with non-NORMAL signal. '
-    'Return only JSON {action,count,signal,evidence_id}.'
+    'Follow ONLY the cloud local_goal, within remaining_forward_actions. '
+    'Never replan or STOP. CURRENT last RGB and Depth; history is not clearance. '
+    'EXIT FIRST: if exit_condition appears reached, ESCALATE count=0 '
+    'signal=GOAL_CUE; if uncertain whether the endpoint was reached, '
+    'ESCALATE count=0 signal=UNCERTAIN. Do NOT keep walking to get BLOCKED. '
+    'LEFT/RIGHT are relative to CURRENT RGB. '
+    'BLOCKED: no FORWARD; ESCALATE count=0 signal=BLOCKED. UNKNOWN is not BLOCKED. '
+    'On clear straight path choose FORWARD count=2 or 3 ONLY if within '
+    'remaining_forward_actions; near stairs, corners, people or endpoint count=1. '
+    'At branch, route conflict or stair exit needing judgment, ESCALATE count=0 '
+    'with NEW_BRANCH/CONFLICT/GOAL_CUE. Small same-route turns are allowed. '
+    'Return JSON {action,count,signal,evidence_id}.'
 )
 LOCAL_LOOK_PROMPT = (
-    'Continue the cloud-selected local_goal. Use CURRENT last RGB and Depth; '
-    'LEFT/RIGHT refer to current view. Make only a small same-route turn or '
-    'LOOK; do not repeat uninformative rotations. '
-    'BLOCKED means no FORWARD. Use FORWARD count=2/3 only on an obvious '
-    'clear straight path; count=1 near hazards. '
-    'For branch choices, stair-bottom verification or unclear route, '
-    'ESCALATE count=0 with non-NORMAL signal. Never replan or STOP. '
-    'Return only JSON {action,count,signal,evidence_id}.'
+    'Continue ONLY cloud local_goal within remaining_forward_actions. '
+    'CURRENT last RGB and Depth. EXIT FIRST: if endpoint cue is visible '
+    'ESCALATE count=0 signal=GOAL_CUE; if unclear ESCALATE count=0 UNCERTAIN. '
+    'LEFT/RIGHT relative CURRENT RGB. Look or make a small same-route turn '
+    'only if informative; never spin repeatedly. '
+    'BLOCKED means no FORWARD. Choose FORWARD count=2 or 3 only on an '
+    'obvious straight path within remaining_forward_actions; count=1 near '
+    'hazards or endpoint. A branch, stair-bottom decision or unclear route '
+    'belongs to cloud: ESCALATE count=0 with non-NORMAL signal. '
+    'Never replan or STOP. Return JSON {action,count,signal,evidence_id}.'
 )
 
 LOCAL_ACTION_SCHEMA = dict(
@@ -83,6 +87,8 @@ class LocalAgent:
             mode=router.state,
             local_goal=router.route['goal'],
             exit_condition=router.route['exit_condition'],
+            remaining_forward_actions=router.remaining_forward_actions(),
+            executed_forward_actions=router.local_forward_actions,
             route_id=router.route['route_id'],
             current_observation_id=current['observation_id'],
             front_depth_status=preflight.get('status', 'UNKNOWN'),
