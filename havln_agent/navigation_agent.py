@@ -255,8 +255,10 @@ class NavigationAgent:
                             else MISSION_ARGUMENTS_PROMPT)
         protocol=compact_navigation_protocol(tools)
         if handoff_enabled:
-            protocol += (' Optional local_handoff={goal:string,exit_condition:string}'
-                         ' ONLY for a clear cloud-selected followable route.')
+            protocol += (' Optional local_handoff={goal:string,exit_condition:string,'
+                         'max_forward_actions:integer(1..12)} only when cloud '
+                         'delegates a clear followable route. The limit counts '
+                         'LOCAL forwards after the cloud tool completes.')
         generation=navigation_generation_schema(
             tools, allow_local_handoff=handoff_enabled)
         def staged_decision(reason):
