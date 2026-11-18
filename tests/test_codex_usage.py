@@ -6,7 +6,7 @@ import unittest
 from zipfile import ZipFile
 
 from havln_agent.codex_usage import (
-    compare_rate_limits, read_rate_limits, summarize_token_usage)
+    compare_rate_limits, format_quota_summary, read_rate_limits, summarize_token_usage)
 from scripts.pack_agent_diagnostics import pack
 
 
@@ -50,6 +50,29 @@ class CodexUsageTests(unittest.TestCase):
             self.assertIsNone(usage["cached_input_tokens"])
             self.assertEqual(usage["total_tokens"], 14)
             self.assertEqual(usage["status"], "complete")
+
+    def test_final_quota_summary_shows_real_remaining_and_unknown(self):
+        before = {"status": "ok", "limits": {"codex": {
+            "secondary": {"used_percent": 21, "remaining_percent": 79,
+                          "window_duration_minutes": 10080,
+                          "resets_at": 1900000000}}}}
+        after = {"status": "ok", "limits": {"codex": {
+            "secondary": {"used_percent": 25, "remaining_percent": 75,
+                          "window_duration_minutes": 10080,
+                          "resets_at": 1900000000}}}}
+        quota = {"before": before, "after": after,
+                 "delta": compare_rate_limits(before, after)}
+        lines = format_quota_summary(quota)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("weekly", lines[0])
+        self.assertIn("remaining: 75%", lines[0])
+        self.assertIn("4 pp", lines[0])
+        self.assertIn("unavailable", format_quota_summary({
+            "after": {"status": "unavailable", "reason": "offline"}})[0])
+        # Reset windows must not be attributed as zero quota consumption.
+        after["limits"]["codex"]["secondary"]["resets_at"] += 86400
+        quota["delta"] = compare_rate_limits(before, after)
+        self.assertIn("not comparable", format_quota_summary(quota)[0])
 
     def test_quota_deltas_are_percentage_points_and_fail_closed_on_reset(self):
         before = {"status": "ok", "limits": {"codex": {
