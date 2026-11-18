@@ -115,7 +115,15 @@ function filterItems() {
   if (state.filtered.length) {
     let position = state.filtered.indexOf(state.selected);
     if (position < 0) {
-      position = state.filtered.findIndex(i => i >= state.selected);
+      // For a Codex-only run, open the first verifiably linked observe()
+      // image rather than an ungrounded thread.started event with no frame.
+      if (mode === 'codex' && state.selected < 0)
+        position = state.filtered.findIndex(i =>
+          events[i].linked_tool === 'observe' &&
+          events[i].event_type === 'item.completed' &&
+          !!events[i].observation_id);
+      if (position < 0)
+        position = state.filtered.findIndex(i => i >= state.selected);
       if (position < 0) position = state.filtered.length-1;
     }
     selectIndex(state.filtered[position]);
@@ -166,9 +174,9 @@ async function selectIndex(index) {
   });
   const active = document.querySelector('.timeline-entry.selected');
   if (active) active.scrollIntoView({block:'nearest'});
-  // Codex CLI events form a separate stream, without a trustworthy
-  // per-event RGB alignment. Never display an unrelated prior frame.
-  let frame = ev.kind === 'codex' ? null : ev.observation_id;
+  // Codex images are shown ONLY if the server verified the actual
+  // tool call against Habitat's ordered tools.jsonl receipts.
+  let frame = ev.observation_id || null;
   if (!frame && ev.kind !== 'codex') {
     for (let i=index-1; i>=0; i--) {
       if (state.data.events[i].observation_id) {
@@ -180,7 +188,7 @@ async function selectIndex(index) {
   $('afterSource').textContent = ev.after_id || '';
   setImage($('rgbImg'), $('rgbMissing'), frameUrl(frame), '当前真实 RGB ' + frame);
   setImage($('depthImg'), $('depthMissing'), frameUrl(frame,'depth'), '当前 Depth ' + frame);
-  setImage($('afterImg'), $('afterMissing'), frameUrl(ev.kind === 'action' ? ev.after_id : null),
+  setImage($('afterImg'), $('afterMissing'), frameUrl(ev.after_id || null),
     '动作执行后的 RGB');
   $('mediaGallery').replaceChildren();
   $('mediaNote').textContent = '';
@@ -303,20 +311,28 @@ function renderDetail(detail) {
   $('mediaNote').textContent = ev.kind === 'api' ?
     (row.replay ? media.length + ' 张当前图片，历史图片见输入' :
     '历史日志未记录完整发送图片') :
-    ev.kind === 'codex' ? 'Codex 事件与 Habitat 画面未逐项对齐；请切换动作或工具查看真实帧' :
+    ev.kind === 'codex' ?
+      (ev.linked_tool === 'observe' && ev.observation_id ?
+        '对应本次 observe() 真正返回给 Codex 的 RGB；Depth 仅供离线分析，并未发送给 Codex' :
+       ev.linked_tool === 'step' && ev.observation_id ?
+        '对应本次 step() 执行前/后的真实画面；step() 只返回执行回执，不向 Codex 发送图像' :
+        '该 Codex 事件没有经过验证的图像关联，不展示猜测的画面') :
     '仅 API 请求会显示实际模型图片';
   const output = $('executionSummary');
   if (ev.kind === 'codex') {
     output.textContent = 'Codex CLI · ' + (row.type || 'event') +
       '（独立会话事件，不代表导航成功）';
-    $('poseStrip').textContent = 'Codex 独立日志 · 与 Habitat 原子动作未逐项对齐';
+    $('poseStrip').textContent = ev.linked_tool ?
+      'Codex ' + ev.linked_tool + ' · 核验工具回执 ' + (ev.tool_call_id || '') +
+      (ev.observation_id ? ' · Frame ' + ev.observation_id : '') :
+      'Codex 独立日志 · 该事件无可核验的帧关联';
     if (state.tab === 'input') {
-      if (state.data.codex_prompt) body.append(section('Codex 初始 Prompt', state.data.codex_prompt, true));
+      if (state.data.codex_prompt) body.append(section('Codex 会话初始用户指令（非独立 system 角色）', state.data.codex_prompt, false));
       body.append(section('本次 CLI 事件', {type: row.type, item: row.item || null}, true));
     } else if (state.tab === 'output') {
       body.append(section('Codex 模型 / 工具事件', row, true));
     } else {
-      body.append(section('codex_events.jsonl · 原始记录', row, true));
+      body.append(section('Codex 事件（图像二进制在网页中省略；完整记录见诊断 ZIP）', row, true));
     }
   } else if (ev.kind === 'api') {
     output.textContent = (row.success ? '模型请求成功' : '模型请求失败') +
