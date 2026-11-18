@@ -12,7 +12,7 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return the current RGB and navigation instruction; add a Depth image "
+            "Return the current RGB and short observation metadata; add a Depth image "
             "only if a near obstacle is detected directly ahead. No hidden map."
         ),
         "inputSchema": {"type": "object", "properties": {},

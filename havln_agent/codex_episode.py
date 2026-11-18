@@ -119,7 +119,6 @@ class CodexEpisode:
             depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
         info = {
             "episode_id": self.episode_id,
-            "instruction": self.instruction,
             "observation_id": self.current_id,
             "executed_actions": len(self.actions),
             "remaining_actions": self.remaining,

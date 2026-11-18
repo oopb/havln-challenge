@@ -342,9 +342,14 @@ function renderDetail(detail) {
     const item = row.item && typeof row.item === 'object' ? row.item : {};
     const isTool = item.type === 'mcp_tool_call';
     if (state.tab === 'input') {
-      if (state.data.codex_prompt)
-        body.append(section('会话开始时的用户导航指令（非独立 system 消息）',
+      // The CLI event stream does not include per-turn system envelopes.
+      // Display the one-time configured prompt at session start only.
+      if (row.type === 'thread.started' && state.data.codex_prompt) {
+        const system = state.data.codex_run_status?.prompt_kind === 'model_instructions_file';
+        body.append(section(system ? '会话 System Instructions · 配置文件原文' :
+          '会话启动 Prompt · 原文（历史版本）',
           state.data.codex_prompt, false));
+      }
       if (isTool) {
         // A completed item includes both arguments and result. Only arguments
         // belong in Input; the result must never leak into this tab.

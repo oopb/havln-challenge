@@ -248,3 +248,31 @@ def compare_rate_limits(before, after):
     else:
         result["status"] = "not_comparable"
     return result
+
+
+def format_quota_summary(quota):
+    """Short terminal summary of real post-run account quota snapshots.
+
+    A limit is not a per-episode bill. Missing windows are unknown, not zero.
+    """
+    after = (quota or {}).get("after") or {}
+    if after.get("status") != "ok":
+        return ["Codex quota after run: unavailable (" +
+                str(after.get("reason") or "no account snapshot") + ")"]
+    delta = ((quota or {}).get("delta") or {}).get("by_limit") or {}
+    lines = []
+    for limit_id, windows in (after.get("limits") or {}).items():
+        for role, window in windows.items():
+            duration = window.get("window_duration_minutes")
+            span = ("5h" if duration == 300 else "weekly" if duration == 10080
+                    else str(duration) + "min")
+            before_after = ((delta.get(limit_id) or {}).get(role) or {})
+            change = (str(before_after.get("consumed_percentage_points")) + " pp"
+                      if before_after.get("status") == "comparable"
+                      else "not comparable")
+            lines.append(
+                "Codex quota after run: " + str(limit_id) + " " + span + " " + role +
+                " | remaining: " + str(window.get("remaining_percent")) + "%" +
+                " | used: " + str(window.get("used_percent")) + "%" +
+                " | window change: " + change)
+    return lines or ["Codex quota after run: unavailable (no quota windows)"]

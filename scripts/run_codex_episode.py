@@ -16,7 +16,7 @@ import tempfile
 
 # Executing this script by path does not always place the checkout root on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from havln_agent.codex_usage import (compare_rate_limits, read_rate_limits,
+from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, read_rate_limits,
                                      summarize_token_usage)
 
 
@@ -33,8 +33,32 @@ Do not rely on state from any previous episode. A STOP is not proof of success.
 If MOVE_FORWARD returns NO_VISUAL_PROGRESS, reconsider direction or observe.
 """
 
+START_PROMPT = "Begin navigation by calling havln.observe()."
 
-def build_command(args, final_message):
+
+def load_episode_instruction(args, split):
+    """Read only the public dataset instruction before launching Codex."""
+    program = (
+        "import gzip,json,sys;"
+        "p=sys.argv[1]+'/HA-R2R/'+sys.argv[2]+'/'+sys.argv[2]+'.json.gz';"
+        "rows=json.load(gzip.open(p,'rt',encoding='utf-8'))['episodes'];"
+        "matches=[e['instruction']['instruction_text'] for e in rows "
+        "if str(e['episode_id'])==sys.argv[3]];"
+        "assert len(matches)==1 and isinstance(matches[0],str) and matches[0].strip(),"
+        "'Expected one nonempty instruction';"
+        "print(json.dumps(matches[0],ensure_ascii=False))"
+    )
+    completed = subprocess.run(
+        [args.docker_bin, "exec", "-w", "/toolkit", args.container,
+         "python", "-c", program, args.data_root, split, str(args.episode_id)],
+        capture_output=True, text=True, check=True, timeout=90)
+    instruction = json.loads(completed.stdout)
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise ValueError("Dataset instruction is empty or malformed")
+    return instruction
+
+
+def build_command(args, final_message, system_prompt_file):
     split = args.split or ("test" if args.phase == "phase2" else "val_seen")
     server_args = [
         args.docker_bin, "exec", "-i", "-w", "/toolkit", args.container,
@@ -61,6 +85,8 @@ def build_command(args, final_message):
         'mcp_servers.havln.startup_timeout_sec=180',
         'mcp_servers.havln.tool_timeout_sec=180',
         'model_reasoning_effort=' + json.dumps(args.reasoning_effort),
+        # Actual system-level model instructions, not an ordinary user prompt.
+        'model_instructions_file=' + json.dumps(str(system_prompt_file)),
     ]
     command = [args.codex_bin]
     for override in overrides:
@@ -71,7 +97,7 @@ def build_command(args, final_message):
                     "--output-last-message", str(final_message)])
     if args.model:
         command.extend(["--model", args.model])
-    command.append(PROMPT)
+    command.append(START_PROMPT)
     return command
 
 
@@ -290,6 +316,12 @@ def main():
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         parser.error(str(error))
 
+    try:
+        instruction = load_episode_instruction(args, split)
+    except (OSError, ValueError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as error:
+        parser.error("Cannot read public episode instruction: " + str(error))
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     trace = args.output_dir.rstrip("/") + "/traces/" + split + "-" + str(args.episode_id)
     # Temporary host files are removed AFTER successful container collection.
@@ -297,8 +329,12 @@ def main():
     staging_root = Path(tempfile.mkdtemp(prefix="havln-codex-audit-"))
     staged_dir = staging_root / "codex"
     staged_dir.mkdir()
-    command = build_command(args, staged_dir / "final_message.txt")
-    (staged_dir / "prompt.txt").write_text(PROMPT, encoding="utf-8")
+    system_prompt = (PROMPT.rstrip() + "\n\nRoute instruction for this episode:\n" +
+                     instruction + "\n")
+    system_prompt_file = staged_dir / "prompt.txt"
+    system_prompt_file.write_text(system_prompt, encoding="utf-8")
+    command = build_command(args, staged_dir / "final_message.txt",
+                            system_prompt_file)
     (staged_dir / "command.json").write_text(
         json.dumps({"started_utc": stamp, "command": command,
                     "episode_id": args.episode_id, "phase": args.phase,
@@ -347,6 +383,7 @@ def main():
 
         trace_exists, summary, warning = collect_habitat_summary(args, trace)
         run_status = {
+            "prompt_kind": "model_instructions_file",
             "codex_usage_file": (("traces/" + split + "-" + str(args.episode_id) +
                                   "/codex/codex_usage.json")
                                  if trace_exists or args.batch_child else
@@ -381,6 +418,7 @@ def main():
         # The single selected output directory is now the durable copy.
         shutil.rmtree(staging_root)
         archive = None
+        archive_failed = False
         if not args.no_auto_archive and not args.batch_child:
             try:
                 archive = archive_codex_run(args)
@@ -390,7 +428,7 @@ def main():
                       file=sys.stderr)
                 print("Raw traces and Codex logs remain in " + args.output_dir,
                       file=sys.stderr)
-                return 2
+                archive_failed = True
 
         if summary:
             print("Habitat episode:", summary["stop_reason"],
@@ -411,20 +449,10 @@ def main():
               "| cached:", tokens["cached_input_tokens"],
               "| output:", tokens["output_tokens"],
               "| total:", tokens["total_tokens"])
-        delta = usage["quota"]["delta"]
-        for limit_id, windows in delta["by_limit"].items():
-            for role, window in windows.items():
-                span = window["window_duration_minutes"]
-                name = ("5h" if span == 300 else
-                        "weekly" if span == 10080 else
-                        str(span) + "min")
-                print("Codex quota:", limit_id, name, role,
-                      "| consumed:", (str(window["consumed_percentage_points"]) + " pp"
-                                      if window["status"] == "comparable"
-                                      else "not comparable"))
-        if not delta["by_limit"]:
-            print("Codex quota: unavailable (see codex_usage.json)")
-        return 0 if run_status["success"] else 2
+        if not args.batch_child:
+            for line in format_quota_summary(usage["quota"]):
+                print(line)
+        return 0 if run_status["success"] and not archive_failed else 2
     finally:
         # If an unexpected error occurs before collection, do not silently
         # delete the sole copy of the Codex model/tool transcript.

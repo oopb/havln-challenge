@@ -23,7 +23,7 @@ from scripts.run_codex_episode import (preflight, summarize_codex_events,
                                        run_codex_cli, require_fresh_container_output,
                                        collect_codex_audit, archive_codex_run)
 from havln_agent.perception import Camera, adapt_observation
-from scripts.run_codex_episode import build_command
+from scripts.run_codex_episode import (build_command, load_episode_instruction, PROMPT, START_PROMPT)
 
 
 def camera():
@@ -63,12 +63,15 @@ class CodexEpisodeTests(unittest.TestCase):
         self.controller = CodexEpisode(
             self.env, camera(), "1", "test", 4, self.tempdir.name)
 
-    def test_observe_returns_real_png_and_instruction(self):
+    def test_observe_returns_real_png_without_repeated_instruction(self):
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
             info, encoded, depth = self.controller.observe()
-        self.assertEqual(info["instruction"], "Go down the stairs.")
+        self.assertNotIn("instruction", info)
+        self.assertEqual(self.controller.instruction, "Go down the stairs.")
+        self.assertEqual(json.loads((self.controller.directory / "episode.json").read_text())["instruction"],
+                         "Go down the stairs.")
         self.assertEqual(base64.b64decode(encoded)[:8],
                          bytes([137, 80, 78, 71, 13, 10, 26, 10]))
         self.assertEqual(self.env.actions, [])
@@ -434,6 +437,22 @@ class CodexEpisodeTests(unittest.TestCase):
             self.assertIn("observed-run/traces/test-1/observations/" +
                           info["observation_id"] + ".npz", zipped.namelist())
 
+    def test_episode_instruction_is_loaded_from_dataset_once_before_codex(self):
+        args = SimpleNamespace(docker_bin="docker", container="havln-cma",
+                               data_root="/data/havln2", episode_id=103)
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(stdout='"Take the stairs left."')) as run:
+            instruction = load_episode_instruction(args, "test")
+        self.assertEqual(instruction, "Take the stairs left.")
+        command = run.call_args.args[0]
+        self.assertEqual(command[-3:], ["/data/havln2", "test", "103"])
+        self.assertIn("gzip", command[7])
+        self.assertIn("instruction_text", command[7])
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(stdout='""')):
+            with self.assertRaisesRegex(ValueError, "empty"):
+                load_episode_instruction(args, "test")
+
     def test_fresh_codex_command_uses_scoped_mcp_and_no_resume(self):
         args = SimpleNamespace(split=None, phase="phase2",
                                docker_bin="docker", container="havln-cma",
@@ -441,7 +460,12 @@ class CodexEpisodeTests(unittest.TestCase):
                                output_dir="/workspace/agent-runs/test-codex-1",
                                codex_bin="codex", reasoning_effort="medium",
                                model="gpt-6-astra")
-        cmd = build_command(args, Path("/tmp/last.txt"))
+        system_file = Path("/tmp/havln-codex-system-prompt.txt")
+        cmd = build_command(args, Path("/tmp/last.txt"), system_file)
+        self.assertIn('model_instructions_file="' + str(system_file) + '"', cmd)
+        self.assertEqual(cmd[-1], START_PROMPT)
+        self.assertNotIn("Go down the stairs.", cmd[-1])
+        self.assertIn("sole navigation agent", PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
