@@ -145,6 +145,7 @@ class EpisodeReplay:
         # Do not fabricate a cross-stream clock with Habitat action events.
         self.codex = source.lines(episode, 'codex/codex_events.jsonl')
         self.codex_run_status = source.json(episode, 'codex/run_status.json')
+        self.codex_usage = source.json(episode, 'codex/codex_usage.json')
         prompt = source.trace(episode, 'codex/prompt.txt')
         self.codex_prompt = (prompt.decode('utf-8', errors='replace')
                              if prompt is not None else None)
@@ -325,6 +326,7 @@ class EpisodeReplay:
                     codex_independent_timeline=bool(self.codex),
                     codex_prompt=self.codex_prompt,
                     codex_run_status=self.codex_run_status,
+                    codex_usage=self.codex_usage,
                     events=previews)
 
     def detail(self, index):

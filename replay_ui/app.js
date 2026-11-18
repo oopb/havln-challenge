@@ -444,6 +444,52 @@ async function calculateScorePreview() {
     $('calcResult').textContent = '计算失败：' + e.message;
   }
 }
+function renderCodexUsage(usage) {
+  const details = $('codexUsageDetails');
+  const summary = $('codexUsageSummary');
+  details.hidden = !usage || !usage.tokens;
+  summary.textContent = '';
+  $('codexUsageBreakdown').textContent = '';
+  if (!usage || !usage.tokens) return;
+  const tokens = usage.tokens;
+  const count = v => Number.isInteger(v) ? v.toLocaleString('zh-CN') : '未知';
+  const lines = [
+    'Token 统计状态：' + (tokens.status || 'unavailable'),
+    '输入：' + count(tokens.input_tokens),
+    '其中命中缓存：' + count(tokens.cached_input_tokens),
+    '未命中缓存输入：' + count(tokens.non_cached_input_tokens),
+    '输出（含推理）：' + count(tokens.output_tokens),
+    '其中推理：' + count(tokens.reasoning_output_tokens),
+    '总量（输入+输出）：' + count(tokens.total_tokens),
+    '完成的 Codex turns：' + count(tokens.turns_completed) +
+      '，失败：' + count(tokens.turns_failed) +
+      '，带用量记录：' + count(tokens.turns_with_usage),
+    '完成的 MCP 工具调用：' + count(tokens.mcp_tool_calls_completed),
+    '',
+    '订阅额度（只读账户级快照；不是 Token 账单）'
+  ];
+  const delta = usage.quota?.delta?.by_limit || {};
+  let windowCount = 0;
+  for (const [limit, windows] of Object.entries(delta)) {
+    for (const [role, w] of Object.entries(windows)) {
+      const duration = w.window_duration_minutes;
+      const label = duration === 300 ? '5 小时' :
+        duration === 10080 ? '每周' : duration + ' 分钟';
+      const change = w.status === 'comparable' ?
+        '+' + w.consumed_percentage_points + ' 个百分点' : '不可比较（额度窗口变化/重置）';
+      lines.push(limit + ' · ' + label + ' · ' + role + ': ' +
+        w.remaining_before_percent + '% → ' + w.remaining_after_percent +
+        '% 剩余；消耗 ' + change);
+      windowCount++;
+    }
+  }
+  if (!windowCount) lines.push('无法读取或比较额度快照；可检查 codex_usage.json 中的原因。');
+  lines.push('注意：额度变化可能包含同一账号在运行期间其他任务的消耗；额度与 Token 不做固定比例换算。');
+  $('codexUsageBreakdown').textContent = lines.join('\n');
+  summary.textContent = 'Codex ' + count(tokens.total_tokens) + ' tokens' +
+    (tokens.status === 'complete' ? '' : '（统计不完整）');
+}
+
 async function loadEpisode(id) {
   state.episode = id; state.selected = -1; state.detail = null;
   state.requestSeq++;
@@ -452,6 +498,7 @@ async function loadEpisode(id) {
     state.data = await json(pathFor(id,'timeline'));
     const meta = state.data.metadata || {}, sum = state.data.summary || {};
     renderScoring(state.data.scoring);
+    renderCodexUsage(state.data.codex_usage);
     $('instruction').textContent = meta.instruction || '该 episode 未记录任务文本';
     $('totalActions').textContent = '动作 '+state.data.counts.actions;
     $('totalApis').textContent = 'API '+state.data.counts.api;
