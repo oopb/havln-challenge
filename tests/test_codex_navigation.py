@@ -137,6 +137,8 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
+        self.assertIn("--ephemeral", cmd)
+        self.assertIn("--ignore-user-config", cmd)
         args_override = next(cmd[i + 1] for i, word in enumerate(cmd)
                              if word == "-c" and cmd[i + 1].startswith(
                                  "mcp_servers.havln.args="))
