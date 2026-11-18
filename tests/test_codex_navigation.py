@@ -90,6 +90,11 @@ class CodexEpisodeTests(unittest.TestCase):
                              .read_text().splitlines()), 4)
         self.assertTrue(json.loads((self.controller.directory /
                                     "summary.json").read_text())["completed"])
+        diagnostic = json.loads((Path(self.tempdir.name) /
+                                 "test.diagnostic.json").read_text())
+        self.assertEqual(diagnostic["format_version"], 1)
+        self.assertEqual(diagnostic["split"], "test")
+        self.assertEqual(diagnostic["episodes"][0]["actions"], self.env.actions)
 
     def test_explicit_stop_and_reject_invalid_batch(self):
         failed = self.controller.step(["STOP", "TURN_LEFT"])
@@ -167,6 +172,70 @@ class CodexEpisodeTests(unittest.TestCase):
                          bytes([137, 80, 78, 71, 13, 10, 26, 10]))
         zipped.zip.close()
 
+    def test_verified_codex_observe_has_true_image_and_step_has_exact_before_after(self):
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            received, _ = self.controller.observe()
+        self.controller.step(["TURN_LEFT", "STOP"])
+        folder = self.controller.directory / "codex"
+        folder.mkdir()
+        events = [
+            {"type": "thread.started"},
+            {"type": "item.started", "item": {
+                "type": "mcp_tool_call", "id": "item_observe",
+                "server": "havln", "tool": "observe", "arguments": None}},
+            {"type": "item.completed", "item": {
+                "type": "mcp_tool_call", "id": "item_observe",
+                "server": "havln", "tool": "observe", "arguments": {},
+                "result": {"content": [
+                    {"type": "text", "text": "observation details"},
+                    {"type": "image", "mimeType": "image/png",
+                     "data": "raw-encoded-image-data"}]}}},
+            {"type": "item.started", "item": {
+                "type": "mcp_tool_call", "id": "item_step",
+                "server": "havln", "tool": "step",
+                "arguments": {"actions": ["TURN_LEFT", "STOP"]}}},
+            {"type": "item.completed", "item": {
+                "type": "mcp_tool_call", "id": "item_step",
+                "server": "havln", "tool": "step",
+                "arguments": {"actions": ["TURN_LEFT", "STOP"]}}},
+        ]
+        raw_path = folder / "codex_events.jsonl"
+        raw_path.write_text("".join(json.dumps(row) + "\n" for row in events))
+        view = EpisodeReplay(ReplaySource(self.tempdir.name), "test-1")
+        items = [row for row in view.overview()["events"]
+                 if row["kind"] == "codex"]
+        self.assertNotIn("observation_id", items[1])
+        self.assertEqual(items[2]["observation_id"],
+                         received["observation_id"])
+        self.assertEqual(items[2]["linked_tool"], "observe")
+        self.assertEqual(items[3]["observation_id"],
+                         received["observation_id"])
+        self.assertEqual(items[4]["after_id"], "obs_000003")
+        self.assertEqual(view.frame(received["observation_id"])[:8],
+                         bytes([137, 80, 78, 71, 13, 10, 26, 10]))
+        result = view.detail(view.habitat_event_count + 2)["record"]
+        image = result["item"]["result"]["content"][1]
+        self.assertTrue(image["data_omitted_from_viewer"])
+        self.assertNotIn("data", image)
+        self.assertIn("raw-encoded-image-data", raw_path.read_text())
+
+    def test_codex_image_link_fails_closed_on_mismatched_action_arguments(self):
+        self.controller.step(["STOP"])
+        folder = self.controller.directory / "codex"
+        folder.mkdir()
+        (folder / "codex_events.jsonl").write_text(json.dumps({
+            "type": "item.started", "item": {
+                "type": "mcp_tool_call", "id": "wrong",
+                "server": "havln", "tool": "step",
+                "arguments": {"actions": ["MOVE_FORWARD"]}}}) + "\n")
+        view = EpisodeReplay(ReplaySource(self.tempdir.name), "test-1")
+        event = view.overview()["events"][-1]
+        self.assertNotIn("observation_id", event)
+        self.assertNotIn("after_id", event)
+        self.assertNotIn("linked_tool", event)
+
     def test_codex_event_summary_and_read_only_preflight(self):
         events = Path(self.tempdir.name) / "events.jsonl"
         events.write_text('{"type":"thread.started"}\n'
@@ -237,12 +306,21 @@ class CodexEpisodeTests(unittest.TestCase):
             collect_codex_audit(args, staged, False, trace)
             calls = [c.args[0] for c in run.call_args_list]
             self.assertEqual(calls[1][-1], "havln-cma:" + args.output_dir)
-            run.reset_mock()
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(
+                       stdout="Archived\nCODEX_ARCHIVE_PATH=/workspace/agent-runs/diagnostic-archives/codex-one-20261118T123456Z-diagnostic.zip\n")
+                   ) as run:
             archive = archive_codex_run(args)
-            self.assertEqual(archive, args.output_dir + "/diagnostic.zip")
+            self.assertEqual(
+                archive,
+                "/workspace/agent-runs/diagnostic-archives/codex-one-20261118T123456Z-diagnostic.zip")
             cmd = run.call_args.args[0]
-            self.assertIn("--allow-empty", cmd)
-            self.assertEqual(cmd[cmd.index("--frames") + 1], "critical")
+            self.assertIn("from havln_agent.export import auto_archive",
+                          cmd[cmd.index("-c") + 1])
+            self.assertEqual(cmd[-2:], [args.output_dir, "critical"])
+            args.archive_frames = "auto"
+            archive_codex_run(args)
+            self.assertEqual(run.call_args.args[0][-1], "all")
 
     def test_refuse_existing_container_output_before_inference(self):
         args = SimpleNamespace(docker_bin="docker", container="havln-cma",

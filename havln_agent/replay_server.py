@@ -105,6 +105,33 @@ class ReplaySource:
         return _jsonl(self.trace(episode, name))
 
 
+def _codex_event_for_view(row):
+    """Hide base64 image bytes in HTTP JSON; original CLI log remains lossless."""
+    if not isinstance(row, dict):
+        return row
+    event = dict(row)
+    item = event.get('item')
+    if not isinstance(item, dict):
+        return event
+    item = dict(item)
+    result = item.get('result')
+    if isinstance(result, dict) and isinstance(result.get('content'), list):
+        result = dict(result)
+        parts = []
+        for part in result['content']:
+            if isinstance(part, dict) and part.get('type') == 'image':
+                visual = {k: v for k, v in part.items() if k != 'data'}
+                visual['data_omitted_from_viewer'] = True
+                visual['base64_characters'] = len(part.get('data') or '')
+                parts.append(visual)
+            else:
+                parts.append(part)
+        result['content'] = parts
+        item['result'] = result
+    event['item'] = item
+    return event
+
+
 class EpisodeReplay:
     def __init__(self, source, episode):
         if episode not in source.episodes():
@@ -136,6 +163,7 @@ class EpisodeReplay:
         if not self.events:
             self.events = self._legacy_events()
         self.habitat_event_count = len(self.events)
+        self.codex_links = self._match_codex_tool_receipts()
         # Appended as a clearly separate event group, never asserted to be
         # interleaved in causal order with Habitat's recorded action sequence.
         self.events.extend(dict(kind='codex', codex_index=i)
@@ -143,6 +171,62 @@ class EpisodeReplay:
         self.events = [dict(sequence=i, **{k: v for k, v in ev.items()
                                            if k != 'sequence'})
                        for i, ev in enumerate(self.events)]
+
+    def _match_codex_tool_receipts(self):
+        """Join Codex MCP calls to Habitat receipts only when arguments agree.
+
+        Codex item IDs differ from the simulator call IDs. The defensible
+        join in v1 is ordered tool sequence, verified by names and arguments.
+        Stop linking on discrepancy instead of showing the wrong camera.
+        """
+        started = []
+        for event in self.codex:
+            item = event.get('item')
+            if (event.get('type') == 'item.started' and
+                    isinstance(item, dict) and
+                    item.get('type') == 'mcp_tool_call' and
+                    item.get('server') == 'havln'):
+                started.append(item)
+        steps_by_call = {}
+        for step in self.steps:
+            ident = step.get('tool_call_id')
+            if isinstance(ident, str):
+                steps_by_call.setdefault(ident, []).append(step)
+        links = {}
+        for item, record in zip(started, self.tools):
+            call = record.get('call')
+            if not isinstance(call, dict):
+                break
+            name = item.get('tool')
+            arguments = item.get('arguments') or {}
+            if (not isinstance(arguments, dict) or
+                    name not in ('observe', 'step') or
+                    name != call.get('tool') or
+                    arguments != (call.get('args') or {})):
+                break
+            item_id, call_id = item.get('id'), record.get('call_id')
+            if not isinstance(item_id, str) or not isinstance(call_id, str):
+                break
+            result = record.get('result') or {}
+            if not isinstance(result, dict):
+                result = {}
+            linked = dict(linked_tool=name, tool_call_id=call_id)
+            if name == 'observe':
+                observation_id = result.get('observation_id')
+                if isinstance(observation_id, str) and re.fullmatch(
+                        r'obs_[0-9]+', observation_id):
+                    linked['observation_id'] = observation_id
+            else:
+                actions = steps_by_call.get(call_id) or []
+                if actions:
+                    before = Path(actions[0].get('input_file') or '').stem
+                    after = Path(actions[-1].get('post_file') or '').stem
+                    if re.fullmatch(r'obs_[0-9]+', before):
+                        linked['observation_id'] = before
+                    if re.fullmatch(r'obs_[0-9]+', after):
+                        linked['after_id'] = after
+            links[item_id] = linked
+        return links
 
     def _legacy_events(self):
         """Best-effort old-log view: no fabricated cross-stream order."""
@@ -218,6 +302,19 @@ class EpisodeReplay:
                              item_type=item.get('type'),
                              status=row.get('status'),
                              item_id=item.get('id'))
+                    linked = self.codex_links.get(item.get('id'))
+                    if linked:
+                        # observe() images exist only upon tool completion.
+                        if (linked['linked_tool'] == 'observe' and
+                                row.get('type') != 'item.completed'):
+                            linked = {k: v for k, v in linked.items()
+                                      if k != 'observation_id'}
+                        # step() returns receipts, not a new image.
+                        if (linked['linked_tool'] == 'step' and
+                                row.get('type') != 'item.completed'):
+                            linked = {k: v for k, v in linked.items()
+                                      if k != 'after_id'}
+                        p.update(linked)
             previews.append(p)
         return dict(episode=self.episode, metadata=self.meta,
                     summary=self.summary, failure=self.failure,
@@ -251,7 +348,7 @@ class EpisodeReplay:
         elif kind == 'codex':
             idx = ev.get('codex_index')
             if isinstance(idx, int) and 0 <= idx < len(self.codex):
-                row = self.codex[idx]
+                row = _codex_event_for_view(self.codex[idx])
         elif kind == 'runtime_event':
             idx = ev.get('event_index')
             if isinstance(idx, int) and 0 <= idx < len(self.events_log):

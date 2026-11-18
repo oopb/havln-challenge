@@ -233,10 +233,18 @@ class CodexEpisode:
         }
         atomic_json(self.directory / "summary.json", summary)
         if completed:
+            row = {"episode_id": self.episode_id, "actions": self.actions}
             atomic_json(self.directory / "result.json", {
-                "row": {"episode_id": self.episode_id, "actions": self.actions},
+                "row": row,
                 "validated_by": "check_rows",
             })
+            # Match the original run_api_agent.py root-level diagnostic format.
+            # One-episode runs are never full official split submissions.
+            atomic_json(self.directory.parents[1] /
+                        (self.split + ".diagnostic.json"), {
+                            "format_version": 1, "split": self.split,
+                            "episodes": [row],
+                        })
         else:
             atomic_json(self.directory / "failure.json", {
                 "reason": summary["stop_reason"],

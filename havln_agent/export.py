@@ -650,6 +650,9 @@ def auto_archive(output_dir, archive_dir=None, frames='critical', interval=25):
     traces = output / 'traces'
     has_episodes = traces.is_dir() and any(p.is_dir() for p in traces.iterdir())
     has_startup_logs = any(output.glob('worker-*.log')) or (output/'export_metadata.json').is_file()
+    # Standalone Codex sessions may fail before Habitat creates traces/.
+    # Reuse the same sibling diagnostic-archives location for their audit.
+    has_startup_logs = has_startup_logs or (output/'run_status.json').is_file()
     if not has_episodes and not has_startup_logs:
         return None
     archive_root = (Path(archive_dir).resolve() if archive_dir is not None else
