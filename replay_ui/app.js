@@ -90,7 +90,9 @@ function badgeText(ev) {
 }
 function isIssue(ev) {
   return (ev.kind === 'codex' &&
-      /failed|error|cancelled/i.test(ev.event_type || ev.status || '')) ||
+      (ev.error === true ||
+       /failed|error|cancelled/i.test(
+         [ev.event_type, ev.status].filter(Boolean).join(' ')))) ||
     (ev.kind === 'api' && ev.success === false) ||
     (ev.kind === 'tool' && /(BLOCKED|PARTIAL|ERROR|ATTENTION|INVALID|UNAVAILABLE)/.test(ev.status || '')) ||
     (ev.kind === 'runtime_event' && /error|budget|failure|liveness/i.test(ev.name || ''));
@@ -326,13 +328,52 @@ function renderDetail(detail) {
       'Codex ' + ev.linked_tool + ' · 核验工具回执 ' + (ev.tool_call_id || '') +
       (ev.observation_id ? ' · Frame ' + ev.observation_id : '') :
       'Codex 独立日志 · 该事件无可核验的帧关联';
+    const item = row.item && typeof row.item === 'object' ? row.item : {};
+    const isTool = item.type === 'mcp_tool_call';
     if (state.tab === 'input') {
-      if (state.data.codex_prompt) body.append(section('Codex 会话初始用户指令（非独立 system 角色）', state.data.codex_prompt, false));
-      body.append(section('本次 CLI 事件', {type: row.type, item: row.item || null}, true));
+      if (state.data.codex_prompt)
+        body.append(section('会话开始时的用户导航指令（非独立 system 消息）',
+          state.data.codex_prompt, false));
+      if (isTool) {
+        // A completed item includes both arguments and result. Only arguments
+        // belong in Input; the result must never leak into this tab.
+        body.append(section('MCP 工具调用 · 实际参数', {
+          server:item.server, tool:item.tool,
+          arguments:item.arguments === undefined ? null : item.arguments
+        }, true));
+        body.append(node('p','muted',
+          '这里只能确认 MCP 工具调用参数；Codex 内部每次模型推理的完整请求消息没有被 CLI 事件公开。'));
+      } else {
+        body.append(node('p','muted',
+          '本事件没有独立的可重建模型请求输入。CLI 事件不是原始模型请求报文。'));
+        if (row.type === 'thread.started')
+          body.append(section('会话标识', {thread_id:row.thread_id}));
+      }
     } else if (state.tab === 'output') {
-      body.append(section('Codex 模型 / 工具事件', row, true));
+      if (isTool) {
+        if (row.type === 'item.completed' || row.type === 'item.failed') {
+          body.append(section('MCP 工具执行结果', {
+            status:item.status, error:item.error,
+            result:item.result === undefined ? null : item.result
+          }, true));
+        } else body.append(node('p','muted',
+          '此事件是工具调用开始，尚无执行结果；请选择对应 item.completed。'));
+      } else if (item.type === 'agent_message') {
+        body.append(section('Codex 模型消息', {text:item.text, status:item.status}, true));
+      } else if (row.type === 'turn.completed') {
+        body.append(section('模型 Turn 用量', row.usage || {}, true));
+      } else {
+        body.append(section('Codex 事件输出 / 状态', {
+          type:row.type, status:row.status, error:row.error,
+          message:row.message, item:item.type ? {
+            type:item.type, status:item.status, error:item.error,
+            text:item.text
+          } : null
+        }, true));
+      }
     } else {
-      body.append(section('Codex 事件（图像二进制在网页中省略；完整记录见诊断 ZIP）', row, true));
+      body.append(section('Codex 完整原始事件（返回图像二进制在网页中省略）',
+        row, true));
     }
   } else if (ev.kind === 'api') {
     output.textContent = (row.success ? '模型请求成功' : '模型请求失败') +
@@ -361,13 +402,25 @@ function renderDetail(detail) {
       output.textContent = (row.call?.tool || '工具') +
         ' · ' + (row.result?.status || '无返回状态');
     } else output.textContent = label(ev);
-    body.append(section('事件 / 工具 / 动作记录', row, true));
-    if (state.tab === 'input' && ev.kind === 'tool') {
-      body.prepend(section('工具调用参数', row.call, true));
-    }
-    if (state.tab === 'output' && ev.kind === 'tool') {
-      body.prepend(section('工具执行结果', row.result, true));
-    }
+    if (ev.kind === 'tool') {
+      if (state.tab === 'input')
+        body.append(section('工具调用参数（不含执行结果）', row.call || {}, true));
+      else if (state.tab === 'output')
+        body.append(section('工具执行结果（不含调用参数）', row.result || {}, true));
+      else body.append(section('工具完整原始记录', row, true));
+    } else if (ev.kind === 'action') {
+      if (state.tab === 'input') {
+        body.append(section('原子动作 / 执行前关联信息', {
+          step:row.step, action:row.action, tool_call_id:row.tool_call_id,
+          origin:row.origin, input_file:row.input_file
+        }, true));
+      } else if (state.tab === 'output') {
+        body.append(section('原子动作 / 执行后信息', {
+          step:row.step, action:row.action, post_file:row.post_file,
+          pose_after:row.pose_after, safety:row.safety
+        }, true));
+      } else body.append(section('完整原子动作原始记录', row, true));
+    } else body.append(section('事件记录', row, true));
   }
 }
 function scoreNumber(value, decimals = 4) {
