@@ -45,8 +45,8 @@ mount, not just the host repository. Avoid launching a stale Docker checkout.
 ## Free preflight before the first inference
 
 Run the same command with --preflight first. It checks the installed Codex
-CLI, your direct Docker permission, the mounted MCP server file, Habitat
-0.1.7 imports and the selected split's dataset file. No Codex model is
+CLI, Codex login, your direct Docker permission, the mounted MCP server
+file, Habitat 0.1.7 imports and the selected split's episode ID. No Codex model is
 called, no Habitat episode is started, and no output directory is created.
 
     python scripts/run_codex_episode.py \
@@ -55,8 +55,8 @@ called, no Habitat episode is started, and no output directory is created.
       --preflight
 
 PASS only means dependencies and file paths are reachable. It does not
-confirm the model is enabled for your account, that the selected episode
-exists inside the split, or that the MCP tool loop has actually run.
+confirm the selected model is enabled for your account or that
+the MCP tool loop has actually run.
 
 ## First real test: Phase 2, episode 1, 128 atomic actions
 
