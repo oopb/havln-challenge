@@ -446,8 +446,8 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(instruction, "Take the stairs left.")
         command = run.call_args.args[0]
         self.assertEqual(command[-3:], ["/data/havln2", "test", "103"])
-        self.assertIn("gzip", command[6])
-        self.assertIn("instruction_text", command[6])
+        self.assertIn("gzip", command[7])
+        self.assertIn("instruction_text", command[7])
         with patch("scripts.run_codex_episode.subprocess.run",
                    return_value=SimpleNamespace(stdout='""')):
             with self.assertRaisesRegex(ValueError, "empty"):
