@@ -12,8 +12,8 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return a fresh public RGB camera image and the navigation instruction. "
-            "Observe whenever visual evidence is needed; no hidden map or target pose."
+            "Return the current RGB and navigation instruction; add a Depth image "
+            "only if a near obstacle is detected directly ahead. No hidden map."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
@@ -24,7 +24,8 @@ TOOLS = [
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
             "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
-            "shared episode budget. Call observe afterwards to see the new view."
+            "shared episode budget. An unchanged RGB after MOVE_FORWARD stops "
+            "the remaining batch; use the feedback to choose what to do next."
         ),
         "inputSchema": {
             "type": "object",
@@ -76,14 +77,15 @@ class MCPServer:
                 if arguments:
                     raise ValueError("observe takes no arguments")
                 with redirect_stdout(sys.stderr):
-                    info, image_data = self.episode.observe()
-                return {
-                    "content": [
-                        {"type": "text", "text": json.dumps(info, ensure_ascii=False)},
-                        {"type": "image", "data": image_data, "mimeType": "image/png"},
-                    ],
-                    "isError": False,
-                }
+                    info, rgb_data, depth_data = self.episode.observe()
+                content = [
+                    {"type": "text", "text": json.dumps(info, ensure_ascii=False)},
+                    {"type": "image", "data": rgb_data, "mimeType": "image/png"},
+                ]
+                if depth_data is not None:
+                    content.append({"type": "image", "data": depth_data,
+                                    "mimeType": "image/png"})
+                return {"content": content, "isError": False}
             if name == "step":
                 with redirect_stdout(sys.stderr):
                     result = self.episode.step(arguments.get("actions"))
