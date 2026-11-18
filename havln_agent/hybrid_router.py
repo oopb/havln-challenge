@@ -5,6 +5,8 @@ turns historical sensor observations into collision clearance. Only a cloud
 NavigationAgent decision can delegate a single currently selected route.
 """
 from copy import deepcopy
+from math import degrees, isfinite
+from .heading import relative_bearing
 
 LOCAL_STATES = frozenset(('LOCAL_FOLLOW', 'LOCAL_LOOK'))
 SIMPLE_ACTIONS = frozenset(('FORWARD', 'LEFT', 'RIGHT', 'LOOK_UP', 'LOOK_DOWN'))
@@ -58,6 +60,10 @@ class HybridRouter:
         self.last_escalation = None
         self.last_route = None
         self.last_local_proposal = None
+        self.local_forward_actions = 0
+        self.last_local_summary = None
+        self.last_forward_heading_rad = None
+        self.last_return_action_step = None
         self.local_decisions = 0
         self.cloud_decisions = 0
         self.escalations = 0
@@ -66,6 +72,13 @@ class HybridRouter:
 
     def use_local(self):
         return self.enabled and self.route is not None and self.state in LOCAL_STATES
+
+    def remaining_forward_actions(self):
+        """Remaining executed atomic forwards in this explicit cloud lease."""
+        if not self.use_local():
+            return 0
+        return max(0, self.route['max_forward_actions'] -
+                   self.local_forward_actions)
 
     def after_cloud(self, proposal, receipt, runtime, source_observation_id):
         """Authorize a new local segment only after a successful CLOUD motion.
@@ -78,11 +91,17 @@ class HybridRouter:
             return
         self.cloud_decisions += 1
         self.state = 'CLOUD_DECIDE'
-        self.last_route = None
-        self.last_escalation = None
-        self.last_local_proposal = None
         self.route = None
         self.turns_since_forward = 0
+        # A new real forward supersedes a returned handoff anchor.
+        # A cloud-only TURN or LOOK must not erase its travel reference.
+        if 'MOVE_FORWARD' in (receipt.get('executed_motion') or ()):
+            self.last_route = None
+            self.last_escalation = None
+            self.last_local_proposal = None
+            self.last_local_summary = None
+            self.last_forward_heading_rad = None
+            self.last_return_action_step = None
         grant = proposal.get('local_handoff')
         if (not isinstance(grant, dict) or
                 proposal.get('tool') != 'navigate_relative' or
@@ -92,8 +111,10 @@ class HybridRouter:
             return
         goal = grant.get('goal')
         until = grant.get('exit_condition')
+        limit = grant.get('max_forward_actions')
         if not (isinstance(goal, str) and goal.strip() and
-                isinstance(until, str) and until.strip()):
+                isinstance(until, str) and until.strip() and
+                type(limit) is int and 1 <= limit <= 12):
             return
         current_id = (runtime.memory.current or {}).get('observation_id')
         if not current_id:
@@ -105,7 +126,9 @@ class HybridRouter:
             # Exclude the cloud's initial movement from LOCAL execution feedback.
             start_action_step=len(runtime.memory.actions),
             goal=goal.strip()[:200],
-            exit_condition=until.strip()[:200])
+            exit_condition=until.strip()[:200],
+            max_forward_actions=limit)
+        self.local_forward_actions = 0
         self.state = 'LOCAL_FOLLOW'
         runtime.event('hybrid_route_delegated', source='hybrid_router',
                       route=deepcopy(self.route), model_tier='cloud')
@@ -114,6 +137,8 @@ class HybridRouter:
         """Return a reason to escalate, or None for an eligible local action."""
         if not self.use_local():
             return 'no_active_cloud_route'
+        if self.remaining_forward_actions() == 0:
+            return 'delegated_forward_limit_reached'
         if decision.get('evidence_id') != current_id:
             return 'local_evidence_id_mismatch'
         action, count, signal = (decision.get('action'), decision.get('count'),
@@ -127,6 +152,9 @@ class HybridRouter:
         if action == 'FORWARD':
             if not 1 <= count <= 3:
                 return 'invalid_local_forward_count'
+            if count > self.remaining_forward_actions():
+                # Never silently shorten a model-selected command.
+                return 'delegated_forward_limit_would_be_exceeded'
             if front_state == 'BLOCKED':
                 return 'live_front_depth_blocked'
         elif action in ('LEFT', 'RIGHT'):
@@ -150,6 +178,8 @@ class HybridRouter:
         if not receipt.get('executed_actions'):
             return self.escalate('local_no_action_executed', runtime)
         actions = receipt.get('executed_motion') or []
+        self.local_forward_actions += sum(
+            action == 'MOVE_FORWARD' for action in actions)
         if 'MOVE_FORWARD' in actions:
             self.turns_since_forward = 0
             # An executed forward receipt may still have unchanged RGB-D.
@@ -159,6 +189,8 @@ class HybridRouter:
                    for a in attempts):
                 return self.escalate('local_forward_no_rgbd_change', runtime)
             self.state = 'LOCAL_FOLLOW'
+            if self.remaining_forward_actions() == 0:
+                return self.escalate('delegated_forward_limit_reached', runtime)
         else:
             self.turns_since_forward += sum(a in ('TURN_LEFT', 'TURN_RIGHT',
                                                    'LOOK_UP', 'LOOK_DOWN')
