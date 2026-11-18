@@ -13,7 +13,8 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
 - Controller: havln_agent/codex_episode.py owns public RGB-D captures,
   legal six-action stepping, budgets, replay receipts and STOP/export checks.
 - MCP: havln_agent/codex_mcp.py exposes ONLY observe() and step(actions).
-  observe returns the instruction, fresh RGB and budget; it adds Depth
+  observe returns fresh RGB, observation ID and budget; the episode's route
+  instruction is already in the one-time system instructions. It adds Depth
   **only** when conservative public-Depth evidence finds a near obstacle
   directly ahead. No obstacle => only one RGB image.
   step executes an ordered list of allowed atomic actions and returns receipts.
@@ -149,16 +150,23 @@ always retains every original frame.
 Replay Studio correlates the Codex MCP tool stream to the exact Habitat
 `tools.jsonl` and `steps.jsonl` sequence only when tool names and arguments
 agree; mismatches are left unlinked. On completed `observe()` events it
-shows **the actual RGB returned to Codex**, plus Depth explicitly labeled
-as offline-only (not a model input). On `step()` events it shows the true
+shows **the actual RGB returned to Codex**, plus Depth marked as a model
+input only when the completed observe response actually included it. On `step()` events it shows the true
 before/after frames. Initial/thread-level Codex events remain unlinked.
 The viewer omits duplicate base64 image bytes in JSON responses, while the
 original complete Codex event stream remains in the saved ZIP.
 
-Codex gets an initial user navigation instruction at CLI launch; it is not
-an explicit model-API system message. The task instruction and RGB are
-delivered with each successful `observe()`; `step()` receives an action
-list and returns a structured execution receipt without any new image.
+Before launching Codex, the host reads only the public route instruction
+for the selected episode from the matching HA-R2R dataset JSON. The route
+instruction and existing short navigation rules are written once to
+`codex/prompt.txt` and injected via the per-run
+`-c model_instructions_file=<absolute-path>` override, as Codex's system-level
+model instructions. This intentionally replaces Codex's built-in base
+instructions for the isolated navigation session. The initial user prompt
+only asks Codex to call `observe()`. Each `observe()` returns RGB and a
+short metadata text block, with optional Depth and `front_obstacle_m`; it
+does **not** repeat the route. `step()` accepts only an action list and
+returns a short text receipt without any image.
 Codex manages the continuous model context internally: the CLI event log
 does not record the complete hidden per-model-call system/developer
 message envelopes.
@@ -232,6 +240,12 @@ included in the standard sibling diagnostic ZIP and shown in Replay Studio.
 - On interruption or startup failure, reported Token counters are
   retained where available. In-flight work may be unreported, so
   the Token status is marked partial or unavailable.
+
+Each finished single-episode or batch runner also prints the **actual post-run
+account quota remaining percentage**, used percentage, and comparable
+before/after change per reported window (for example 5-hour or weekly).
+Batch windows are account-wide and are never summed per child; these
+percentages are not per-episode billing. If quota is unavailable, it says so.
 
 To inspect an archived result, open Replay Studio or read
 `codex_usage.json` directly; no additional CLI flags are needed.
