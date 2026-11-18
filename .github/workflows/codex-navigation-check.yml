@@ -5,11 +5,14 @@ on:
     paths:
       - "havln_agent/codex_episode.py"
       - "havln_agent/codex_usage.py"
+      - "havln_agent/codex_batch.py"
       - "havln_agent/codex_mcp.py"
       - "scripts/havln_mcp_server.py"
       - "scripts/run_codex_episode.py"
+      - "scripts/run_codex_batch.py"
       - "tests/test_codex_navigation.py"
       - "tests/test_codex_usage.py"
+      - "tests/test_codex_batch.py"
       - "havln_agent/replay_server.py"
       - "scripts/pack_agent_diagnostics.py"
       - "replay_ui/**"
@@ -27,11 +30,13 @@ jobs:
       - name: Install lightweight offline dependencies
         run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
       - name: Compile independent Codex path
-        run: python -m compileall -q havln_agent/codex_episode.py havln_agent/codex_mcp.py havln_agent/codex_usage.py scripts/havln_mcp_server.py scripts/run_codex_episode.py scripts/pack_agent_diagnostics.py havln_agent/replay_server.py tests/test_codex_navigation.py tests/test_codex_usage.py
+        run: python -m compileall -q havln_agent/codex_episode.py havln_agent/codex_mcp.py havln_agent/codex_usage.py havln_agent/codex_batch.py scripts/havln_mcp_server.py scripts/run_codex_episode.py scripts/run_codex_batch.py scripts/pack_agent_diagnostics.py havln_agent/replay_server.py tests/test_codex_navigation.py tests/test_codex_usage.py tests/test_codex_batch.py
       - name: Test MCP wire, replay receipts and session isolation
         run: python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
       - name: Test Codex token and quota accounting
         run: python -m unittest discover -s tests -p 'test_codex_usage.py' -v
+      - name: Test independent Codex batch scheduler and lossless ZIP playback
+        run: python -m unittest discover -s tests -p 'test_codex_batch.py' -v
       - name: Validate existing replay studio compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
       - name: Validate replay frontend syntax
