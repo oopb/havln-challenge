@@ -23,6 +23,13 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
   remains active. No Depth is sent merely because a stall occurred, and step()
   never sends an image.
+  Only when useful, `step()` also returns `motion_hint`: cumulative and net
+  turn degrees since the last forward with **changing RGB** (not measured
+  translation), plus batch turn degrees if the batch alone turned >=180 degrees.
+  Right turns are positive, left turns negative. Up to two recent exact-RGB
+  forward stalls (within 16 actions) are expressed as angles **relative to
+  the current view**. These hints never interrupt/limit turning or prohibit
+  movement, and normal receipts do not contain them.
 - This is not a geometry authorization gate or motion odometry: a changed
   RGB does not certify actual displacement; the obstacle heuristic only
   selects whether Depth is shown. No hidden pose, reference trajectory, goal
