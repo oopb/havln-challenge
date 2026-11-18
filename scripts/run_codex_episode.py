@@ -22,7 +22,7 @@ from havln_agent.codex_usage import (compare_rate_limits, read_rate_limits,
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
-The tool will show the task instruction and an actual RGB camera image.
+The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
 Call step with ordered action batches; use observe when the view is needed.
 Reason about stairs, crossings, dynamic people and the route instruction.
@@ -30,7 +30,7 @@ When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.
 Do not rely on state from any previous episode. A STOP is not proof of success.
-If a tool reports failure, adapt your plan rather than inventing progress.
+If MOVE_FORWARD returns NO_VISUAL_PROGRESS, reconsider direction or observe.
 """
 
 
