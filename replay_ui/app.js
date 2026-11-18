@@ -428,6 +428,7 @@ function renderDetail(detail) {
       } else if (state.tab === 'output') {
         body.append(section('原子动作 / 执行后信息', {
           step:row.step, action:row.action, post_file:row.post_file,
+          motion_feedback:row.motion_feedback,
           pose_after:row.pose_after, safety:row.safety
         }, true));
       } else body.append(section('完整原子动作原始记录', row, true));
