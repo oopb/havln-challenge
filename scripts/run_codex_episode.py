@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import os
 import signal
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -127,9 +128,12 @@ def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
                           start_new_session=True) as process:
         try:
             return process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            stderr.write("Codex episode exceeded wall-time limit: " +
-                         str(timeout_seconds) + " seconds\n")
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+            interrupted = isinstance(error, KeyboardInterrupt)
+            reason = ("interrupted by user" if interrupted else
+                      "exceeded wall-time limit: " + str(timeout_seconds) +
+                      " seconds")
+            stderr.write("Codex episode " + reason + "\n")
             stderr.flush()
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -143,7 +147,72 @@ def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
                 except ProcessLookupError:
                     pass
                 process.wait()
-            return 124
+            return 130 if interrupted else 124
+
+
+def require_fresh_container_output(args):
+    """Fail before paid inference rather than append to another run."""
+    probe = subprocess.run(
+        [args.docker_bin, "exec", args.container, "test", "-e", args.output_dir],
+        text=True, capture_output=True, check=False, timeout=30)
+    if probe.returncode == 0:
+        raise ValueError("Output directory already exists in container: " +
+                         args.output_dir + ". Choose a new --output-dir.")
+    if probe.returncode != 1 or probe.stderr.strip():
+        raise RuntimeError("Cannot verify new output directory via Docker: " +
+                           (probe.stderr.strip() or str(probe.returncode)))
+
+
+def collect_habitat_summary(args, trace):
+    """Return a checked simulator summary, or an explicit diagnostics warning."""
+    try:
+        exists = subprocess.run(
+            [args.docker_bin, "exec", args.container, "test", "-d", trace],
+            text=True, capture_output=True, timeout=30, check=False)
+        if exists.returncode != 0:
+            return False, None, "No Habitat trace directory"
+        result = subprocess.run(
+            [args.docker_bin, "exec", args.container, "cat", trace + "/summary.json"],
+            text=True, capture_output=True, timeout=30, check=False)
+        if result.returncode != 0:
+            return True, None, "No finalized Habitat summary"
+        summary = json.loads(result.stdout)
+        if not isinstance(summary, dict) or not isinstance(summary.get("completed"), bool):
+            return True, None, "Malformed Habitat summary"
+        return True, summary, None
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return False, None, str(error)
+
+
+def collect_codex_audit(args, staged_dir, trace_exists, trace):
+    """Copy the ONE staged Codex directory to the requested container root.
+
+    A partial Habitat trace still receives its CLI history. On MCP startup
+    failure, use output-dir/codex and preserve the startup error in the ZIP.
+    """
+    parent = trace if trace_exists else args.output_dir
+    subprocess.run([args.docker_bin, "exec", args.container,
+                    "mkdir", "-p", parent], check=True, timeout=60)
+    subprocess.run([args.docker_bin, "cp", str(staged_dir),
+                    args.container + ":" + parent], check=True, timeout=120)
+    subprocess.run([args.docker_bin, "cp", str(staged_dir / "run_status.json"),
+                    args.container + ":" + args.output_dir + "/run_status.json"],
+                   check=True, timeout=60)
+
+
+def archive_codex_run(args):
+    """Create one portable diagnostic ZIP *inside* --output-dir."""
+    archive = args.output_dir.rstrip("/") + "/diagnostic.zip"
+    command = [
+        args.docker_bin, "exec", args.container, "python",
+        "/toolkit/scripts/pack_agent_diagnostics.py",
+        "--output-dir", args.output_dir,
+        "--archive", archive,
+        "--frames", args.archive_frames,
+        "--allow-empty",
+    ]
+    subprocess.run(command, check=True, timeout=600)
+    return archive
 
 
 def main():
@@ -164,9 +233,10 @@ def main():
     parser.add_argument("--docker-bin", default="docker")
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--output-dir", required=True,
-                        help="Absolute CONTAINER path; one fresh run root")
-    parser.add_argument("--log-dir", type=Path,
-                        help="Host directory for CLI events, prompt and stderr")
+                        help="Single fresh absolute CONTAINER output directory")
+    parser.add_argument("--archive-frames", choices=("critical", "all", "none"),
+                        default="critical",
+                        help="Automatic diagnostic ZIP frame policy (default: critical)")
     parser.add_argument("--preflight", action="store_true",
                         help="Check Codex/Docker/Habitat without model inference or output files")
     args = parser.parse_args()
@@ -178,107 +248,99 @@ def main():
     if (args.phase == "phase2" and split != "test") or (
             args.phase == "phase1" and split == "test"):
         parser.error("phase2 requires test; phase1 requires val_seen/val_unseen")
-    if not Path(args.output_dir).is_absolute():
-        parser.error("--output-dir must be an absolute container path")
+    if not Path(args.output_dir).is_absolute() or args.output_dir == "/":
+        parser.error("--output-dir must be a dedicated absolute container path")
     if args.preflight:
         return preflight(args, split)
+    try:
+        require_fresh_container_output(args)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        parser.error(str(error))
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_dir = args.log_dir or (Path("codex-runs") /
-                                (args.phase + "-" + str(args.episode_id) + "-" + stamp))
-    log_dir = log_dir.resolve()
-    if log_dir.exists():
-        parser.error("log directory already exists; do not overwrite a previous run")
-    log_dir.mkdir(parents=True)
-    final = log_dir / "final_message.txt"
-    command = build_command(args, final)
-    (log_dir / "prompt.txt").write_text(PROMPT, encoding="utf-8")
-    (log_dir / "command.json").write_text(json.dumps({
-        "started_utc": stamp, "command": command, "episode_id": args.episode_id,
-        "phase": args.phase, "split": split, "container_output_dir": args.output_dir,
-    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    # An empty workdir prevents project-local AGENTS.md and previous episode
-    # artifacts from appearing in this session's Codex working directory.
-    with tempfile.TemporaryDirectory(prefix="havln-codex-session-") as workdir:
-        with (log_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
-             (log_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
-            try:
-                exit_code = run_codex_cli(
-                    command, workdir, stdout, stderr, args.timeout_seconds)
-            except OSError as error:
-                stderr.write("Failed to launch Codex: " + str(error) + "\n")
-                exit_code = 127
-
     trace = args.output_dir.rstrip("/") + "/traces/" + split + "-" + str(args.episode_id)
-    run_status = {
-        "codex_exit_code": exit_code,
-        "wall_time_limit_seconds": args.timeout_seconds,
-        "timed_out": exit_code == 124,
-        "host_log_dir": str(log_dir),
-        "container_trace_dir": trace,
-        "agent_path": "codex_mcp_v1",
-        "codex_events": summarize_codex_events(log_dir / "codex_events.jsonl"),
-        "habitat_summary": None,
-        "export_valid": False,
-    }
-    try:
-        exists = subprocess.run(
-            [args.docker_bin, "exec", args.container, "test", "-d", trace],
-            check=False, capture_output=True)
-        if exists.returncode == 0:
-            result = subprocess.run(
-                [args.docker_bin, "exec", args.container,
-                 "cat", trace + "/summary.json"],
-                check=False, text=True, capture_output=True)
-            if result.returncode == 0:
-                run_status["habitat_summary"] = json.loads(result.stdout)
-                run_status["export_valid"] = bool(
-                    run_status["habitat_summary"].get("completed"))
-            else:
-                run_status["collection_warning"] = "No finalized Habitat summary"
-        else:
-            run_status["collection_warning"] = "No Habitat trace directory"
-    except (OSError, ValueError) as error:
-        run_status["collection_warning"] = str(error)
+    # Temporary host files are removed AFTER successful container collection.
+    # If Docker disappears, preserve them as an exceptional recovery fallback.
+    staging_root = Path(tempfile.mkdtemp(prefix="havln-codex-audit-"))
+    staged_dir = staging_root / "codex"
+    staged_dir.mkdir()
+    command = build_command(args, staged_dir / "final_message.txt")
+    (staged_dir / "prompt.txt").write_text(PROMPT, encoding="utf-8")
+    (staged_dir / "command.json").write_text(
+        json.dumps({"started_utc": stamp, "command": command,
+                    "episode_id": args.episode_id, "phase": args.phase,
+                    "split": split, "container_output_dir": args.output_dir},
+                   indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # Always persist host evidence before attempting Docker copies. A failed
-    # docker cp must not erase or conceal the original Codex error.
-    run_status["success"] = bool(
-        exit_code == 0 and run_status["export_valid"])
-    (log_dir / "run_status.json").write_text(
-        json.dumps(run_status, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
-    if run_status["habitat_summary"] is not None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="havln-codex-session-") as workdir:
+            with (staged_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
+                 (staged_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
+                try:
+                    exit_code = run_codex_cli(
+                        command, workdir, stdout, stderr, args.timeout_seconds)
+                except OSError as error:
+                    stderr.write("Failed to launch Codex: " + str(error) + "\n")
+                    exit_code = 127
+
+        trace_exists, summary, warning = collect_habitat_summary(args, trace)
+        run_status = {
+            "agent_path": "codex_mcp_v1",
+            "codex_exit_code": exit_code,
+            "wall_time_limit_seconds": args.timeout_seconds,
+            "timed_out": exit_code == 124,
+            "container_trace_dir": trace,
+            "codex_events": summarize_codex_events(
+                staged_dir / "codex_events.jsonl"),
+            "habitat_summary": summary,
+            "export_valid": bool(summary and summary.get("completed")),
+        }
+        if warning:
+            run_status["collection_warning"] = warning
+        run_status["success"] = bool(
+            exit_code == 0 and run_status["export_valid"])
+        (staged_dir / "run_status.json").write_text(
+            json.dumps(run_status, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+
         try:
-            subprocess.run(
-                [args.docker_bin, "exec", args.container,
-                 "mkdir", "-p", trace + "/codex"], check=True)
-            for name in ("prompt.txt", "command.json", "codex_events.jsonl",
-                         "codex_stderr.log", "final_message.txt",
-                         "run_status.json"):
-                file = log_dir / name
-                if file.exists():
-                    subprocess.run(
-                        [args.docker_bin, "cp", str(file),
-                         args.container + ":" + trace + "/codex/" + name],
-                        check=True)
-        except (OSError, subprocess.CalledProcessError) as error:
-            print("Could not copy Codex session audit into container: " +
-                  str(error), file=sys.stderr)
+            collect_codex_audit(args, staged_dir, trace_exists, trace)
+        except (OSError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired) as error:
+            print("Unable to store Codex logs in --output-dir: " + str(error),
+                  file=sys.stderr)
+            print("Recovery logs retained at " + str(staged_dir), file=sys.stderr)
             return 2
 
-    summary = run_status["habitat_summary"]
-    if summary:
-        print("Habitat episode:", summary["stop_reason"],
-              "| actions:", summary["steps"],
-              "| legal action export:", summary["completed"])
-        print("Container trace:", trace)
-    else:
-        print("Habitat trace not finalized; inspect host log and stderr.",
-              file=sys.stderr)
-    print("Codex exit code:", exit_code, "| host logs:", log_dir)
-    return 0 if run_status["success"] else 2
+        # The single selected output directory is now the durable copy.
+        shutil.rmtree(staging_root)
+        try:
+            archive = archive_codex_run(args)
+        except (OSError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired) as error:
+            print("Automatic diagnostic archive failed: " + str(error),
+                  file=sys.stderr)
+            print("Raw traces and Codex logs remain in " + args.output_dir,
+                  file=sys.stderr)
+            return 2
+
+        if summary:
+            print("Habitat episode:", summary["stop_reason"],
+                  "| actions:", summary["steps"],
+                  "| legal action export:", summary["completed"])
+        else:
+            print("Habitat episode has no finalized summary: " +
+                  str(warning or "unknown"), file=sys.stderr)
+        print("Output:", args.output_dir)
+        print("Diagnostic ZIP:", archive,
+              "(frames=" + args.archive_frames + ")")
+        print("Codex exit code:", exit_code)
+        return 0 if run_status["success"] else 2
+    finally:
+        # If an unexpected error occurs before collection, do not silently
+        # delete the sole copy of the Codex model/tool transcript.
+        if staging_root.exists():
+            print("Host recovery audit: " + str(staged_dir), file=sys.stderr)
 
 
 if __name__ == "__main__":

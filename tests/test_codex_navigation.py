@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import tempfile
 import sys
 import unittest
-from unittest.mock import patch
+from zipfile import ZipFile
+from unittest.mock import patch, MagicMock, Mock
 
 import numpy as np
 
@@ -18,7 +19,9 @@ from havln_agent.codex_episode import CodexEpisode
 from havln_agent.codex_mcp import MCPServer
 from havln_agent.replay_server import ReplaySource, EpisodeReplay
 from scripts.pack_agent_diagnostics import pack
-from scripts.run_codex_episode import preflight, summarize_codex_events, run_codex_cli
+from scripts.run_codex_episode import (preflight, summarize_codex_events,
+                                       run_codex_cli, require_fresh_container_output,
+                                       collect_codex_audit, archive_codex_run)
 from havln_agent.perception import Camera, adapt_observation
 from scripts.run_codex_episode import build_command
 
@@ -191,6 +194,21 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(status, 124)
         self.assertIn("exceeded wall-time limit", errors.read_text())
 
+    def test_ctrl_c_also_terminates_codex_and_preserves_cleanup_path(self):
+        process = SimpleNamespace(pid=12345,
+                                  wait=Mock(side_effect=[KeyboardInterrupt(), 0]))
+        manager = MagicMock()
+        manager.__enter__.return_value = process
+        stderr = io.StringIO()
+        with patch("scripts.run_codex_episode.subprocess.Popen",
+                   return_value=manager), \
+             patch("scripts.run_codex_episode.os.killpg") as kill:
+            code = run_codex_cli(["codex", "exec"], self.tempdir.name,
+                                 io.StringIO(), stderr, 120)
+        self.assertEqual(code, 130)
+        self.assertIn("interrupted by user", stderr.getvalue())
+        kill.assert_called_once()
+
     def test_habitat_execution_exception_is_terminal_and_not_exported(self):
         with patch.object(self.env, "step", side_effect=RuntimeError("sim failure")):
             result = self.controller.step(["MOVE_FORWARD"])
@@ -199,6 +217,76 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(result["reason"], "habitat_action_exception")
         self.assertFalse((self.controller.directory / "result.json").exists())
         self.assertTrue((self.controller.directory / "failure.json").exists())
+
+    def test_single_output_auto_archive_commands(self):
+        args = SimpleNamespace(docker_bin="docker", container="havln-cma",
+                               output_dir="/workspace/agent-runs/codex-one",
+                               archive_frames="critical")
+        staged = Path(self.tempdir.name) / "codex"
+        staged.mkdir()
+        (staged / "run_status.json").write_text('{"export_valid":false}')
+        trace = args.output_dir + "/traces/test-1"
+        with patch("scripts.run_codex_episode.subprocess.run") as run:
+            collect_codex_audit(args, staged, True, trace)
+            calls = [c.args[0] for c in run.call_args_list]
+            self.assertEqual(calls[0][-2:], ["-p", trace])
+            self.assertEqual(calls[1][-1], "havln-cma:" + trace)
+            self.assertEqual(calls[2][-1],
+                             "havln-cma:" + args.output_dir + "/run_status.json")
+            run.reset_mock()
+            collect_codex_audit(args, staged, False, trace)
+            calls = [c.args[0] for c in run.call_args_list]
+            self.assertEqual(calls[1][-1], "havln-cma:" + args.output_dir)
+            run.reset_mock()
+            archive = archive_codex_run(args)
+            self.assertEqual(archive, args.output_dir + "/diagnostic.zip")
+            cmd = run.call_args.args[0]
+            self.assertIn("--allow-empty", cmd)
+            self.assertEqual(cmd[cmd.index("--frames") + 1], "critical")
+
+    def test_refuse_existing_container_output_before_inference(self):
+        args = SimpleNamespace(docker_bin="docker", container="havln-cma",
+                               output_dir="/workspace/agent-runs/already-there")
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(returncode=0, stderr="")):
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                require_fresh_container_output(args)
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(returncode=1, stderr="")):
+            require_fresh_container_output(args)
+
+    def test_archive_startup_failure_with_no_habitat_trace(self):
+        root = Path(self.tempdir.name) / "failed-run"
+        codex = root / "codex"
+        codex.mkdir(parents=True)
+        (codex / "codex_events.jsonl").write_text(
+            '{"type":"turn.failed","message":"MCP could not start"}\n')
+        (codex / "codex_stderr.log").write_text("Connection failed")
+        (root / "run_status.json").write_text('{"success":false}\n')
+        archive = root / "diagnostic.zip"
+        pack(root, archive, frames="critical", allow_empty=True)
+        with ZipFile(archive) as zipped:
+            names = set(zipped.namelist())
+            self.assertIn("failed-run/codex/codex_events.jsonl", names)
+            self.assertIn("failed-run/codex/codex_stderr.log", names)
+            self.assertIn("failed-run/run_status.json", names)
+            self.assertIn("failed-run/diagnostic_manifest.json", names)
+
+    def test_critical_archive_includes_every_model_observed_frame(self):
+        root = Path(self.tempdir.name) / "observed-run"
+        agent = CodexEpisode(self.env, camera(), "1", "test", 100, root)
+        agent.step(["TURN_LEFT"] * 10)
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            info, _ = agent.observe()
+        agent.step(["TURN_LEFT"] * 20)
+        agent.finish()
+        archive = root / "diagnostic.zip"
+        pack(root, archive, frames="critical")
+        with ZipFile(archive) as zipped:
+            self.assertIn("observed-run/traces/test-1/observations/" +
+                          info["observation_id"] + ".npz", zipped.namelist())
 
     def test_fresh_codex_command_uses_scoped_mcp_and_no_resume(self):
         args = SimpleNamespace(split=None, phase="phase2",
