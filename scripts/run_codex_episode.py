@@ -51,7 +51,8 @@ def build_command(args, final_message):
     command = [args.codex_bin]
     for override in overrides:
         command.extend(["-c", override])
-    command.extend(["exec", "--skip-git-repo-check",
+    command.extend(["exec", "--ephemeral", "--ignore-user-config",
+                    "--skip-git-repo-check",
                     "--sandbox", "read-only", "--json",
                     "--output-last-message", str(final_message)])
     if args.model:
