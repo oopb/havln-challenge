@@ -537,7 +537,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("People can move between views", PROMPT)
         self.assertIn("keep a safe gap", PROMPT)
         self.assertIn("keep moving when clear", PROMPT)
-        self.assertIn("landmark order", PROMPT)
+        self.assertIn("Follow landmarks in order", PROMPT)
         self.assertIn("exact stopping place", PROMPT)
         self.assertIn("magenta=invalid", PROMPT)
         self.assertIn("next unverified landmark", PROMPT)
