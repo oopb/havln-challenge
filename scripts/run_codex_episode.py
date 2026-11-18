@@ -6,6 +6,8 @@ container. It does not change the cloud/hybrid API agent configuration.
 import argparse
 from datetime import datetime, timezone
 import json
+import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -119,12 +121,39 @@ def summarize_codex_events(path):
     return {"events_by_type": counts, "malformed_events": malformed}
 
 
+def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
+    """Bound one CLI process tree, including its stdio Docker MCP child."""
+    with subprocess.Popen(command, cwd=workdir, stdout=stdout, stderr=stderr,
+                          start_new_session=True) as process:
+        try:
+            return process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            stderr.write("Codex episode exceeded wall-time limit: " +
+                         str(timeout_seconds) + " seconds\n")
+            stderr.flush()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            return 124
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("phase1", "phase2"), default="phase2")
     parser.add_argument("--split", choices=("val_seen", "val_unseen", "test"))
     parser.add_argument("--episode-id", required=True, type=int)
     parser.add_argument("--max-steps", type=int, default=128)
+    parser.add_argument("--timeout-seconds", type=int, default=2400,
+                        help="Max total Codex session wall time; 124 on timeout")
     parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model", default="gpt-6-astra",
@@ -142,6 +171,10 @@ def main():
                         help="Check Codex/Docker/Habitat without model inference or output files")
     args = parser.parse_args()
     if not 1 <= args.max_steps <= 500 or args.episode_id < 1:
+        parser.error("episode-id must be positive and max-steps must be 1..500")
+    if not 1 <= args.timeout_seconds <= 14400:
+        parser.error("timeout-seconds must be 1..14400")
+    if False:
         parser.error("episode-id must be positive and max-steps must be 1..500")
     split = args.split or ("test" if args.phase == "phase2" else "val_seen")
     if (args.phase == "phase2" and split != "test") or (
@@ -173,9 +206,8 @@ def main():
         with (log_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
              (log_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
             try:
-                result = subprocess.run(command, cwd=workdir,
-                                        stdout=stdout, stderr=stderr, check=False)
-                exit_code = result.returncode
+                exit_code = run_codex_cli(
+                    command, workdir, stdout, stderr, args.timeout_seconds)
             except OSError as error:
                 stderr.write("Failed to launch Codex: " + str(error) + "\n")
                 exit_code = 127
@@ -183,6 +215,8 @@ def main():
     trace = args.output_dir.rstrip("/") + "/traces/" + split + "-" + str(args.episode_id)
     run_status = {
         "codex_exit_code": exit_code,
+        "wall_time_limit_seconds": args.timeout_seconds,
+        "timed_out": exit_code == 124,
         "host_log_dir": str(log_dir),
         "container_trace_dir": trace,
         "agent_path": "codex_mcp_v1",
