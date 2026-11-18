@@ -188,10 +188,13 @@ class Hybrid6HandoffTests(unittest.TestCase):
         from havln_agent.scheduler import run
         from test_hybrid_routing import HybridSchedulerTests
         rt=HybridSchedulerTests.FakeRuntime()
-        rt.cloud_decide=lambda feedback:dict(
-            tool='navigate_relative',
-            args=dict(turn_direction='NONE',turn_degrees=0,distance_m=.25),
-            local_handoff=grant(1)['local_handoff'])
+        def cloud_decide(feedback):
+            rt.cloud_calls+=1
+            return dict(
+                tool='navigate_relative',
+                args=dict(turn_direction='NONE',turn_degrees=0,distance_m=.25),
+                local_handoff=grant(1)['local_handoff'])
+        rt.navigation_agent.decide=cloud_decide
         rt.assess=lambda result:setattr(
             rt,'done',len(rt.memory.actions)>=3)
         decisions=[]
