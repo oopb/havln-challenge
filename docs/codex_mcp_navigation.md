@@ -54,7 +54,8 @@ Run on the HOST, not inside havln-cma:
       --output-dir /workspace/agent-runs/codex-p2-episode1 \
       --log-dir ./codex-runs/phase2-episode1-first
 
-This calls a single codex exec with --json, read-only sandbox and an
+This calls a single codex exec with --json, --ephemeral,
+--ignore-user-config, read-only sandbox and an
 ephemeral MCP config. It starts one Habitat server via docker exec -i.
 Do not use docker exec -t: a TTY corrupts the stdio MCP protocol.
 
