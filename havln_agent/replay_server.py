@@ -114,6 +114,13 @@ class EpisodeReplay:
         self.steps = source.lines(episode, 'steps.jsonl')
         self.tools = source.lines(episode, 'tools.jsonl')
         self.events_log = source.lines(episode, 'events.jsonl')
+        # Codex CLI JSON events are a separate, ordered model/tool stream.
+        # Do not fabricate a cross-stream clock with Habitat action events.
+        self.codex = source.lines(episode, 'codex/codex_events.jsonl')
+        self.codex_run_status = source.json(episode, 'codex/run_status.json')
+        prompt = source.trace(episode, 'codex/prompt.txt')
+        self.codex_prompt = (prompt.decode('utf-8', errors='replace')
+                             if prompt is not None else None)
         self.meta = source.json(episode, 'episode.json')
         self.summary = source.json(episode, 'summary.json')
         self.failure = source.json(episode, 'failure.json')
@@ -128,6 +135,11 @@ class EpisodeReplay:
         self.precise_order = bool(self.events)
         if not self.events:
             self.events = self._legacy_events()
+        self.habitat_event_count = len(self.events)
+        # Appended as a clearly separate event group, never asserted to be
+        # interleaved in causal order with Habitat's recorded action sequence.
+        self.events.extend(dict(kind='codex', codex_index=i)
+                           for i in range(len(self.codex)))
         self.events = [dict(sequence=i, **{k: v for k, v in ev.items()
                                            if k != 'sequence'})
                        for i, ev in enumerate(self.events)]
@@ -195,12 +207,28 @@ class EpisodeReplay:
                     row = self.tools[idx]
                     p.update(status=(row.get('result') or {}).get('status'),
                              tool=(row.get('call') or {}).get('tool'))
+            elif kind == 'codex':
+                idx = ev.get('codex_index')
+                if isinstance(idx, int) and 0 <= idx < len(self.codex):
+                    row = self.codex[idx]
+                    item = row.get('item') or {}
+                    if not isinstance(item, dict):
+                        item = {}
+                    p.update(event_type=row.get('type', 'event'),
+                             item_type=item.get('type'),
+                             status=row.get('status'),
+                             item_id=item.get('id'))
             previews.append(p)
         return dict(episode=self.episode, metadata=self.meta,
                     summary=self.summary, failure=self.failure,
                     counts=dict(events=len(previews), api=len(self.api),
-                                actions=len(self.steps), tools=len(self.tools)),
-                    precise_order=self.precise_order, events=previews)
+                                actions=len(self.steps), tools=len(self.tools),
+                                codex=len(self.codex)),
+                    precise_order=self.precise_order,
+                    codex_independent_timeline=bool(self.codex),
+                    codex_prompt=self.codex_prompt,
+                    codex_run_status=self.codex_run_status,
+                    events=previews)
 
     def detail(self, index):
         if not 0 <= index < len(self.events):
@@ -220,6 +248,10 @@ class EpisodeReplay:
             idx = ev.get('tool_index')
             if isinstance(idx, int) and 0 <= idx < len(self.tools):
                 row = self.tools[idx]
+        elif kind == 'codex':
+            idx = ev.get('codex_index')
+            if isinstance(idx, int) and 0 <= idx < len(self.codex):
+                row = self.codex[idx]
         elif kind == 'runtime_event':
             idx = ev.get('event_index')
             if isinstance(idx, int) and 0 <= idx < len(self.events_log):

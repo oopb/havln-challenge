@@ -8,6 +8,9 @@ on:
       - "scripts/havln_mcp_server.py"
       - "scripts/run_codex_episode.py"
       - "tests/test_codex_navigation.py"
+      - "havln_agent/replay_server.py"
+      - "scripts/pack_agent_diagnostics.py"
+      - "replay_ui/**"
       - ".github/workflows/codex-navigation-check.yml"
   workflow_dispatch:
 
@@ -22,6 +25,10 @@ jobs:
       - name: Install lightweight offline dependencies
         run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
       - name: Compile independent Codex path
-        run: python -m compileall -q havln_agent/codex_episode.py havln_agent/codex_mcp.py scripts/havln_mcp_server.py scripts/run_codex_episode.py tests/test_codex_navigation.py
+        run: python -m compileall -q havln_agent/codex_episode.py havln_agent/codex_mcp.py scripts/havln_mcp_server.py scripts/run_codex_episode.py scripts/pack_agent_diagnostics.py havln_agent/replay_server.py tests/test_codex_navigation.py
       - name: Test MCP wire, replay receipts and session isolation
         run: python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
+      - name: Validate existing replay studio compatibility
+        run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
+      - name: Validate replay frontend syntax
+        run: node --check replay_ui/app.js

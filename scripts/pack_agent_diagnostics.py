@@ -84,6 +84,14 @@ def pack(root, destination, frames='critical', interval=25, allow_empty=False):
     catalog={}
     for trace in episodes:
         files.update(trace/name for name in TRACE_NAMES if (trace/name).is_file())
+        # Codex is a separate agent path: preserve the CLI session audit
+        # alongside Habitat receipts without mislabeling it as api.jsonl.
+        # Exact allowlist avoids accidentally archiving credentials or caches.
+        for name in ('prompt.txt', 'command.json', 'codex_events.jsonl',
+                     'codex_stderr.log', 'final_message.txt', 'run_status.json'):
+            event_file = trace / 'codex' / name
+            if event_file.is_file():
+                files.add(event_file)
         # Replay events store canonical-log indices, not duplicate log bodies.
         replay_events = trace / 'replay' / 'events.jsonl'
         if replay_events.is_file():

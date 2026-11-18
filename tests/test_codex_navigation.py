@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,9 @@ import numpy as np
 
 from havln_agent.codex_episode import CodexEpisode
 from havln_agent.codex_mcp import MCPServer
+from havln_agent.replay_server import ReplaySource, EpisodeReplay
+from scripts.pack_agent_diagnostics import pack
+from scripts.run_codex_episode import preflight, summarize_codex_events, run_codex_cli
 from havln_agent.perception import Camera, adapt_observation
 from scripts.run_codex_episode import build_command
 
@@ -126,6 +130,76 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(replies[3]["result"]["isError"], False)
         self.assertEqual(self.env.actions, ["STOP"])
 
+    def test_codex_cli_events_are_viewable_and_archived_without_faking_order(self):
+        self.controller.step(["STOP"])
+        codex_dir = self.controller.directory / "codex"
+        codex_dir.mkdir()
+        events = [{"type": "thread.started", "thread_id": "fresh-session"},
+                  {"type": "item.started", "item": {"type": "mcp_tool_call",
+                   "name": "havln.observe", "id": "call-1"}},
+                  {"type": "item.completed", "item": {"type": "agent_message",
+                   "text": "I see the stairs.", "id": "out-1"}}]
+        with (codex_dir / "codex_events.jsonl").open("w") as handle:
+            for row in events:
+                handle.write(json.dumps(row) + "\n")
+        (codex_dir / "prompt.txt").write_text("One episode, new session.")
+        (codex_dir / "run_status.json").write_text(json.dumps({
+            "codex_exit_code": 0, "export_valid": True}))
+        source = ReplaySource(self.tempdir.name)
+        replay = EpisodeReplay(source, "test-1")
+        overview = replay.overview()
+        self.assertTrue(overview["codex_independent_timeline"])
+        self.assertEqual(overview["counts"]["codex"], 3)
+        self.assertEqual(overview["codex_prompt"], "One episode, new session.")
+        self.assertEqual(overview["codex_run_status"]["codex_exit_code"], 0)
+        self.assertEqual(overview["events"][-1]["kind"], "codex")
+        self.assertEqual(replay.detail(len(overview["events"])-1)["record"], events[-1])
+
+        archive = Path(self.tempdir.name) / "replay.zip"
+        pack(self.tempdir.name, archive, frames="all")
+        zipped = ReplaySource(archive)
+        zipped_view = EpisodeReplay(zipped, "test-1")
+        self.assertEqual(zipped_view.overview()["counts"]["codex"], 3)
+        self.assertEqual(zipped_view.frame("obs_000000")[:8],
+                         bytes([137, 80, 78, 71, 13, 10, 26, 10]))
+        zipped.zip.close()
+
+    def test_codex_event_summary_and_read_only_preflight(self):
+        events = Path(self.tempdir.name) / "events.jsonl"
+        events.write_text('{"type":"thread.started"}\n'
+                          '{"type":"turn.completed"}\n'
+                          '{"type":"turn.completed"}\n'
+                          'not-json\n')
+        summary = summarize_codex_events(events)
+        self.assertEqual(summary["events_by_type"]["turn.completed"], 2)
+        self.assertEqual(summary["malformed_events"], 1)
+        args = SimpleNamespace(codex_bin="codex", docker_bin="docker",
+                               container="havln-cma", episode_id=1)
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(returncode=0,
+                      stdout="ready", stderr="")) as run:
+            self.assertEqual(preflight(args, "test"), 0)
+            self.assertEqual(run.call_count, 5)
+
+    def test_codex_wall_time_limit_terminates_stalled_process(self):
+        output = Path(self.tempdir.name) / "stdout.log"
+        errors = Path(self.tempdir.name) / "stderr.log"
+        with output.open("w") as out, errors.open("w") as err:
+            status = run_codex_cli(
+                [sys.executable, "-c", "import time;time.sleep(20)"],
+                self.tempdir.name, out, err, 0.2)
+        self.assertEqual(status, 124)
+        self.assertIn("exceeded wall-time limit", errors.read_text())
+
+    def test_habitat_execution_exception_is_terminal_and_not_exported(self):
+        with patch.object(self.env, "step", side_effect=RuntimeError("sim failure")):
+            result = self.controller.step(["MOVE_FORWARD"])
+        self.assertEqual(result["status"], "TOOL_ERROR")
+        self.assertTrue(result["done"])
+        self.assertEqual(result["reason"], "habitat_action_exception")
+        self.assertFalse((self.controller.directory / "result.json").exists())
+        self.assertTrue((self.controller.directory / "failure.json").exists())
+
     def test_fresh_codex_command_uses_scoped_mcp_and_no_resume(self):
         args = SimpleNamespace(split=None, phase="phase2",
                                docker_bin="docker", container="havln-cma",
@@ -139,6 +213,8 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("--json", cmd)
         self.assertIn("--ephemeral", cmd)
         self.assertIn("--ignore-user-config", cmd)
+        self.assertIn('mcp_servers.havln.enabled_tools=["observe","step"]',
+                      cmd)
         args_override = next(cmd[i + 1] for i, word in enumerate(cmd)
                              if word == "-c" and cmd[i + 1].startswith(
                                  "mcp_servers.havln.args="))

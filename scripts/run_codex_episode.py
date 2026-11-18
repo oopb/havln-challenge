@@ -6,6 +6,8 @@ container. It does not change the cloud/hybrid API agent configuration.
 import argparse
 from datetime import datetime, timezone
 import json
+import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -44,6 +46,9 @@ def build_command(args, final_message):
         'mcp_servers.havln.command=' + json.dumps(server_args[0]),
         'mcp_servers.havln.args=' + json.dumps(server_args[1:]),
         'mcp_servers.havln.required=true',
+        'mcp_servers.havln.enabled_tools=["observe","step"]',
+        'mcp_servers.havln.default_tools_approval_mode="approve"',
+        'mcp_servers.havln.supports_parallel_tool_calls=false',
         'mcp_servers.havln.startup_timeout_sec=180',
         'mcp_servers.havln.tool_timeout_sec=180',
         'model_reasoning_effort=' + json.dumps(args.reasoning_effort),
@@ -61,12 +66,94 @@ def build_command(args, final_message):
     return command
 
 
+def preflight(args, split):
+    """Read-only host/container checks; never start a Codex inference session."""
+    probes = [
+        ("Codex CLI", [args.codex_bin, "--version"]),
+        ("Codex authentication", [args.codex_bin, "login", "status"]),
+        ("Docker access", [args.docker_bin, "exec", args.container,
+                           "test", "-f", "/toolkit/scripts/havln_mcp_server.py"]),
+        ("Habitat 0.1.7", [args.docker_bin, "exec", args.container, "python",
+                           "-c", "import habitat, habitat_sim; assert habitat.__version__ == habitat_sim.__version__ == '0.1.7'"]),
+        ("Episode dataset ID", [args.docker_bin, "exec", args.container,
+                                "python", "-c",
+                                ("import gzip, json, sys; "
+                                 "path='/data/havln2/HA-R2R/'+sys.argv[1]+'/'+sys.argv[1]+'.json.gz'; "
+                                 "data=json.load(gzip.open(path,'rt')); "
+                                 "assert any(str(e['episode_id'])==sys.argv[2] "
+                                 "for e in data['episodes']), 'episode missing from dataset'"),
+                                split, str(args.episode_id)]),
+    ]
+    ok = True
+    for title, command in probes:
+        try:
+            completed = subprocess.run(command, capture_output=True,
+                                       text=True, timeout=45, check=False)
+            passed = completed.returncode == 0
+            note = (completed.stdout or completed.stderr).strip()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            passed, note = False, str(error)
+        print(("PASS " if passed else "FAIL ") + title +
+              (": " + note[:500] if note else ""))
+        ok = ok and passed
+    return 0 if ok else 2
+
+
+def summarize_codex_events(path):
+    """Count events without assuming a fixed Codex JSON event protocol."""
+    counts = {}
+    malformed = 0
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    malformed += 1
+                    continue
+                kind = event.get("type", "UNKNOWN")
+                if not isinstance(kind, str):
+                    kind = "UNKNOWN"
+                counts[kind] = counts.get(kind, 0) + 1
+            except ValueError:
+                malformed += 1
+    return {"events_by_type": counts, "malformed_events": malformed}
+
+
+def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
+    """Bound one CLI process tree, including its stdio Docker MCP child."""
+    with subprocess.Popen(command, cwd=workdir, stdout=stdout, stderr=stderr,
+                          start_new_session=True) as process:
+        try:
+            return process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            stderr.write("Codex episode exceeded wall-time limit: " +
+                         str(timeout_seconds) + " seconds\n")
+            stderr.flush()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            return 124
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("phase1", "phase2"), default="phase2")
     parser.add_argument("--split", choices=("val_seen", "val_unseen", "test"))
     parser.add_argument("--episode-id", required=True, type=int)
     parser.add_argument("--max-steps", type=int, default=128)
+    parser.add_argument("--timeout-seconds", type=int, default=2400,
+                        help="Max total Codex session wall time; 124 on timeout")
     parser.add_argument("--gpu-id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model", default="gpt-6-astra",
@@ -80,15 +167,21 @@ def main():
                         help="Absolute CONTAINER path; one fresh run root")
     parser.add_argument("--log-dir", type=Path,
                         help="Host directory for CLI events, prompt and stderr")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Check Codex/Docker/Habitat without model inference or output files")
     args = parser.parse_args()
     if not 1 <= args.max_steps <= 500 or args.episode_id < 1:
         parser.error("episode-id must be positive and max-steps must be 1..500")
+    if not 1 <= args.timeout_seconds <= 14400:
+        parser.error("timeout-seconds must be 1..14400")
     split = args.split or ("test" if args.phase == "phase2" else "val_seen")
     if (args.phase == "phase2" and split != "test") or (
             args.phase == "phase1" and split == "test"):
         parser.error("phase2 requires test; phase1 requires val_seen/val_unseen")
     if not Path(args.output_dir).is_absolute():
         parser.error("--output-dir must be an absolute container path")
+    if args.preflight:
+        return preflight(args, split)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_dir = args.log_dir or (Path("codex-runs") /
@@ -111,40 +204,81 @@ def main():
         with (log_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
              (log_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
             try:
-                result = subprocess.run(command, cwd=workdir,
-                                        stdout=stdout, stderr=stderr, check=False)
-                exit_code = result.returncode
+                exit_code = run_codex_cli(
+                    command, workdir, stdout, stderr, args.timeout_seconds)
             except OSError as error:
                 stderr.write("Failed to launch Codex: " + str(error) + "\n")
                 exit_code = 127
 
     trace = args.output_dir.rstrip("/") + "/traces/" + split + "-" + str(args.episode_id)
-    exists = subprocess.run([args.docker_bin, "exec", args.container,
-                             "test", "-d", trace], check=False)
-    if exists.returncode == 0:
-        subprocess.run([args.docker_bin, "exec", args.container, "mkdir", "-p",
-                        trace + "/codex"], check=True)
-        for name in ("prompt.txt", "command.json", "codex_events.jsonl",
-                     "codex_stderr.log", "final_message.txt"):
-            path = log_dir / name
-            if path.exists():
-                subprocess.run([args.docker_bin, "cp", str(path),
-                                args.container + ":" + trace + "/codex/" + name],
-                               check=True)
-        status = subprocess.run(
-            [args.docker_bin, "exec", args.container, "cat", trace + "/summary.json"],
-            check=False, text=True, capture_output=True)
-        if status.returncode == 0:
-            summary = json.loads(status.stdout)
-            print("Habitat episode:", summary["stop_reason"],
-                  "| actions:", summary["steps"],
-                  "| valid action export:", summary["completed"])
-            print("Container trace:", trace)
-            print("Host Codex log:", log_dir)
-            return 0 if exit_code == 0 and summary["completed"] else 2
-    print("Codex exit code:", exit_code, "| logs:", log_dir,
-          "| Habitat trace not finalized", file=sys.stderr)
-    return 2
+    run_status = {
+        "codex_exit_code": exit_code,
+        "wall_time_limit_seconds": args.timeout_seconds,
+        "timed_out": exit_code == 124,
+        "host_log_dir": str(log_dir),
+        "container_trace_dir": trace,
+        "agent_path": "codex_mcp_v1",
+        "codex_events": summarize_codex_events(log_dir / "codex_events.jsonl"),
+        "habitat_summary": None,
+        "export_valid": False,
+    }
+    try:
+        exists = subprocess.run(
+            [args.docker_bin, "exec", args.container, "test", "-d", trace],
+            check=False, capture_output=True)
+        if exists.returncode == 0:
+            result = subprocess.run(
+                [args.docker_bin, "exec", args.container,
+                 "cat", trace + "/summary.json"],
+                check=False, text=True, capture_output=True)
+            if result.returncode == 0:
+                run_status["habitat_summary"] = json.loads(result.stdout)
+                run_status["export_valid"] = bool(
+                    run_status["habitat_summary"].get("completed"))
+            else:
+                run_status["collection_warning"] = "No finalized Habitat summary"
+        else:
+            run_status["collection_warning"] = "No Habitat trace directory"
+    except (OSError, ValueError) as error:
+        run_status["collection_warning"] = str(error)
+
+    # Always persist host evidence before attempting Docker copies. A failed
+    # docker cp must not erase or conceal the original Codex error.
+    run_status["success"] = bool(
+        exit_code == 0 and run_status["export_valid"])
+    (log_dir / "run_status.json").write_text(
+        json.dumps(run_status, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    if run_status["habitat_summary"] is not None:
+        try:
+            subprocess.run(
+                [args.docker_bin, "exec", args.container,
+                 "mkdir", "-p", trace + "/codex"], check=True)
+            for name in ("prompt.txt", "command.json", "codex_events.jsonl",
+                         "codex_stderr.log", "final_message.txt",
+                         "run_status.json"):
+                file = log_dir / name
+                if file.exists():
+                    subprocess.run(
+                        [args.docker_bin, "cp", str(file),
+                         args.container + ":" + trace + "/codex/" + name],
+                        check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print("Could not copy Codex session audit into container: " +
+                  str(error), file=sys.stderr)
+            return 2
+
+    summary = run_status["habitat_summary"]
+    if summary:
+        print("Habitat episode:", summary["stop_reason"],
+              "| actions:", summary["steps"],
+              "| legal action export:", summary["completed"])
+        print("Container trace:", trace)
+    else:
+        print("Habitat trace not finalized; inspect host log and stderr.",
+              file=sys.stderr)
+    print("Codex exit code:", exit_code, "| host logs:", log_dir)
+    return 0 if run_status["success"] else 2
 
 
 if __name__ == "__main__":

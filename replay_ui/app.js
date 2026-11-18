@@ -66,6 +66,10 @@ function setImage(el, placeholder, url, alt) {
   else { el.classList.remove('hidden'); el.src = url; }
 }
 function label(ev) {
+  if (ev.kind === 'codex') {
+    return 'Codex · ' + (ev.event_type || 'event') +
+      (ev.item_type ? ' · ' + ev.item_type : '');
+  }
   if (ev.kind === 'api') return (ev.role === 'visual_perception' ? 'ObservationAgent' :
     ev.role === 'navigation_agent' ? 'NavigationAgent' :
     ev.role === 'local_control' ? 'LocalController' : (ev.role || 'Model')) +
@@ -77,6 +81,7 @@ function label(ev) {
   return ev.kind || '事件';
 }
 function badgeText(ev) {
+  if (ev.kind === 'codex') return 'CODEX';
   if (ev.kind === 'api') return ev.cache_hit ? '缓存' :
     ev.success === false ? '失败' : ev.role === 'navigation_agent' ? 'NAV' : 'VLM';
   if (ev.kind === 'action') return 'ACTION';
@@ -84,7 +89,9 @@ function badgeText(ev) {
   return 'EVENT';
 }
 function isIssue(ev) {
-  return (ev.kind === 'api' && ev.success === false) ||
+  return (ev.kind === 'codex' &&
+      /failed|error|cancelled/i.test(ev.event_type || ev.status || '')) ||
+    (ev.kind === 'api' && ev.success === false) ||
     (ev.kind === 'tool' && /(BLOCKED|PARTIAL|ERROR|ATTENTION|INVALID|UNAVAILABLE)/.test(ev.status || '')) ||
     (ev.kind === 'runtime_event' && /error|budget|failure|liveness/i.test(ev.name || ''));
 }
@@ -95,6 +102,7 @@ function filterItems() {
   const events = state.data.events;
   state.filtered = events.filter(ev => {
     if (mode === 'api' && ev.kind !== 'api') return false;
+    if (mode === 'codex' && ev.kind !== 'codex') return false;
     if (mode === 'action' && ev.kind !== 'action') return false;
     if (mode === 'issues' && !isIssue(ev)) return false;
     if (q && !(label(ev)+' '+JSON.stringify(ev)).toLowerCase().includes(q)) return false;
@@ -158,8 +166,10 @@ async function selectIndex(index) {
   });
   const active = document.querySelector('.timeline-entry.selected');
   if (active) active.scrollIntoView({block:'nearest'});
-  let frame = ev.observation_id;
-  if (!frame) {
+  // Codex CLI events form a separate stream, without a trustworthy
+  // per-event RGB alignment. Never display an unrelated prior frame.
+  let frame = ev.kind === 'codex' ? null : ev.observation_id;
+  if (!frame && ev.kind !== 'codex') {
     for (let i=index-1; i>=0; i--) {
       if (state.data.events[i].observation_id) {
         frame = state.data.events[i].observation_id; break;
@@ -292,9 +302,23 @@ function renderDetail(detail) {
   media.forEach((ref, i) => gallery.append(mediaCard(ref,i)));
   $('mediaNote').textContent = ev.kind === 'api' ?
     (row.replay ? media.length + ' 张当前图片，历史图片见输入' :
-    '历史日志未记录完整发送图片') : '仅 API 请求会显示实际模型图片';
+    '历史日志未记录完整发送图片') :
+    ev.kind === 'codex' ? 'Codex 事件与 Habitat 画面未逐项对齐；请切换动作或工具查看真实帧' :
+    '仅 API 请求会显示实际模型图片';
   const output = $('executionSummary');
-  if (ev.kind === 'api') {
+  if (ev.kind === 'codex') {
+    output.textContent = 'Codex CLI · ' + (row.type || 'event') +
+      '（独立会话事件，不代表导航成功）';
+    $('poseStrip').textContent = 'Codex 独立日志 · 与 Habitat 原子动作未逐项对齐';
+    if (state.tab === 'input') {
+      if (state.data.codex_prompt) body.append(section('Codex 初始 Prompt', state.data.codex_prompt, true));
+      body.append(section('本次 CLI 事件', {type: row.type, item: row.item || null}, true));
+    } else if (state.tab === 'output') {
+      body.append(section('Codex 模型 / 工具事件', row, true));
+    } else {
+      body.append(section('codex_events.jsonl · 原始记录', row, true));
+    }
+  } else if (ev.kind === 'api') {
     output.textContent = (row.success ? '模型请求成功' : '模型请求失败') +
       ' · ' + (row.model || '') +
       (row.error ? ' · '+row.error : '') +
@@ -417,8 +441,17 @@ async function loadEpisode(id) {
     $('totalApis').textContent = 'API '+state.data.counts.api;
     $('totalTools').textContent = '工具 '+state.data.counts.tools;
     $('stopReason').textContent = '结束 '+(sum.finish_reason || sum.stop_reason || state.data.failure?.error_type || '未知');
-    $('orderBadge').textContent = state.data.precise_order ? '精确因果时间线' : '旧日志 · 近似顺序';
-    $('orderBadge').classList.toggle('warning', !state.data.precise_order);
+    $('orderBadge').textContent = state.data.codex_independent_timeline ?
+      'Habitat / Codex 独立事件流' :
+      state.data.precise_order ? '精确因果时间线' : '旧日志 · 近似顺序';
+    $('orderBadge').classList.toggle('warning',
+      !state.data.precise_order || state.data.codex_independent_timeline);
+    // The original "模型调用" view contains API calls only. Codex runs
+    // have an independent model/tool event stream instead.
+    if (state.data.codex_independent_timeline && !state.data.counts.api)
+      $('modeSelect').value = 'codex';
+    else if (!state.data.codex_independent_timeline && $('modeSelect').value === 'codex')
+      $('modeSelect').value = 'api';
     filterItems();
   } catch(e) { message('无法读取 Episode：'+e.message, true); }
 }
