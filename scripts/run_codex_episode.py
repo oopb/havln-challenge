@@ -14,6 +14,11 @@ import subprocess
 import sys
 import tempfile
 
+# Executing this script by path does not always place the checkout root on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from havln_agent.codex_usage import (compare_rate_limits, read_rate_limits,
+                                     summarize_token_usage)
+
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
@@ -283,6 +288,8 @@ def main():
                    indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     try:
+        # Read-only quota queries are best-effort and never gate model execution.
+        quota_before = read_rate_limits(args.codex_bin)
         with tempfile.TemporaryDirectory(prefix="havln-codex-session-") as workdir:
             with (staged_dir / "codex_events.jsonl").open("w", encoding="utf-8") as stdout, \
                  (staged_dir / "codex_stderr.log").open("w", encoding="utf-8") as stderr:
@@ -293,8 +300,32 @@ def main():
                     stderr.write("Failed to launch Codex: " + str(error) + "\n")
                     exit_code = 127
 
+        quota_after = read_rate_limits(args.codex_bin)
+        tokens = summarize_token_usage(staged_dir / "codex_events.jsonl")
+        # Interrupted or failed sessions may have consumed additional tokens
+        # without a turn.completed usage receipt. Do not claim full coverage.
+        if exit_code != 0 and tokens["status"] == "complete":
+            tokens["status"] = "partial"
+        usage = {
+            "schema_version": 1,
+            "episode_id": str(args.episode_id),
+            "phase": args.phase,
+            "split": split,
+            "codex_exit_code": exit_code,
+            "tokens": tokens,
+            "quota": {
+                "before": quota_before,
+                "after": quota_after,
+                "delta": compare_rate_limits(quota_before, quota_after),
+            },
+        }
+        (staged_dir / "codex_usage.json").write_text(
+            json.dumps(usage, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8")
+
         trace_exists, summary, warning = collect_habitat_summary(args, trace)
         run_status = {
+            "codex_usage_file": "codex/codex_usage.json",
             "agent_path": "codex_mcp_v1",
             "codex_exit_code": exit_code,
             "wall_time_limit_seconds": args.timeout_seconds,
@@ -345,6 +376,24 @@ def main():
         print("Diagnostic ZIP:", archive,
               "(frames=" + args.archive_frames + ")")
         print("Codex exit code:", exit_code)
+        print("Codex token usage:", tokens["status"],
+              "| input:", tokens["input_tokens"],
+              "| cached:", tokens["cached_input_tokens"],
+              "| output:", tokens["output_tokens"],
+              "| total:", tokens["total_tokens"])
+        delta = usage["quota"]["delta"]
+        for limit_id, windows in delta["by_limit"].items():
+            for role, window in windows.items():
+                span = window["window_duration_minutes"]
+                name = ("5h" if span == 300 else
+                        "weekly" if span == 10080 else
+                        str(span) + "min")
+                print("Codex quota:", limit_id, name, role,
+                      "| consumed:", (str(window["consumed_percentage_points"]) + " pp"
+                                      if window["status"] == "comparable"
+                                      else "not comparable"))
+        if not delta["by_limit"]:
+            print("Codex quota: unavailable (see codex_usage.json)")
         return 0 if run_status["success"] else 2
     finally:
         # If an unexpected error occurs before collection, do not silently
