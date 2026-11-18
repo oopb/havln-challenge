@@ -21,7 +21,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from havln_agent.codex_batch import select_ids
-from havln_agent.codex_usage import compare_rate_limits, read_rate_limits
+from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary,
+                                     read_rate_limits)
 from scripts.run_codex_episode import archive_codex_run
 
 HERE = Path(__file__).resolve().parent
@@ -330,6 +331,8 @@ def main(argv=None):
                   summary["episode_count"], "valid action exports")
             print("Codex total tokens:", summary["tokens"]["total_tokens"],
                   "| status:", summary["tokens"]["status"])
+        for line in format_quota_summary(quota):
+            print(line)
         return 0 if summary and summary["success"] and (
             args.no_auto_archive or archive) else 2
 
