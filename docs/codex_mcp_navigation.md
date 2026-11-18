@@ -106,6 +106,7 @@ its timestamped, collision-resistant, atomic ZIP naming convention.
             ├── prompt.txt
             ├── command.json
             ├── codex_events.jsonl  # Codex session model/tool events
+            ├── codex_usage.json    # Token totals + quota snapshots
             ├── codex_stderr.log
             ├── final_message.txt
             └── run_status.json
@@ -196,11 +197,42 @@ For earlier critical-only archives, missing frames cannot be recovered from
 the ZIP itself. Repackage from the original uncompressed run directory with
 `--frames all` if it still exists.
 
+## Codex usage accounting (per single-episode run)
+
+Each `run_codex_episode.py` invocation automatically saves
+`traces/<split>-<episode>/codex/codex_usage.json` (or
+`output-dir/codex/codex_usage.json` if Habitat never started). It is
+included in the standard sibling diagnostic ZIP and shown in Replay Studio.
+
+- `tokens`: actual `turn.completed.usage` counters from
+  `codex exec --json`; input already includes cached input, so
+  `total_tokens = input_tokens + output_tokens`. Reasoning tokens, when
+  reported, are a subset of output. Codex does not expose per-MCP-tool-call
+  token bills; `mcp_tool_calls_completed` is a tool event count only.
+- `quota.before` / `quota.after`: optional account-wide read-only
+  `account/rateLimits/read` snapshots from `codex app-server`.
+  These requests do **not** create inference turns. Each query has a
+  bounded timeout and is non-fatal when unavailable.
+- `quota.delta`: changes in *percentage points* per returned quota
+  window. Comparisons require the same limit ID, window duration, and
+  reset timestamp, and cannot claim an exact task quota charge: other
+  simultaneous Codex usage affects the same account.
+- `unavailable`, `partial`, or `not_comparable` mean unknown,
+  **not zero consumption**. Missing 5-hour windows are not fabricated
+  if the account reports only weekly limits.
+- On interruption or startup failure, reported Token counters are
+  retained where available. In-flight work may be unreported, so
+  the Token status is marked partial or unavailable.
+
+To inspect an archived result, open Replay Studio or read
+`codex_usage.json` directly; no additional CLI flags are needed.
+
 ## Offline tests
 
 Without Docker, Codex login or Habitat:
 
     python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
+    python -m unittest discover -s tests -p 'test_codex_usage.py' -v
 
 These tests exercise MCP initialization/tools, real PNG wire content,
 atomic action ordering, budget STOP, failed input handling, the
