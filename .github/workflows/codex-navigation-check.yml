@@ -1,0 +1,27 @@
+name: Codex MCP navigation smoke contracts
+
+on:
+  pull_request:
+    paths:
+      - "havln_agent/codex_episode.py"
+      - "havln_agent/codex_mcp.py"
+      - "scripts/havln_mcp_server.py"
+      - "scripts/run_codex_episode.py"
+      - "tests/test_codex_navigation.py"
+      - ".github/workflows/codex-navigation-check.yml"
+  workflow_dispatch:
+
+jobs:
+  codex-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install lightweight offline dependencies
+        run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
+      - name: Compile independent Codex path
+        run: python -m compileall -q havln_agent/codex_episode.py havln_agent/codex_mcp.py scripts/havln_mcp_server.py scripts/run_codex_episode.py tests/test_codex_navigation.py
+      - name: Test MCP wire, replay receipts and session isolation
+        run: python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
