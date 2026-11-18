@@ -128,9 +128,12 @@ def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
                           start_new_session=True) as process:
         try:
             return process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            stderr.write("Codex episode exceeded wall-time limit: " +
-                         str(timeout_seconds) + " seconds\n")
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+            interrupted = isinstance(error, KeyboardInterrupt)
+            reason = ("interrupted by user" if interrupted else
+                      "exceeded wall-time limit: " + str(timeout_seconds) +
+                      " seconds")
+            stderr.write("Codex episode " + reason + "\n")
             stderr.flush()
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -144,7 +147,7 @@ def run_codex_cli(command, workdir, stdout, stderr, timeout_seconds):
                 except ProcessLookupError:
                     pass
                 process.wait()
-            return 124
+            return 130 if interrupted else 124
 
 
 def require_fresh_container_output(args):
