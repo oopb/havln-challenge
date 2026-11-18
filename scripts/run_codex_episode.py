@@ -174,8 +174,6 @@ def main():
         parser.error("episode-id must be positive and max-steps must be 1..500")
     if not 1 <= args.timeout_seconds <= 14400:
         parser.error("timeout-seconds must be 1..14400")
-    if False:
-        parser.error("episode-id must be positive and max-steps must be 1..500")
     split = args.split or ("test" if args.phase == "phase2" else "val_seen")
     if (args.phase == "phase2" and split != "test") or (
             args.phase == "phase1" and split == "test"):
