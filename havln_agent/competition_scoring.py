@@ -59,7 +59,12 @@ def _aggregate_metrics(item):
     """Only consume explicit scoring metrics; never infer from trace statistics."""
     if not isinstance(item, dict):
         return None
-    raw = item.get('metrics') if isinstance(item.get('metrics'), dict) else item
+    # The default Habitat collector published calculated_metrics while the
+    # original Replay importer expected metrics. Accept both schemas without
+    # mistaking diagnostic component averages for a complete official Score.
+    raw = (item.get('metrics') if isinstance(item.get('metrics'), dict)
+           else item.get('calculated_metrics') if isinstance(
+               item.get('calculated_metrics'), dict) else item)
     if not all(k in raw for k in METRIC_KEYS):
         return None
     return official_formula(*(raw[k] for k in METRIC_KEYS))
@@ -174,6 +179,23 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
     if not isinstance(report, dict):
         return base
     try:
+        # Raw measured fields are useful even when hidden test goals or collision
+        # reference allowances make the composite Score impossible.
+        components = report.get('components') if isinstance(
+            report.get('components'), dict) else {}
+        observed_rows = report.get('observed_episodes')
+        if not isinstance(observed_rows, list):
+            observed_rows = []
+        observed = {str(row['episode_id']): row for row in observed_rows
+                    if isinstance(row, dict) and str(row.get('episode_id','')) in ids}
+        base.update(
+            components=components,
+            observed_episodes=observed,
+            captured_complete=report.get('captured_complete', 0),
+            fully_scored_episodes=report.get('fully_scored_episodes', 0),
+            requested_episodes=report.get('requested_episodes'),
+            capture_source=report.get('source', 'simulator_metric_capture'),
+            missing_or_partial=report.get('missing_or_partial', [])[:12])
         per_episode = {}
         episode_metrics = None
         cr_scope = None
@@ -184,8 +206,13 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
         provided_metrics = _aggregate_metrics(report)
         chosen = provided_metrics or episode_metrics
         if chosen is None:
+            base['status'] = ('partial_metrics' if components or observed else 'missing_metrics')
             base['limitations'] = [
-                'Import complete SR/NE/CR/TCR or evaluated episode records.']
+                'Real Habitat measurements are available, but a composite Score '
+                'requires goal distance, navigation success, and reference-adjusted '
+                'collisions for the evaluated episodes.' if base['status']=='partial_metrics'
+                else 'No captured simulator evaluation exists for this run. '
+                     'Old traces cannot recover true evaluation from images or actions.']
             return base
         result = dict(base, status='scored', metrics={k: chosen[k] for k in METRIC_KEYS},
                       score=chosen['score'], navigation=chosen['navigation'],
@@ -196,8 +223,11 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
                       collision_normalization=cr_scope,
                       limitations=[])
         if provided_metrics:
-            result['limitations'].append(
-                'Imported aggregate: sample size cannot be verified from four metrics alone.')
+            if report.get('fully_scored_episodes') is not None:
+                result['evaluated_episodes'] = int(report['fully_scored_episodes'])
+            else:
+                result['limitations'].append(
+                    'Imported aggregate: sample size cannot be verified from four metrics alone.')
             if result['evaluated_episodes'] and result['evaluated_episodes'] != expected:
                 result['limitations'].append(
                     'Episode-level evidence covers only %d/%d; it does not define the imported aggregate.'
@@ -206,9 +236,14 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
             result['limitations'].append(
                 'Only %d/%d episodes evaluated: exploratory subset, not leaderboard.'
                 % (result['evaluated_episodes'], expected))
-        if not provided_metrics and len(per_episode) != len(ids):
+        if result['evaluated_episodes'] != len(ids):
             result['limitations'].append(
-                'Not all run episodes have independently evaluated metrics.')
+                'Only %d/%d selected run episodes have a complete independent Score; '
+                'displayed Score is a diagnostic subset, not a run-wide estimate.'
+                % (result['evaluated_episodes'], len(ids)))
+        if report.get('scope') == 'diagnostic_subset_or_missing_truth':
+            result['limitations'].append(
+                'Some recorded episodes are missing required scoring truth.')
         result['limitations'].append(
             'Local reconstruction; only the CodaBench scorer determines official ranking.')
         return result
