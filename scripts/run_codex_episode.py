@@ -24,7 +24,7 @@ PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
 Observe returns RGB; Depth appears for a near obstacle or after a detected forward stall. Depth is evidence, never clearance authorization.
 Navigate using visual evidence and the six permitted actions. On open paths, use longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain passages use short movements with fresh observations.
-step may report NO_VISUAL_PROGRESS (verified stall) or MOTION_UNCERTAIN (repeated weak motion). These interrupt only the remaining batch, not the episode. Re-observe and reconsider direction; never retry the same failed approach without new evidence.
+step may report NO_VISUAL_PROGRESS (verified stall), MOTION_UNCERTAIN (repeated weak motion), or MOTION_MONITOR_ERROR (the forward step WAS executed, but the local monitor failed). These skip remaining batch actions; use the executed receipt, re-observe, and decide the next move. Never retry the same failed approach without new evidence.
 When searching, turn in short batches and observe. If motion_hint reports REPEATED_SCAN, compare the supplied historical views and their angles relative to your CURRENT heading; revisit a promising opening rather than circling again. Do not force forward into unsafe space.
 observe pitch_deg is commanded tilt from the initial forward view (negative=down). For uncertain near-foot clearance, LOOK_DOWN then observe; restore pitch near zero with LOOK_UP before forward motion. Avoid repeated floor-only inspections without new evidence.
 Follow landmarks in order: interpret left/right at the place specified in the route, not at a later exploratory viewpoint.
