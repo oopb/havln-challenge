@@ -14,7 +14,8 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .codex_motion import ForwardMotion, RESAMPLING, assess_forward_motion
+from .codex_motion import ForwardMotion, assess_forward_motion
+from .pillow_compat import RESAMPLING
 
 from .habitat_adapter import read_current_observation
 from .perception import Geometry, adapt_observation, depth_image_url
