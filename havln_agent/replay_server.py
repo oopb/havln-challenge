@@ -485,12 +485,50 @@ def _load_scoring_report(source, metrics_path=None):
     return report, source_name
 
 
+def _capture_only_scoring_report(source, episodes):
+    """Read-only fallback for older ZIPs lacking a root score_metrics.json.
+
+    Only the dedicated simulator capture produced outside the agent prompt
+    can supply this evidence; generic action/STOP/model summaries cannot.
+    """
+    grouped = {}
+    for episode in episodes:
+        split = _split_for_episode(episode)
+        if split is None:
+            continue
+        row = source.json(episode, 'simulator_metrics.json')
+        ident = episode[len(split) + 1:]
+        if (row.get('capture') != 'live_habitat_measurements'
+                or row.get('episode_id') != ident
+                or row.get('split') != split):
+            continue
+        grouped.setdefault(split, []).append(row)
+    if not grouped:
+        return None
+    return dict(
+        source='actual_live_habitat_measurements',
+        official=False,
+        note='Read-only fallback from per-episode real Habitat captures.',
+        splits={split: dict(
+            requested_episodes=len([ep for ep in episodes
+                                    if _split_for_episode(ep) == split]),
+            captured_complete=sum(row.get('complete') is True for row in rows),
+            observed_episodes=rows,
+            episodes=[],
+        ) for split, rows in grouped.items()},
+    )
+
+
 def serve(source_path, host='127.0.0.1', port=8765, metrics_path=None):
     source = ReplaySource(source_path)
     episodes = source.episodes()
     if not episodes:
         raise ValueError('No episode traces found')
     report, source_name = _load_scoring_report(source, metrics_path)
+    if report is None:
+        report = _capture_only_scoring_report(source, episodes)
+        if report is not None:
+            source_name = 'per-episode Habitat captures (read-only)'
     grouped = {}
     for episode_id in episodes:
         split = _split_for_episode(episode_id)
