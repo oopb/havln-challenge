@@ -24,8 +24,9 @@ TOOLS = [
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
             "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
-            "shared episode budget. Verified stalled or ambiguous forward movement can stop "
-            "the remaining batch; inspect the feedback before trying again."
+            "shared episode budget. Verified stalls, weak motion or a motion monitor "
+            "error can interrupt a batch AFTER an action executes; inspect "
+            "the exact executed list and feedback before continuing."
         ),
         "inputSchema": {
             "type": "object",
