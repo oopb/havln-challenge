@@ -440,7 +440,7 @@ class CodexEpisodeTests(unittest.TestCase):
                 agent.observe()
         agent.step(["TURN_LEFT"] * 3)
         with patch("havln_agent.codex_episode._scan_comparison",
-                   side_effect=AttributeError("old pillow codec")), \\
+                   side_effect=AttributeError("old pillow codec")), \
              patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
