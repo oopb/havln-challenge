@@ -28,7 +28,7 @@ step may report NO_VISUAL_PROGRESS (verified stall) or MOTION_UNCERTAIN (repeate
 When searching, turn in short batches and observe. If motion_hint reports REPEATED_SCAN, compare the supplied historical views and their angles relative to your CURRENT heading; revisit a promising opening rather than circling again. Do not force forward into unsafe space.
 observe pitch_deg is commanded tilt from the initial forward view (negative=down). For uncertain near-foot clearance, LOOK_DOWN then observe; restore pitch near zero with LOOK_UP before forward motion. Avoid repeated floor-only inspections without new evidence.
 Follow landmarks in order: interpret left/right at the place specified in the route, not at a later exploratory viewpoint.
-People may move between views: keep a safe gap, avoid their immediate path, and use stable surroundings to identify locations.
+People can move between views: keep a safe gap, avoid their immediate path, and use stable surroundings to identify locations.
 Near a final landmark use short movements; when the requested stopping place is visibly confirmed, STOP rather than moving solely to improve image alignment.
 If Depth appears: dark=near, bright=far, magenta=invalid. Its distance and orientation may be outdated after turning.
 When the goal has been reached, execute STOP using step.
