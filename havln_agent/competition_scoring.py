@@ -183,7 +183,15 @@ def _reports(data):
     if not isinstance(data, dict):
         raise ValueError('Metrics report must be a JSON object')
     if isinstance(data.get('splits'), dict):
-        reports = data['splits']
+        # The real collector declares its provenance at the report root,
+        # while summarize_split receives a split-scoped dictionary.
+        # Propagate that provenance without mutating the caller's document.
+        reports = {name: (dict(entry, source=data['source'])
+                   if isinstance(entry, dict)
+                   and 'source' not in entry
+                   and data.get('source') == 'actual_live_habitat_measurements'
+                   else entry)
+                   for name, entry in data['splits'].items()}
     elif isinstance(data.get('split'), str):
         reports = {data['split']: data}
     else:
