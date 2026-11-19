@@ -61,7 +61,15 @@ def environment_config(get_config, runtime_config, data_root, split, ids, gpu, s
     cfg.SIMULATOR.RECOMPUTE_NAVMESH_PATH = str(data_root / 'recompute_navmesh')
     cfg.SIMULATOR.AGENT_0.SENSORS = ['RGB_SENSOR', 'DEPTH_SENSOR']
     cfg.TASK.SENSORS = ['INSTRUCTION_SENSOR']
-    cfg.TASK.MEASUREMENTS = []
+    # Capture objective Habitat metrics by default, outside model-visible state.
+    # The held-out test split may not expose target truth: capture collisions
+    # and path/step diagnostics without requiring hidden goal coordinates.
+    # DISTANCE_TO_HUMAN is deliberately omitted: the upstream implementation
+    # temporarily applies an agent action while computing that measurement.
+    cfg.TASK.MEASUREMENTS = (
+        ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL', 'ORACLE_SUCCESS']
+        if split in ('val_seen', 'val_unseen') else []
+    ) + ['PATH_LENGTH', 'STEPS_TAKEN', 'COLLISIONS', 'COLLISIONS_DETAIL']
     cfg.ENVIRONMENT.MAX_EPISODE_STEPS = 500
     cfg.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = False
     cfg.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = -1
