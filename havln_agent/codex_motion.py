@@ -10,9 +10,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 
-# Habitat's pinned Pillow can predate Image.Resampling (introduced in 9.1).
-# Share this alias with Codex's historical RGB montage renderer.
-RESAMPLING = getattr(Image, "Resampling", Image)
+from .pillow_compat import RESAMPLING
 
 
 @dataclass(frozen=True)
