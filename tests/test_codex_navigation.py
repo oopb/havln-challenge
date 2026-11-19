@@ -368,6 +368,92 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertNotIn("scan_status", info2)
         self.assertIsNone(agent.scan_montage)
 
+
+    def test_monitor_error_records_executed_action_and_skips_remaining_batch(self):
+        """A fault AFTER env.step must never erase the successful forward."""
+        env = FakeHabitat()
+        agent = CodexEpisode(env, camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "monitor_error")
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   side_effect=AttributeError(
+                       "module 'PIL.Image' has no attribute 'Resampling'")):
+            reply = agent.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(reply["status"], "MOTION_MONITOR_ERROR")
+        self.assertEqual(reply["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(reply["skipped_count"], 2)
+        self.assertEqual(reply["executed_actions"], 1)
+        self.assertEqual(reply["remaining_actions"], 31)
+        self.assertFalse(reply["done"])
+        self.assertEqual(env.actions, ["MOVE_FORWARD"])
+        self.assertEqual(agent.actions, env.actions)
+        row = json.loads((agent.directory / "steps.jsonl").read_text().splitlines()[0])
+        self.assertEqual(row["action"], "MOVE_FORWARD")
+        self.assertEqual(row["motion_state"], "UNCERTAIN")
+        self.assertIn("Resampling", row["motion_monitor_error"])
+        self.assertTrue((agent.directory / row["post_file"]).exists())
+        receipt = json.loads((agent.directory / "tools.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(receipt["result"]["executed"], env.actions)
+        # A monitor error is not itself an MCP protocol error and should allow
+        # Codex to inspect the real post-forward view.
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            observed, _, depth = agent.observe()
+        self.assertTrue(observed["depth_sent"])
+        self.assertIsNotNone(depth)
+        finished = agent.step(["STOP"])
+        self.assertTrue(finished["done"])
+        result = json.loads((agent.directory / "result.json").read_text())
+        self.assertEqual(result["row"]["actions"], ["MOVE_FORWARD", "STOP"])
+        self.assertEqual(result["row"]["actions"], env.actions)
+
+    def test_post_action_capture_fault_preserves_real_action_and_fails_closed(self):
+        """If post-step observation saving fails, the episode is not exported."""
+        env = FakeHabitat()
+        agent = CodexEpisode(env, camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "capture_error")
+        with patch.object(agent, "_save", side_effect=OSError("simulated disk error")):
+            reply = agent.step(["MOVE_FORWARD", "MOVE_FORWARD"])
+        self.assertEqual(reply["status"], "TOOL_ERROR")
+        self.assertEqual(reply["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(reply["skipped_count"], 1)
+        self.assertEqual(reply["executed_actions"], 1)
+        self.assertTrue(reply["done"])
+        self.assertEqual(reply["reason"], "post_action_processing_exception")
+        self.assertEqual(agent.actions, env.actions)
+        row = json.loads((agent.directory / "steps.jsonl").read_text().splitlines()[0])
+        self.assertEqual(row["action"], "MOVE_FORWARD")
+        self.assertIsNone(row["post_file"])
+        self.assertIn("simulated disk error", row["post_action_error"])
+        self.assertFalse((agent.directory / "result.json").exists())
+        self.assertTrue((agent.directory / "failure.json").exists())
+
+    def test_scan_montage_exception_does_not_hide_primary_rgb(self):
+        """Optional view comparisons cannot break the observe MCP tool."""
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "montage_error")
+        for _ in range(3):
+            agent.step(["TURN_LEFT"] * 3)
+            with patch("havln_agent.codex_episode.read_current_observation",
+                       side_effect=lambda env, cam, instruction:
+                       adapt_observation(env.image(), cam)):
+                agent.observe()
+        agent.step(["TURN_LEFT"] * 3)
+        with patch("havln_agent.codex_episode._scan_comparison",
+                   side_effect=AttributeError("old pillow codec")), \\
+             patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            response = MCPServer(agent)._dispatch(
+                "tools/call", {"name": "observe", "arguments": {}})
+        self.assertEqual([part["type"] for part in response["content"]],
+                         ["text", "image"])
+        info = json.loads(response["content"][0]["text"])
+        self.assertNotIn("scan_status", info)
+        diagnostic = (agent.directory / "diagnostic_events.jsonl").read_text()
+        self.assertIn("scan_comparison_error", diagnostic)
+        self.assertIn("old pillow codec", diagnostic)
+
     def test_tiny_normal_actions_do_not_add_motion_hint_or_change_export(self):
         first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
         self.assertNotIn("motion_hint", first)
