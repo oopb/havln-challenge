@@ -12,7 +12,9 @@ from pathlib import Path
 import time
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
+
+from .codex_motion import assess_forward_motion
 
 from .habitat_adapter import read_current_observation
 from .perception import Geometry, adapt_observation, depth_image_url
@@ -54,7 +56,11 @@ class CodexEpisode:
         self._turn_total_deg = 0.0
         self._turn_net_deg = 0.0
         self._recent_stalls = []
-        # Grant one extra public Depth frame after a visual stall; do not
+        self._recent_views = []  # In-memory view cache; no duplicate image files.
+        self._last_scan_montage_turn = 0.0
+        self.scan_montage = None
+        self._ambiguous_forward_count = 0
+        # Grant one extra public Depth frame after a detected stall; do not
         # repeatedly send it for the same blocked approach.
         self._stall_depth_pending = False
         self._stall_depth_used = False
@@ -121,6 +127,16 @@ class CodexEpisode:
             observation.pitch_deg = self.pitch_deg
             self.current = observation
             self.current_id = self._save(observation)
+        if not self.done:
+            self._recent_views.append((self._heading_deg, self.current.rgb.copy()))
+            self._recent_views = self._recent_views[-12:]
+        self.scan_montage = None
+        comparison_directions = []
+        if (not self.done and self._turn_total_deg >= 180
+                and self._turn_total_deg - self._last_scan_montage_turn >= 90):
+            self.scan_montage, comparison_directions = self._scan_comparison()
+            if self.scan_montage is not None:
+                self._last_scan_montage_turn = self._turn_total_deg
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
@@ -149,8 +165,40 @@ class CodexEpisode:
                                     else "post_stall_inspection")
         if obstacle["confirmed"] and send_depth:
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
+        if comparison_directions:
+            info["scan_status"] = "REPEATED_SCAN"
+            info["scan_view_directions_deg"] = comparison_directions
+            info["scan_note"] = "Views are relative to CURRENT camera heading, L negative/R positive; compare the openings before turning again."
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
+
+    def _scan_comparison(self):
+        """Generate one compact 2x2 image from existing nearby observations."""
+        selected = []
+        for heading, rgb in reversed(self._recent_views):
+            angle = (heading - self._heading_deg + 180) % 360 - 180
+            if all(abs((angle - old_angle + 180) % 360 - 180) >= 30
+                   for old_angle, _ in selected):
+                selected.append((round(angle), rgb))
+            if len(selected) == 4:
+                break
+        if len(selected) < 3:
+            return None, []
+        canvas = Image.new("RGB", (256, 256), (24, 24, 24))
+        painter = ImageDraw.Draw(canvas)
+        for i, (relative, rgb) in enumerate(selected):
+            cell_x, cell_y = (i % 2) * 128, (i // 2) * 128
+            thumb = Image.fromarray(rgb).convert("RGB")
+            thumb.thumbnail((124, 101), Image.Resampling.BILINEAR)
+            canvas.paste(thumb, (cell_x + (128 - thumb.width) // 2,
+                                 cell_y + (103 - thumb.height) // 2))
+            label = "current" if relative == 0 else (
+                ("R+" if relative > 0 else "L") + str(abs(relative)) + " deg")
+            painter.text((cell_x + 5, cell_y + 107), label, fill=(245, 245, 245))
+        buffer = io.BytesIO()
+        canvas.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("ascii"), [
+            angle for angle, _ in selected]
 
     def _motion_hint(self, executed):
         """Tiny, conditional factual receipt; never blocks a Codex decision."""
@@ -162,7 +210,8 @@ class CodexEpisode:
         # NOT confirmation that the robot physically moved.
         if self._turn_total_deg >= 180:
             hint.update(turn_total_deg=self._turn_total_deg,
-                        turn_net_deg=self._turn_net_deg)
+                        turn_net_deg=self._turn_net_deg,
+                        scan_status="REPEATED_SCAN")
         if batch_total >= 180:
             hint.update(batch_turn_total_deg=batch_total,
                         batch_turn_net_deg=batch_net)
@@ -178,7 +227,7 @@ class CodexEpisode:
 
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
-        before_rgb = self.current.rgb if action == "MOVE_FORWARD" else None
+        before_observation = self.current if action == "MOVE_FORWARD" else None
         try:
             raw, _, environment_done, info = self.env.step(action)
         except Exception as error:
@@ -197,10 +246,11 @@ class CodexEpisode:
         observation.pitch_deg = self.pitch_deg
         self.current = observation
         self.current_id = self._save(observation)
-        # Only exact pixel identity is a stall: no motion estimation, geometry
-        # veto or image-difference threshold. Dynamic scene changes may evade
-        # detection; never infer actual displacement from a changed RGB image.
-        stalled = before_rgb is not None and np.array_equal(before_rgb, observation.rgb)
+        # Verify the action AFTER execution using public RGB-D only; uncertain
+        # motion is not silently treated as confirmed progress.
+        motion = (assess_forward_motion(before_observation, observation, self.camera)
+                  if before_observation is not None else None)
+        stalled = motion is not None and motion.state == "STALLED"
         index = len(self.actions)
         self.actions.append(action)
         if action in ("TURN_LEFT", "TURN_RIGHT"):
@@ -210,27 +260,40 @@ class CodexEpisode:
             self._turn_total_deg += abs(angle)
         elif action == "MOVE_FORWARD":
             if stalled:
+                self._ambiguous_forward_count = 0
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
                 if not self._stall_depth_used:
                     self._stall_depth_pending = True
                     self._stall_depth_used = True
-            else:
-                # Only "RGB changed", not measured displacement. Reset the
-                # local turn window and stale obstacle attempts conservatively.
+            elif motion.state == "PROGRESSED":
                 self._turn_total_deg = 0.0
                 self._turn_net_deg = 0.0
                 self._recent_stalls.clear()
                 self._stall_depth_pending = False
                 self._stall_depth_used = False
+                self._recent_views.clear()
+                self._last_scan_montage_turn = 0.0
+                self._ambiguous_forward_count = 0
+            else:
+                # Weak evidence is not enough to reset the scan or mark clear.
+                if (motion.estimated_m is not None
+                        and motion.estimated_m < self.camera.forward_step * 0.40):
+                    self._ambiguous_forward_count += 1
+                else:
+                    self._ambiguous_forward_count = 0
         row = {
             "step": index, "action": action, "tool_call_id": tool_id,
             "origin": origin,
             "input_file": "observations/" + before + ".npz",
             "post_file": "observations/" + self.current_id + ".npz",
         }
-        if stalled:
-            row["motion_feedback"] = "rgb_unchanged"
+        if motion is not None:
+            row["motion_feedback"] = motion.reason
+            row["motion_state"] = motion.state
+            if motion.estimated_m is not None:
+                row["motion_estimated_m"] = motion.estimated_m
+            row["motion_matched_regions"] = motion.matched_regions
         self._append("steps.jsonl", row)
         self.replay.action(row)
         if action == "STOP":
@@ -240,7 +303,17 @@ class CodexEpisode:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
-        return stalled
+        if stalled:
+            return "NO_VISUAL_PROGRESS"
+        if (motion is not None and motion.state == "UNCERTAIN"
+                and self._ambiguous_forward_count >= 2):
+            # Do not execute further blind forward commands in this batch;
+            # Codex decides whether to inspect or change direction.
+            if not self._stall_depth_used:
+                self._stall_depth_pending = True
+                self._stall_depth_used = True
+            return "MOTION_UNCERTAIN"
+        return None
 
     def step(self, requested):
         ident = self._start_tool("step")
@@ -263,15 +336,14 @@ class CodexEpisode:
                         len(requested) == self.remaining and requested[-1] == "STOP"):
                     raise ValueError("batch exceeds remaining action budget; reserve final STOP")
                 executed = []
-                stalled = False
+                interruption = None
                 for action in requested:
                     if self.done:
                         break
-                    unchanged = self._atomic(action, ident, "codex")
+                    interruption = self._atomic(action, ident, "codex")
                     executed.append(action)
-                    if unchanged:
-                        stalled = True
-                        break  # The remaining actions, including STOP, are not executed.
+                    if interruption:
+                        break  # Remaining actions, including STOP, were not executed.
                 requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
@@ -279,11 +351,14 @@ class CodexEpisode:
                     executed.append("STOP")
                 result = self.status()
                 result.update(status=("DONE" if self.done else
-                                      "NO_VISUAL_PROGRESS" if stalled else "RUNNING"),
+                                      interruption or "RUNNING"),
                               executed=executed, requested=requested)
-                if stalled:
+                if interruption:
                     result["skipped_count"] = len(requested) - requested_executed
-                    result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
+                    result["motion_feedback"] = (
+                        "Forward movement stalled; observe or choose a new approach."
+                        if interruption == "NO_VISUAL_PROGRESS"
+                        else "Repeated uncertain forward movement; inspect before continuing.")
                 if not self.done:
                     hint = self._motion_hint(executed)
                     if hint:
