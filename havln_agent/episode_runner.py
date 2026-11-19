@@ -12,6 +12,7 @@ from .habitat_adapter import read_current_observation
 from .perception import Observation, adapt_observation
 from .runtime import AgentRuntime
 from .replay_capture import ReplayRecorder
+from .simulator_evaluation import SimulatorMetricCapture
 from .scheduler import request, run
 from scripts.export_cma_submission import atomic_json, check_rows
 
@@ -28,7 +29,8 @@ def canonical_step_frame_refs(directory, feedback):
     return refs
 
 
-def run_episode(env, episode_id, camera, client, config, directory, instruction=None):
+def run_episode(env, episode_id, camera, client, config, directory, instruction=None,
+                split=None, data_root=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
@@ -53,6 +55,9 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             # Diagnostics cannot block a real simulator action.
             pass
     environment_done = False
+    # Entirely separate evaluator channel; never used in agent contexts or tools.
+    evaluator = SimulatorMetricCapture(directory, episode_id, split, data_root)
+    capture_finished = False
 
     def append(name, record):
         with (directory / (name+'.jsonl')).open('a') as handle:
@@ -63,6 +68,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
         raw, _, environment_done, info = env.step(action)
         if isinstance(info, dict) and info.get('error'):
             raise RuntimeError('environment_action_rejected')
+        evaluator.action(action, info, env)
         return adapt_observation(raw, camera), environment_done
 
     def refresh():
@@ -127,6 +133,7 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
     runtime.event_callback = record_event
     try:
         observation=adapt_observation(env.reset(),camera)
+        evaluator.reset(env)
         if str(env.current_episode.episode_id)!=episode_id:
             raise ValueError('Reset resolved the wrong episode')
         if instruction is not None and observation.instruction!=instruction:
@@ -226,6 +233,12 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             actual_navigation_success=None, collision_metrics=None,
             validation_scope='execution_trace_requires_independent_environment_and_scoring_verification')
         runtime.event('export', source='action_exporter', actions=len(actions), validated_by='check_rows')
+        measured = evaluator.finish(True, actions)
+        capture_finished = True
+        summary['simulator_metric_capture'] = dict(
+            source='actual_habitat_measurements',
+            file='simulator_metrics.json', complete=measured['complete'],
+            available=measured['available'], official=False)
         atomic_json(directory / 'summary.json', summary)
         return row
     except Exception as error:
@@ -235,6 +248,9 @@ def run_episode(env, episode_id, camera, client, config, directory, instruction=
             executed_actions=[a['action'] for a in runtime.memory.actions]))
         raise
     finally:
+        if not capture_finished:
+            # Keep the real measurements from a failed/partial episode too.
+            evaluator.finish(False, [r['action'] for r in runtime.memory.actions])
         atomic_json(directory / 'memory.json', runtime.memory.snapshot())
         # All tool receipts already appear in tools.jsonl and memory.json.
         if runtime.memory.current is not None:

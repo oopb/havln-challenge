@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 
 from .submission_contract import atomic_json, check_rows
+from .simulator_evaluation import publish_run_metrics
 
 PHASE2_EPISODES = 3408
 
@@ -145,6 +146,13 @@ def aggregate(root):
             "format_version": 1, "split": split, "episodes": rows,
             "selected_ids": expected, "partial": not all_valid,
             "not_an_official_submission": True})
+    measured = publish_run_metrics(root, {split: expected})
+    summary["simulator_metrics"] = dict(
+        fully_scored=measured["splits"][split]["fully_scored_episodes"],
+        captured_complete=measured["splits"][split]["captured_complete"],
+        source="actual_live_habitat_measurements",
+        official=False)
+    atomic_json(root / "batch_status.json", summary)
     return summary
 
 

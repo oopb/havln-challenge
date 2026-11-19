@@ -64,7 +64,8 @@ def main():
                 env.habitat_env.episode_iterator = iter(episodes)
                 controller = CodexEpisode(env, camera, args.episode_id, split,
                                           args.max_steps, args.output_dir,
-                                          batch_mode=args.batch_child)
+                                          batch_mode=args.batch_child,
+                                          data_root=args.data_root)
                 MCPServer(controller, writer=protocol_stdout).serve()
     finally:
         if controller is not None:
