@@ -10,7 +10,8 @@ import math
 from pathlib import Path
 import time
 
-from .competition_scoring import aggregate_episodes
+from .competition_scoring import (
+    aggregate_episodes, published_reference_collision_count)
 from .submission_contract import atomic_json
 
 
@@ -45,7 +46,12 @@ def reference_collision_count(data_root, split, episode_id):
         return None
     path = Path(data_root) / "HA-R2R-tools" / ("collision_num_" + split + ".json")
     number = finite_number(_collision_reference(str(path)).get(str(episode_id)))
-    return number if number is not None and number >= 0 else None
+    if number is not None and number >= 0:
+        return number
+    # Released validation annotations are public, and can be bundled with
+    # this toolkit when the operator mounted only HA-R2R episodes/assets.
+    # Never substitute these for withheld Phase 2 test annotations.
+    return published_reference_collision_count(split, episode_id)
 
 
 def _metric_sample(info):
