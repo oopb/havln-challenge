@@ -131,6 +131,27 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(turning["status"], "RUNNING")
         self.assertEqual(turning["executed"], ["TURN_LEFT"])
 
+    def test_look_down_then_up_restores_pitch_without_auto_forward(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 12,
+                             Path(self.tempdir.name) / "pitchcycle")
+        down = agent.step(["LOOK_DOWN", "LOOK_DOWN"])
+        self.assertEqual(down["status"], "RUNNING")
+        self.assertEqual(agent.pitch_deg, -2 * camera().tilt_angle)
+        self.assertNotIn("motion_hint", down)
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            info, rgb, depth = agent.observe()
+        self.assertEqual(info["depth_sent"], False)
+        self.assertIsNone(depth)
+        self.assertEqual(agent.current.pitch_deg, -2 * camera().tilt_angle)
+        up = agent.step(["LOOK_UP", "LOOK_UP"])
+        self.assertEqual(up["status"], "RUNNING")
+        self.assertEqual(agent.pitch_deg, 0)
+        self.assertEqual(agent.actions,
+                         ["LOOK_DOWN", "LOOK_DOWN", "LOOK_UP", "LOOK_UP"])
+        self.assertNotIn("motion_hint", up)
+
     def test_stall_with_reserved_stop_does_not_miscount_skipped_actions(self):
         before = self.env.image()
         def stationary_step(action):
@@ -542,7 +563,12 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("magenta=invalid", PROMPT)
         self.assertIn("next unverified landmark", PROMPT)
         self.assertIn("motion_hint", PROMPT)
-        self.assertIn("short batches near people", PROMPT)
+        self.assertIn("favor longer MOVE_FORWARD batches", PROMPT)
+        self.assertIn("use short batches and re-observe", PROMPT)
+        self.assertIn("1-2 LOOK_DOWN actions then observe RGB", PROMPT)
+        self.assertIn("Depth if supplied", PROMPT)
+        self.assertIn("matching LOOK_UP actions", PROMPT)
+        self.assertIn("do not repeatedly retry a stalled direction", PROMPT)
         self.assertIn("left/right at the place specified", PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
