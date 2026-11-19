@@ -24,9 +24,9 @@ PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
 The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
-On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe.
-If blocked or the ground/step immediately ahead is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied) to inspect near-foot clearance.
-Restore the previous forward-looking pitch with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction.
+On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe. When searching by turning, use short turn batches with a fresh view, not long blind scans.
+observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied); avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
+Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction. After a forward stall, one extra Depth view may be sent even without a confirmed central obstacle; that does not certify a safe path.
 Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
 Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
 People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.

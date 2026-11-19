@@ -77,6 +77,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(self.env.actions, [])
         self.assertIsNone(depth)
         self.assertFalse(info["depth_sent"])
+        self.assertEqual(info["pitch_deg"], 0.0)
         self.assertTrue((self.controller.directory /
                          ("observations/" + info["observation_id"] + ".npz")).exists())
 
@@ -88,6 +89,7 @@ class CodexEpisodeTests(unittest.TestCase):
                    return_value=adapt_observation(base, camera())):
             info, rgb, depth = self.controller.observe()
         self.assertTrue(info["depth_sent"])
+        self.assertEqual(info["depth_reason"], "front_obstacle")
         self.assertLess(info["front_obstacle_m"], camera().forward_step + camera().robot_radius)
         self.assertEqual(base64.b64decode(rgb)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
         self.assertEqual(base64.b64decode(depth)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -145,12 +147,93 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(info["depth_sent"], False)
         self.assertIsNone(depth)
         self.assertEqual(agent.current.pitch_deg, -2 * camera().tilt_angle)
+        self.assertEqual(info["pitch_deg"], -2 * camera().tilt_angle)
         up = agent.step(["LOOK_UP", "LOOK_UP"])
         self.assertEqual(up["status"], "RUNNING")
         self.assertEqual(agent.pitch_deg, 0)
         self.assertEqual(agent.actions,
                          ["LOOK_DOWN", "LOOK_DOWN", "LOOK_UP", "LOOK_UP"])
         self.assertNotIn("motion_hint", up)
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            recovered, _, _ = agent.observe()
+        self.assertEqual(recovered["pitch_deg"], 0.0)
+
+    def test_post_stall_inspection_depth_is_one_shot_even_without_obstacle(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "stall_depth")
+        initial = agent.env.image()
+        def blocked(action):
+            agent.env.actions.append(action)
+            return initial, 0., action == "STOP", {}
+        with patch.object(agent.env, "step", side_effect=blocked):
+            first = agent.step(["MOVE_FORWARD"] * 3)
+            self.assertEqual(first["status"], "NO_VISUAL_PROGRESS")
+            self.assertEqual(first["executed"], ["MOVE_FORWARD"])
+            # A second stall before inspection must not queue extra images.
+            second = agent.step(["MOVE_FORWARD"])
+            self.assertEqual(second["status"], "NO_VISUAL_PROGRESS")
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(initial, cam)):
+            first_observation = MCPServer(agent)._dispatch("tools/call", {
+                "name": "observe", "arguments": {}})
+            second_observation = MCPServer(agent)._dispatch("tools/call", {
+                "name": "observe", "arguments": {}})
+        self.assertEqual([p["type"] for p in first_observation["content"]],
+                         ["text", "image", "image"])
+        info = json.loads(first_observation["content"][0]["text"])
+        self.assertTrue(info["depth_sent"])
+        self.assertEqual(info["depth_reason"], "post_stall_inspection")
+        self.assertNotIn("front_obstacle_m", info)
+        next_info = json.loads(second_observation["content"][0]["text"])
+        self.assertFalse(next_info["depth_sent"])
+        self.assertEqual([p["type"] for p in second_observation["content"]],
+                         ["text", "image"])
+        # Another stall within the same locally blocked period is still
+        # allowed but cannot trigger an endless series of extra Depth frames.
+        with patch.object(agent.env, "step", side_effect=blocked):
+            self.assertEqual(agent.step(["MOVE_FORWARD"])["status"],
+                             "NO_VISUAL_PROGRESS")
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(initial, cam)):
+            later_info, _, later_depth = agent.observe()
+        self.assertFalse(later_info["depth_sent"])
+        self.assertIsNone(later_depth)
+        # New visually changing forward enables a new one-shot inspection.
+        self.assertEqual(agent.step(["MOVE_FORWARD"])["status"], "RUNNING")
+        with patch.object(agent.env, "step", side_effect=lambda action: (
+                agent.env.image(), 0., action == "STOP", {})):
+            # This unmodified image is now unchanged versus the current frame.
+            self.assertEqual(agent.step(["MOVE_FORWARD"])["status"],
+                             "NO_VISUAL_PROGRESS")
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            refreshed, _, refreshed_depth = agent.observe()
+        self.assertTrue(refreshed["depth_sent"])
+        self.assertEqual(refreshed["depth_reason"], "post_stall_inspection")
+        self.assertIsNotNone(refreshed_depth)
+
+    def test_post_stall_depth_not_lost_when_observing_after_a_tilt(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "tilt_depth")
+        raw = agent.env.image()
+        def blocked(action):
+            agent.env.actions.append(action)
+            return raw, 0., action == "STOP", {}
+        with patch.object(agent.env, "step", side_effect=blocked):
+            agent.step(["MOVE_FORWARD"])
+        agent.step(["LOOK_DOWN"])
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            info, _, depth = agent.observe()
+        self.assertEqual(info["pitch_deg"], -camera().tilt_angle)
+        self.assertTrue(info["depth_sent"])
+        self.assertIsNotNone(depth)
 
     def test_stall_with_reserved_stop_does_not_miscount_skipped_actions(self):
         before = self.env.image()
@@ -568,6 +651,10 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("1-2 LOOK_DOWN actions then observe RGB", PROMPT)
         self.assertIn("Depth if supplied", PROMPT)
         self.assertIn("matching LOOK_UP actions", PROMPT)
+        self.assertIn("observe pitch_deg", PROMPT)
+        self.assertIn("short turn batches", PROMPT)
+        self.assertIn("avoid accumulating excessive downward tilt", PROMPT)
+        self.assertIn("one extra Depth view", PROMPT)
         self.assertIn("do not repeatedly retry a stalled direction", PROMPT)
         self.assertIn("left/right at the place specified", PROMPT)
         self.assertIn("exec", cmd)

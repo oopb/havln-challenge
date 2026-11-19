@@ -13,16 +13,21 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
 - Controller: havln_agent/codex_episode.py owns public RGB-D captures,
   legal six-action stepping, budgets, replay receipts and STOP/export checks.
 - MCP: havln_agent/codex_mcp.py exposes ONLY observe() and step(actions).
-  observe returns fresh RGB, observation ID and budget; the episode's route
-  instruction is already in the one-time system instructions. It adds Depth
-  **only** when conservative public-Depth evidence finds a near obstacle
-  directly ahead. No obstacle => only one RGB image.
+  observe returns fresh RGB, observation ID, action budget and `pitch_deg`
+  (commanded angle relative to the initial forward view; negative is down).
+  The episode's route instruction is already in one-time system instructions.
+  Depth is sent when conservative public-Depth evidence finds a near obstacle,
+  or **once** on the next observation after an exact-RGB stalled forward in
+  the same locally blocked period. Other observations return RGB only.
+  `depth_reason` distinguishes `front_obstacle` from
+  `post_stall_inspection`; `front_obstacle_m` is included only when the
+  central near-obstacle heuristic confirms one.
   step executes an ordered list of allowed atomic actions and returns receipts.
   If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
   and the remaining requested batch actions are skipped; only executed actions
   consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
-  remains active. No Depth is sent merely because a stall occurred, and step()
-  never sends an image.
+  remains active. The next `observe()` may include the single post-stall
+  inspection Depth image, but `step()` never sends an image.
   Only when useful, `step()` also returns `motion_hint`: cumulative and net
   turn degrees since the last forward with **changing RGB** (not measured
   translation), plus batch turn degrees if the batch alone turned >=180 degrees.
@@ -32,14 +37,18 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   movement, and normal receipts do not contain them.
 - Prompt-only local clearance strategy: in blocked or uncertain near-foot
   areas, Codex may issue 1–2 `LOOK_DOWN` actions, call `observe()` for fresh RGB
-  and optional Depth, then use matching `LOOK_UP` actions before evaluating
-  short forward batches or rerouting. This is not automatic recovery, a depth
+  and optional Depth, then use matching `LOOK_UP` actions to return near
+  zero pitch before evaluating short forward batches or rerouting. It should
+  not repeatedly scan the same floor without new evidence; search turns should
+  use short batches with intervening observations. This is not automatic recovery, a depth
   guarantee, or permission to walk into obstacles. On a visually clear open
   corridor, Codex may use longer consecutive `MOVE_FORWARD` batches.
 - This is not a geometry authorization gate or motion odometry: a changed
-  RGB does not certify actual displacement; the obstacle heuristic only
-  selects whether Depth is shown. No hidden pose, reference trajectory, goal
-  coordinates or extra models are exposed.
+  RGB does not certify actual displacement; the obstacle heuristic and the
+  one-time stall inspection only select whether Depth is shown. `pitch_deg`
+  tracks commanded LOOK_UP/LOOK_DOWN actions, not privileged simulator pose.
+  No hidden pose, reference trajectory, goal coordinates or extra models
+  are exposed.
 
 The existing cloud/hybrid scheduler, model API clients and config YAML
 are untouched. The CLI model selection is independent of .env API settings.

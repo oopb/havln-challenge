@@ -51,6 +51,10 @@ class CodexEpisode:
         self._turn_total_deg = 0.0
         self._turn_net_deg = 0.0
         self._recent_stalls = []
+        # Grant one extra public Depth frame after a visual stall; do not
+        # repeatedly send it for the same blocked approach.
+        self._stall_depth_pending = False
+        self._stall_depth_used = False
         self.done = False
         self.end_reason = None
         self.finalized = False
@@ -116,12 +120,16 @@ class CodexEpisode:
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
-        # A conservative near-center Depth obstacle is only a reason to
-        # show Codex the Depth image, never a permission check for movement.
+        # Public Depth is visual evidence, never a geometry movement gate.
+        # A recent exact-RGB stall can request one extra inspection even when
+        # the conservative center-footprint heuristic finds no obstacle.
         obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
-        depth_data = None
-        if obstacle["confirmed"]:
-            depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
+        stall_inspection = self._stall_depth_pending and not self.done
+        send_depth = obstacle["confirmed"] or stall_inspection
+        depth_data = (depth_image_url(self.current, self.camera).split(",", 1)[1]
+                      if send_depth else None)
+        if stall_inspection:
+            self._stall_depth_pending = False
         info = {
             "episode_id": self.episode_id,
             "observation_id": self.current_id,
@@ -129,9 +137,13 @@ class CodexEpisode:
             "remaining_actions": self.remaining,
             "done": self.done,
             "reason": self.end_reason,
-            "depth_sent": depth_data is not None,
+            "pitch_deg": self.pitch_deg,  # commanded tilt relative to initial view
+            "depth_sent": send_depth,
         }
-        if depth_data is not None:
+        if send_depth:
+            info["depth_reason"] = ("front_obstacle" if obstacle["confirmed"]
+                                    else "post_stall_inspection")
+        if obstacle["confirmed"] and send_depth:
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
@@ -195,12 +207,17 @@ class CodexEpisode:
             if stalled:
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
+                if not self._stall_depth_used:
+                    self._stall_depth_pending = True
+                    self._stall_depth_used = True
             else:
                 # Only "RGB changed", not measured displacement. Reset the
                 # local turn window and stale obstacle attempts conservatively.
                 self._turn_total_deg = 0.0
                 self._turn_net_deg = 0.0
                 self._recent_stalls.clear()
+                self._stall_depth_pending = False
+                self._stall_depth_used = False
         row = {
             "step": index, "action": action, "tool_call_id": tool_id,
             "origin": origin,
