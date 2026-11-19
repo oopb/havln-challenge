@@ -24,7 +24,9 @@ PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
 The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
 Navigate using visual evidence and the six permitted simulator actions.
-Use long action batches on clear paths, short batches near people, stairs or uncertain turns; observe when a new view helps.
+On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe.
+If blocked or the ground/step immediately ahead is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied) to inspect near-foot clearance.
+Restore the previous forward-looking pitch with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction.
 Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
 Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
 People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
@@ -34,7 +36,6 @@ When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.
 Do not rely on state from any previous episode. A STOP is not proof of success.
-If MOVE_FORWARD returns NO_VISUAL_PROGRESS, reconsider direction or observe.
 """
 
 START_PROMPT = "Begin navigation by calling havln.observe()."
