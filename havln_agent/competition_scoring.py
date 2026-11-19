@@ -191,8 +191,8 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
         base.update(
             components=components,
             observed_episodes=observed,
-            captured_complete=report.get('captured_complete', 0),
-            fully_scored_episodes=report.get('fully_scored_episodes', 0),
+            captured_complete=report.get('captured_complete'),
+            fully_scored_episodes=report.get('fully_scored_episodes'),
             requested_episodes=report.get('requested_episodes'),
             capture_source=report.get('source', 'simulator_metric_capture'),
             missing_or_partial=report.get('missing_or_partial', [])[:12])
