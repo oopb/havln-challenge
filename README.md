@@ -116,6 +116,16 @@ normal motor actions no longer call a depth-body safety shield automatically. Se
 
 **Eval-36 observation + heading repair (v22):** NavigationAgent actively weighs informative LOOK_UP/LOOK_DOWN at existing yaw (near stair/floor geometry versus distant routes); ObservationAgent gets matching pitch-view guidance. The experimental absolute-heading model output was **removed**; both navigation tools now use relative LEFT/RIGHT/NONE only. Historical yaw labels are not motor commands. This is model-owned choice, not forced scanning or hardcoded route verification. The #90 confirmed Depth-only input, #91 compact Memory, atomic Depth veto and official scoring are unchanged. See [v22 design and regression notes](docs/eval36_pitch_heading_repair.md).
 
+**Default true-Habitat metric capture (API + Codex):** New episodes log
+simulator-observed final goal distance/success (when public), collisions,
+path length, steps and robot position in evaluator-only files. A run also
+automatically writes score_metrics.json with available component means and
+a diagnostic composite Score only when all required evaluation evidence
+is available. Phase 2 may expose collisions but not held-out goals or
+collision allowances: missing official truth is never inferred. The
+measurements never enter any navigation model prompt or tool return.
+See [default metric capture](docs/simulator_metric_capture.md).
+
 **Offline replay studio:** Inspect completed real RGB-D trajectories, model
 requests/responses, observation sessions, tools and atomic actions in a
 read-only browser, without starting Habitat or calling an API:
