@@ -18,11 +18,12 @@ from .habitat_adapter import read_current_observation
 from .perception import Geometry, adapt_observation, depth_image_url
 from .replay_capture import ReplayRecorder
 from .submission_contract import ACTIONS, atomic_json, check_rows
+from .simulator_evaluation import SimulatorMetricCapture, publish_run_metrics
 
 
 class CodexEpisode:
     def __init__(self, env, camera, episode_id, split, max_steps, output_dir,
-                 batch_mode=False):
+                 batch_mode=False, data_root=None):
         if type(max_steps) is not int or not 1 <= max_steps <= 500:
             raise ValueError("max_steps must be an integer in [1, 500]")
         if split not in ("test", "val_seen", "val_unseen"):
@@ -40,6 +41,8 @@ class CodexEpisode:
                                   str(self.directory))
         self.directory.mkdir(parents=True)
         (self.directory / "observations").mkdir()
+        self.evaluator = SimulatorMetricCapture(
+            self.directory, self.episode_id, split, data_root)
         self.replay = ReplayRecorder(self.directory, camera)
         self.actions = []
         self.started = time.monotonic()
@@ -60,6 +63,7 @@ class CodexEpisode:
         self.finalized = False
 
         raw = self.env.reset()
+        self.evaluator.reset(self.env)
         if str(self.env.current_episode.episode_id) != self.episode_id:
             raise ValueError("Habitat reset selected the wrong episode")
         self.current = adapt_observation(raw, camera)
@@ -184,6 +188,7 @@ class CodexEpisode:
         if isinstance(info, dict) and info.get("error"):
             self.done, self.end_reason = True, "habitat_action_rejected"
             raise RuntimeError("Habitat rejected action: " + str(action))
+        self.evaluator.action(action, info, self.env)
         if action == "LOOK_UP":
             self.pitch_deg += self.camera.tilt_angle
         elif action == "LOOK_DOWN":
@@ -323,6 +328,11 @@ class CodexEpisode:
             "seconds": time.monotonic() - self.started,
             "official_metrics_available": False,
         }
+        measured = self.evaluator.finish(completed, self.actions)
+        summary["simulator_metric_capture"] = dict(
+            file="simulator_metrics.json",
+            available=measured["available"], complete=measured["complete"],
+            official=False)
         atomic_json(self.directory / "summary.json", summary)
         if completed:
             row = {"episode_id": self.episode_id, "actions": self.actions}
@@ -344,3 +354,6 @@ class CodexEpisode:
                 "actions_executed": len(self.actions),
                 "not_an_official_submission": True,
             })
+        if not self.batch_mode:
+            publish_run_metrics(self.directory.parents[1],
+                                {self.split: [self.episode_id]})
