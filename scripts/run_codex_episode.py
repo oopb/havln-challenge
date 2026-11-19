@@ -39,6 +39,29 @@ Do not rely on state from any previous episode. A STOP is not proof of success.
 
 START_PROMPT = "Begin navigation by calling havln.observe()."
 
+# Import the same public controller that the MCP server imports, using the
+# container's interpreter rather than the (often newer) host/CI Python.
+MCP_IMPORT_PROBE = ("import sys; "
+                    "from havln_agent.codex_episode import CodexEpisode; "
+                    "print('MCP controller import OK, Python', sys.version.split()[0])")
+
+
+def require_mcp_runtime(args):
+    """Fail before paid Codex inference with the real container traceback."""
+    command = [args.docker_bin, "exec", "-w", "/toolkit", args.container,
+               "python", "-c", MCP_IMPORT_PROBE]
+    try:
+        result = subprocess.run(command, capture_output=True,
+                                text=True, timeout=45, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("Cannot run MCP import probe: " + str(error)) from error
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Habitat MCP Python import failed inside container; check installed "
+            "versions and source mount:\n" +
+            (result.stderr or result.stdout or "No stderr returned")[-2400:])
+    return result.stdout.strip()
+
 
 def load_episode_instruction(args, split):
     """Read only the public dataset instruction before launching Codex."""
@@ -114,6 +137,9 @@ def preflight(args, split):
                            "test", "-f", "/toolkit/scripts/havln_mcp_server.py"]),
         ("Habitat 0.1.7", [args.docker_bin, "exec", args.container, "python",
                            "-c", "import habitat, habitat_sim; assert habitat.__version__ == habitat_sim.__version__ == '0.1.7'"]),
+        ("MCP Python controller import", [args.docker_bin, "exec", "-w",
+                                         "/toolkit", args.container, "python",
+                                         "-c", MCP_IMPORT_PROBE]),
         ("Episode dataset ID", [args.docker_bin, "exec", args.container,
                                 "python", "-c",
                                 ("import gzip, json, sys; "
@@ -315,6 +341,11 @@ def main():
         parser.error("--output-dir must be a dedicated absolute container path")
     if args.preflight:
         return preflight(args, split)
+    if not args.batch_child:
+        try:
+            print(require_mcp_runtime(args), flush=True)
+        except RuntimeError as error:
+            parser.error(str(error))
     try:
         require_fresh_container_output(args)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:

@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from havln_agent.codex_batch import select_ids
 from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary,
                                      read_rate_limits)
-from scripts.run_codex_episode import archive_codex_run
+from scripts.run_codex_episode import archive_codex_run, MCP_IMPORT_PROBE
 
 HERE = Path(__file__).resolve().parent
 
@@ -73,13 +73,16 @@ def preflight(args):
                                "test", "-f", "/toolkit/scripts/havln_mcp_server.py"]),
         ("Batch summarizer", [args.docker_bin, "exec", args.container,
                               "test", "-f", "/toolkit/havln_agent/codex_batch.py"]),
+        ("MCP Python controller import",
+         [args.docker_bin, "exec", "-w", "/toolkit", args.container,
+          "python", "-c", MCP_IMPORT_PROBE]),
     ]
     for name, command in probes:
         result = subprocess.run(command, capture_output=True,
                                 text=True, timeout=45, check=False)
         if result.returncode:
             raise RuntimeError(name + " failed: " +
-                               (result.stderr or result.stdout)[:300])
+                               (result.stderr or result.stdout)[-2400:])
         print("PASS", name, flush=True)
 
 
