@@ -258,6 +258,9 @@ class CodexEpisode:
             self._heading_deg += angle
             self._turn_net_deg += angle
             self._turn_total_deg += abs(angle)
+            self._ambiguous_forward_count = 0  # New direction, new evidence.
+        elif action in ("LOOK_UP", "LOOK_DOWN"):
+            self._ambiguous_forward_count = 0
         elif action == "MOVE_FORWARD":
             if stalled:
                 self._ambiguous_forward_count = 0
