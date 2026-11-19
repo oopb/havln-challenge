@@ -446,7 +446,12 @@ class CodexEpisode:
         if self.finalized:
             return
         self.finalized = True
-        completed = bool(self.actions and (
+        # A STOP executed before a capture failure is not a valid replay.
+        # Never export incomplete diagnostics as a legal submission sequence.
+        integrity_failure = self.end_reason in (
+            "post_action_processing_exception",
+            "habitat_action_exception", "habitat_action_rejected")
+        completed = bool(not integrity_failure and self.actions and (
             self.actions[-1] == "STOP" or len(self.actions) == 500))
         if completed:
             check_rows([{"episode_id": self.episode_id,
