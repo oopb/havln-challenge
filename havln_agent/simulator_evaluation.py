@@ -42,10 +42,12 @@ def _collision_reference(path):
 
 def reference_collision_count(data_root, split, episode_id):
     """Only published validation allowances; absent test allowances stay unknown."""
-    if split not in ("val_seen", "val_unseen") or data_root is None:
+    if split not in ("val_seen", "val_unseen"):
         return None
-    path = Path(data_root) / "HA-R2R-tools" / ("collision_num_" + split + ".json")
-    number = finite_number(_collision_reference(str(path)).get(str(episode_id)))
+    number = None
+    if data_root is not None:
+        path = Path(data_root) / "HA-R2R-tools" / ("collision_num_" + split + ".json")
+        number = finite_number(_collision_reference(str(path)).get(str(episode_id)))
     if number is not None and number >= 0:
         return number
     # Released validation annotations are public, and can be bundled with
