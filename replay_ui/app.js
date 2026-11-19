@@ -457,7 +457,9 @@ function renderScoring(scoring) {
   const measured = Boolean(episodeMeasured ||
     Object.values(components).some(x => x && typeof x.value === 'number'));
   const partial = scoring?.status === 'partial_metrics' || (!scored && measured);
-  $('scoreStatus').textContent = scored ? '离线复算 · 非官方成绩' :
+  $('scoreStatus').textContent = scored ?
+    (scoring?.reconstructed_from_observed_episodes ?
+      '已补全验证集参考碰撞 · 本地复算' : '本地复算 · 非官方成绩') :
     partial ? '已采集部分真实指标' :
     scoring?.status === 'invalid_metrics' ? '评测数据无效' : '缺少评测数据';
   $('scoreStatus').classList.toggle('warning', !scored);
@@ -469,8 +471,11 @@ function renderScoring(scoring) {
   $('scoreSocial').textContent = scored ? scoreNumber(scoring.social, 6) : '—';
   $('scoreFactor').textContent = scored ? scoreNumber(scoring.social_factor, 6) : '—';
   $('scoreProvenance').textContent = scored ?
-    '评分来源：' + (scoring.imported_from || '导入评测结果') +
-      ' · ' + (scoring.scope === 'imported_split_metrics' ? '聚合指标' : '逐 Episode 评测') +
+    '评分依据：' + (scoring.imported_from || '独立 Habitat 评测') +
+      ' · ' + (scoring.scope === 'imported_split_metrics' ?
+        '已导入聚合指标' : '逐 Episode 真实仿真测量') +
+      (scoring.collision_reference_source ?
+        ' · 使用公开验证集参考碰撞表' : '') +
       ' · 不是 CodaBench 官方排行榜成绩' :
     partial ? '已记录 Habitat 真实物理测量；缺少目标或碰撞基准时不计算综合 Score。'
     : '当前打开的轨迹没有独立仿真评测数据；旧日志无法从画面或模型输出恢复真实评分。';
@@ -508,7 +513,7 @@ function renderScoring(scoring) {
   if (one && typeof one === 'object') {
     const header = node('strong','','本 Episode 的独立评测依据');
     const table = node('div','single-metric-row');
-    [['是否无碰撞成功', one.SR ? '是' : '否'],
+    [['是否无额外碰撞成功', one.SR ? '是' : '否'],
       ['终点误差', scoreNumber(one.NE,3)+' m'],
       ['调整后人体碰撞', scoreNumber(one.TCR,2)],
       ['是否发生额外碰撞', one.CR ? '是' : '否']].forEach(([key,value]) => {
@@ -532,6 +537,8 @@ function renderScoring(scoring) {
       details.push(['参考碰撞扣减数', metricValue(episodeMeasured.reference_collision_count)]);
     if (typeof raw.path_length === 'number')
       details.push(['真实路径长度', metricValue(raw.path_length) + ' m']);
+    if (typeof raw.spl === 'number')
+      details.push(['Habitat SPL（仅本地）', metricValue(raw.spl)]);
     if (typeof raw.steps_taken === 'number')
       details.push(['仿真执行步数', metricValue(raw.steps_taken)]);
     if (details.length) {
@@ -544,7 +551,7 @@ function renderScoring(scoring) {
       });
       evidence.append(header, grid);
       evidence.append(node('small','muted',
-        '记录的是本地闭环仿真测量，不等同于 CodaBench 重放结果。'));
+        '记录的是本地闭环仿真测量；参考碰撞由公开验证集标注补齐（仅在可用时），不等同于 CodaBench 重放结果。'));
     }
   }
   if (!one && !episodeMeasured) {
