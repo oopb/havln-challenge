@@ -8,7 +8,8 @@ from zipfile import ZipFile, ZIP_DEFLATED
 TRACE_NAMES = ('api.jsonl','navigation_agent.jsonl','task_planner.jsonl',
     'visual_perception.jsonl','tools.jsonl','steps.jsonl','safety.jsonl',
     'progress.jsonl','events.jsonl','memory.jsonl','memory.json','episode.json',
-    'summary.json','result.json','final_state.json','failure.json','state.jsonl')
+    'summary.json','result.json','final_state.json','failure.json','state.jsonl',
+    'simulator_metrics.json','simulator_metrics.jsonl')
 
 
 def read(path, default):
