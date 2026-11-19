@@ -5,6 +5,7 @@ unknown result, so only well-supported *small* motion interrupts a batch.
 No simulator pose, collision flag, reference path, or external model is read.
 """
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 from PIL import Image
@@ -14,7 +15,7 @@ from PIL import Image
 class ForwardMotion:
     state: str  # STALLED, PROGRESSED, or UNCERTAIN
     reason: str
-    estimated_m: float | None = None
+    estimated_m: Optional[float] = None
     matched_regions: int = 0
 
 
