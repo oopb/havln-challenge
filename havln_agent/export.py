@@ -23,6 +23,7 @@ import yaml
 
 from .api_client import APIClient, canonical, PROMPT_VERSION, model_endpoints
 from .episode_runner import run_episode
+from .simulator_evaluation import publish_run_metrics
 from scripts.pack_agent_diagnostics import pack
 from .habitat_adapter import camera_from_config, environment_config, runtime_imports
 from .progress_monitor import ProgressMonitor
@@ -398,7 +399,8 @@ def run_worker(task_path):
                             'hybrid', {'enabled': False})
                         row = run_episode(env, episode_id, camera, client,
                                           runtime_settings, directory,
-                                          instruction=episode.instruction.instruction_text)
+                                          instruction=episode.instruction.instruction_text,
+                                          split=job['split'], data_root=data)
                         atomic_json(directory / 'result.json', dict(fingerprint=task['fingerprint'], row=row))
                         rows.append(row)
                         atomic_json(progress_file, dict(phase='completed',
@@ -433,6 +435,14 @@ def assemble(output, jobs, expected, fingerprint, diagnostic, phase='phase1'):
         filename = split + ('.diagnostic.json' if diagnostic else '.json')
         atomic_json(output / filename, dict(format_version=1, split=split, episodes=rows))
         filenames.append(filename)
+    # Publish the independent metrics when available, even for diagnostic shards.
+    # Missing data are recorded as unavailable, never inferred from agent logs.
+    report = publish_run_metrics(output, expected)
+    for split, value in report['splits'].items():
+        print('[HA-VLN] Habitat metrics ' + split + ': ' +
+              str(value['fully_scored_episodes']) + '/' +
+              str(value['requested_episodes']) + ' fully scored; ' +
+              str(value.get('calculated_score', 'score unavailable')))
     if diagnostic:
         print('Diagnostic only: no submission ZIP is produced.')
         return
