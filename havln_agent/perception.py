@@ -9,6 +9,8 @@ import time
 import numpy as np
 from PIL import Image
 
+from .pillow_compat import RESAMPLING
+
 from .api_client import FLAG, TEXT, object_schema
 from .vision_protocol import coordinate_prompt, coordinate_schema, coordinate_unit, normalize_coordinates
 
@@ -411,7 +413,7 @@ def image_url(observation, max_edge=None):
     buffer = io.BytesIO()
     frame = Image.fromarray(observation.rgb)
     if max_edge is not None and max(frame.size) > max_edge:
-        frame.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        frame.thumbnail((max_edge, max_edge), RESAMPLING.LANCZOS)
     frame.save(buffer, format='PNG')
     return 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
 
@@ -441,7 +443,7 @@ def depth_image_url(observation, camera, max_edge=640, display_max_m=5.0):
     visualization[~valid]=[255,0,255]
     frame=Image.fromarray(visualization,'RGB')
     if max_edge and max(frame.size)>max_edge:
-        frame.thumbnail((max_edge,max_edge),Image.Resampling.NEAREST)
+        frame.thumbnail((max_edge,max_edge),RESAMPLING.NEAREST)
     buf=io.BytesIO()
     frame.save(buf,format='PNG')
     return 'data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()

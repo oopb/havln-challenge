@@ -14,7 +14,8 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .codex_motion import assess_forward_motion
+from .codex_motion import ForwardMotion, assess_forward_motion
+from .pillow_compat import RESAMPLING
 
 from .habitat_adapter import read_current_observation
 from .perception import Geometry, adapt_observation, depth_image_url
@@ -134,7 +135,18 @@ class CodexEpisode:
         comparison_directions = []
         if (not self.done and self._turn_total_deg >= 180
                 and self._turn_total_deg - self._last_scan_montage_turn >= 90):
-            self.scan_montage, comparison_directions = self._scan_comparison()
+            try:
+                self.scan_montage, comparison_directions = self._scan_comparison()
+            except Exception as error:
+                # The optional historical-view montage must never suppress
+                # the primary RGB observation or prevent further navigation.
+                self.scan_montage = None
+                comparison_directions = []
+                self._append("diagnostic_events.jsonl", {
+                    "kind": "scan_comparison_error",
+                    "observation_id": self.current_id,
+                    "error": type(error).__name__ + ": " + str(error)[:240],
+                })
             if self.scan_montage is not None:
                 self._last_scan_montage_turn = self._turn_total_deg
         frame = Image.fromarray(self.current.rgb)
@@ -189,7 +201,7 @@ class CodexEpisode:
         for i, (relative, rgb) in enumerate(selected):
             cell_x, cell_y = (i % 2) * 128, (i // 2) * 128
             thumb = Image.fromarray(rgb).convert("RGB")
-            thumb.thumbnail((124, 101), Image.Resampling.BILINEAR)
+            thumb.thumbnail((124, 101), RESAMPLING.BILINEAR)
             canvas.paste(thumb, (cell_x + (128 - thumb.width) // 2,
                                  cell_y + (103 - thumb.height) // 2))
             label = "current" if relative == 0 else (
@@ -237,22 +249,47 @@ class CodexEpisode:
         if isinstance(info, dict) and info.get("error"):
             self.done, self.end_reason = True, "habitat_action_rejected"
             raise RuntimeError("Habitat rejected action: " + str(action))
-        self.evaluator.action(action, info, self.env)
-        if action == "LOOK_UP":
-            self.pitch_deg += self.camera.tilt_angle
-        elif action == "LOOK_DOWN":
-            self.pitch_deg -= self.camera.tilt_angle
-        observation = adapt_observation(raw, self.camera)
-        observation.pitch_deg = self.pitch_deg
-        self.current = observation
-        self.current_id = self._save(observation)
-        # Verify the action AFTER execution using public RGB-D only; uncertain
-        # motion is not silently treated as confirmed progress.
-        motion = (assess_forward_motion(before_observation, observation, self.camera)
-                  if before_observation is not None else None)
-        stalled = motion is not None and motion.state == "STALLED"
+        # env.step has succeeded: count it IMMEDIATELY. Downstream evaluator,
+        # image capture and motion analysis are not part of the simulator
+        # transaction and must not make this already-executed action vanish.
         index = len(self.actions)
         self.actions.append(action)
+        try:
+            self.evaluator.action(action, info, self.env)
+            if action == "LOOK_UP":
+                self.pitch_deg += self.camera.tilt_angle
+            elif action == "LOOK_DOWN":
+                self.pitch_deg -= self.camera.tilt_angle
+            observation = adapt_observation(raw, self.camera)
+            observation.pitch_deg = self.pitch_deg
+            self.current = observation
+            self.current_id = self._save(observation)
+        except Exception as error:
+            # Fail closed on a post-action bookkeeping/capture failure, while
+            # preserving the atomic action that Habitat already executed.
+            self.done, self.end_reason = True, "post_action_processing_exception"
+            self._append("steps.jsonl", {
+                "step": index, "action": action, "tool_call_id": tool_id,
+                "origin": origin,
+                "input_file": "observations/" + before + ".npz",
+                "post_file": None,
+                "post_action_error": type(error).__name__ + ": " + str(error)[:240],
+            })
+            raise RuntimeError(
+                "Habitat executed " + action +
+                " but post-action capture failed; episode stopped") from error
+        # Verify motion strictly AFTER Habitat execution and action accounting.
+        # A broken monitor is a diagnostic interruption, NOT a failed move.
+        motion = None
+        monitor_error = None
+        if before_observation is not None:
+            try:
+                motion = assess_forward_motion(before_observation, observation,
+                                               self.camera)
+            except Exception as error:
+                monitor_error = type(error).__name__ + ": " + str(error)[:240]
+                motion = ForwardMotion("UNCERTAIN", "motion_monitor_error")
+        stalled = motion is not None and motion.state == "STALLED"
         if action in ("TURN_LEFT", "TURN_RIGHT"):
             angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
             self._heading_deg += angle
@@ -262,7 +299,12 @@ class CodexEpisode:
         elif action in ("LOOK_UP", "LOOK_DOWN"):
             self._ambiguous_forward_count = 0
         elif action == "MOVE_FORWARD":
-            if stalled:
+            if monitor_error is not None:
+                self._ambiguous_forward_count = 0
+                if not self._stall_depth_used:
+                    self._stall_depth_pending = True
+                    self._stall_depth_used = True
+            elif stalled:
                 self._ambiguous_forward_count = 0
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
@@ -291,6 +333,8 @@ class CodexEpisode:
             "input_file": "observations/" + before + ".npz",
             "post_file": "observations/" + self.current_id + ".npz",
         }
+        if monitor_error is not None:
+            row["motion_monitor_error"] = monitor_error
         if motion is not None:
             row["motion_feedback"] = motion.reason
             row["motion_state"] = motion.state
@@ -306,6 +350,8 @@ class CodexEpisode:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
+        if monitor_error is not None:
+            return "MOTION_MONITOR_ERROR"
         if stalled:
             return "NO_VISUAL_PROGRESS"
         if (motion is not None and motion.state == "UNCERTAIN"
@@ -321,6 +367,8 @@ class CodexEpisode:
     def step(self, requested):
         ident = self._start_tool("step")
         args = {"actions": requested}
+        # Snapshot before this request for truthful receipts on exceptions.
+        action_start = len(self.actions)
         try:
             if self.done:
                 result = self.status()
@@ -358,10 +406,15 @@ class CodexEpisode:
                               executed=executed, requested=requested)
                 if interruption:
                     result["skipped_count"] = len(requested) - requested_executed
-                    result["motion_feedback"] = (
-                        "Forward movement stalled; observe or choose a new approach."
-                        if interruption == "NO_VISUAL_PROGRESS"
-                        else "Repeated uncertain forward movement; inspect before continuing.")
+                    result["motion_feedback"] = {
+                        "NO_VISUAL_PROGRESS":
+                            "Forward movement stalled; observe or choose a new approach.",
+                        "MOTION_UNCERTAIN":
+                            "Repeated uncertain forward movement; inspect before continuing.",
+                        "MOTION_MONITOR_ERROR":
+                            "The forward action WAS executed, but its RGB-D monitor failed; "
+                            "remaining batch was skipped. Re-observe and decide what to do.",
+                    }[interruption]
                 if not self.done:
                     hint = self._motion_hint(executed)
                     if hint:
@@ -369,6 +422,11 @@ class CodexEpisode:
         except (ValueError, RuntimeError) as error:
             result = self.status()
             result.update(status="TOOL_ERROR", error=str(error))
+            if isinstance(requested, list):
+                result["requested"] = requested
+                result["executed"] = self.actions[action_start:]
+                result["skipped_count"] = max(
+                    0, len(requested) - len(result["executed"]))
         self._end_tool(ident, "step", args, result)
         if self.done:
             self.finish()
@@ -388,7 +446,12 @@ class CodexEpisode:
         if self.finalized:
             return
         self.finalized = True
-        completed = bool(self.actions and (
+        # A STOP executed before a capture failure is not a valid replay.
+        # Never export incomplete diagnostics as a legal submission sequence.
+        integrity_failure = self.end_reason in (
+            "post_action_processing_exception",
+            "habitat_action_exception", "habitat_action_rejected")
+        completed = bool(not integrity_failure and self.actions and (
             self.actions[-1] == "STOP" or len(self.actions) == 500))
         if completed:
             check_rows([{"episode_id": self.episode_id,
