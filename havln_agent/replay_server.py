@@ -555,6 +555,21 @@ def serve(source_path, host='127.0.0.1', port=8765, metrics_path=None):
                                 scoped['per_episode'] = (
                                     summary.get('per_episode', {}).get(
                                         episode[len(split)+1:]))
+                                # Always show a genuine captured Episode record
+                                # even if the batch score file was absent, came
+                                # from an old collector, or lacked hidden truth.
+                                observed = (summary.get('observed_episodes') or {}).get(
+                                    episode[len(split)+1:])
+                                if observed is None:
+                                    recorded = source.json(episode, 'simulator_metrics.json')
+                                    if recorded.get('episode_id') == episode[len(split)+1:]:
+                                        observed = recorded
+                                scoped['observed_episode'] = observed
+                                if observed and scoped.get('status') == 'missing_metrics':
+                                    scoped['status'] = 'partial_metrics'
+                                    scoped['limitations'] = [
+                                        'True Habitat measurements found for this Episode; '
+                                        'no complete run-wide scorer report available.']
                                 overview['scoring'] = scoped
                         return self._json(overview)
                     if len(parts) == 5 and parts[3] == 'event':
