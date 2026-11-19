@@ -13,7 +13,7 @@ TOOLS = [
         "name": "observe",
         "description": (
             "Return the current RGB and short observation metadata; add a Depth image "
-            "only if a near obstacle is detected directly ahead. No hidden map."
+            "only for a near obstacle or motion stall. Repeated turns may add a compact view comparison. No hidden map."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
@@ -24,8 +24,8 @@ TOOLS = [
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
             "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
-            "shared episode budget. An unchanged RGB after MOVE_FORWARD stops "
-            "the remaining batch; use the feedback to choose what to do next."
+            "shared episode budget. Verified stalled or ambiguous forward movement can stop "
+            "the remaining batch; inspect the feedback before trying again."
         ),
         "inputSchema": {
             "type": "object",
@@ -84,6 +84,10 @@ class MCPServer:
                 ]
                 if depth_data is not None:
                     content.append({"type": "image", "data": depth_data,
+                                    "mimeType": "image/png"})
+                comparison = getattr(self.episode, "scan_montage", None)
+                if comparison is not None:
+                    content.append({"type": "image", "data": comparison,
                                     "mimeType": "image/png"})
                 return {"content": content, "isError": False}
             if name == "step":
