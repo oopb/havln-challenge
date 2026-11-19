@@ -6,9 +6,11 @@ import unittest
 
 from havln_agent.competition_scoring import (
     EXPECTED_EPISODES, HUMAN_BETA, aggregate_episodes, official_formula,
-    summarize_run, summarize_split,
+    summarize_run, summarize_split, published_reference_collision_count,
 )
-from havln_agent.replay_server import _load_scoring_report, _split_for_episode
+from havln_agent.replay_server import (
+    ReplaySource, _load_scoring_report, _split_for_episode,
+    _capture_only_scoring_report)
 
 
 class FormulaTests(unittest.TestCase):
@@ -85,6 +87,92 @@ class FormulaTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_published_validation_reference_lookup_and_private_test(self):
+        self.assertEqual(published_reference_collision_count('val_seen', 548), 1)
+        self.assertEqual(published_reference_collision_count('val_seen', 571), 0)
+        self.assertEqual(published_reference_collision_count('val_unseen', 310), 2)
+        self.assertIsNone(published_reference_collision_count('test', 548))
+        self.assertIsNone(published_reference_collision_count('val_seen', 90000))
+
+    def test_reconstruct_20261119_live_batch_from_published_references(self):
+        # Real recorded Habitat values from codex-p1-random-3, not model output.
+        samples = [
+            ('136', 1.512451113314325, True, 0),
+            ('310', 2.0720264297459865, True, 3),
+            ('324', 2.2035441260170767, True, 6),
+            ('518', 3.1361273308452273, False, 0),
+            ('548', 0.7642165338260678, True, 5),
+            ('562', 1.1070478380604385, True, 0),
+            ('571', 0.4060785078970203, True, 1),
+            ('729', 3.480994263865456, False, 1),
+        ]
+        report = dict(source='actual_live_habitat_measurements',
+                      requested_episodes=8, captured_complete=8,
+                      fully_scored_episodes=0,
+                      scope='diagnostic_subset_or_missing_truth',
+                      observed_episodes=[
+                          dict(episode_id=i, complete=True,
+                               recorded_actions=20,
+                               navigation_error_m=ne, success=ok,
+                               collisions_count=collisions,
+                               reference_collision_count=None)
+                          for i, ne, ok, collisions in samples
+                      ])
+        result = summarize_split('val_seen',
+                                 [sample[0] for sample in samples],
+                                 report, 'score_metrics.json')
+        self.assertEqual(result['status'], 'scored')
+        self.assertEqual(result['fully_scored_episodes'], 8)
+        self.assertEqual(result['evaluated_episodes'], 8)
+        self.assertEqual(result['reconstructed_from_observed_episodes'], 8)
+        self.assertEqual(result['metrics']['SR'], .25)
+        self.assertAlmostEqual(result['metrics']['NE'], 1.8353107679464495)
+        self.assertAlmostEqual(result['metrics']['CR'], 0.7129765395894428)
+        self.assertEqual(result['metrics']['TCR'], 1.875)
+        self.assertAlmostEqual(result['score'], 25.624510185446173)
+        self.assertEqual(result['observed_episodes']['548']['reference_collision_count'], 1)
+        self.assertEqual(result['per_episode']['548']['TCR'], 4)
+        self.assertNotIn('adjusted_collision_count',
+                         report['observed_episodes'][0])
+        self.assertFalse(result['authoritative'])
+        self.assertFalse(result['missing_or_partial'])
+
+    def test_reconstruct_only_complete_real_habitat_captures(self):
+        rows = [
+            dict(episode_id='571', complete=True,
+                 navigation_error_m=0.4, success=True, collisions_count=1),
+            dict(episode_id='729', complete=False,
+                 navigation_error_m=3.5, success=False, collisions_count=1),
+        ]
+        report = dict(source='actual_live_habitat_measurements',
+                      observed_episodes=rows)
+        result = summarize_split('val_seen', ['571', '729'], report)
+        self.assertEqual(result['status'], 'scored')
+        self.assertEqual(result['evaluated_episodes'], 1)
+        self.assertEqual(result['per_episode']['571']['TCR'], 1)
+        self.assertNotIn('729', result['per_episode'])
+        self.assertIsNone(summarize_split('test', ['571'], report)['score'])
+        untrusted = dict(report, source='some_model_summary')
+        self.assertIsNone(
+            summarize_split('val_seen', ['571', '729'], untrusted)['score'])
+
+    def test_replay_without_root_score_file_uses_real_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            d = root/'traces'/'val_seen-548'
+            d.mkdir(parents=True)
+            (d/'simulator_metrics.json').write_text(json.dumps(dict(
+                capture='live_habitat_measurements', split='val_seen',
+                episode_id='548', complete=True,
+                navigation_error_m=0.7642165338260678, success=True,
+                collisions_count=5, reference_collision_count=None)))
+            source = ReplaySource(root)
+            report = _capture_only_scoring_report(source, source.episodes())
+            self.assertEqual(report['source'], 'actual_live_habitat_measurements')
+            scored = summarize_run({'val_seen':['548']}, report)
+            self.assertEqual(scored['by_split']['val_seen']['status'], 'scored')
+            self.assertEqual(scored['by_split']['val_seen']['per_episode']['548']['TCR'], 4)
+
     def test_missing_truth_not_mistaken_for_score_zero(self):
         payload = summarize_run({'val_seen':['1','2']})
         one = payload['by_split']['val_seen']
