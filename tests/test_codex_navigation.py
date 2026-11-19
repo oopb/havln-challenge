@@ -428,6 +428,21 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertFalse((agent.directory / "result.json").exists())
         self.assertTrue((agent.directory / "failure.json").exists())
 
+    def test_post_stop_capture_failure_must_not_export_a_false_success(self):
+        env = FakeHabitat()
+        agent = CodexEpisode(env, camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "stop_capture_error")
+        with patch.object(agent, "_save", side_effect=OSError("disk failed")):
+            reply = agent.step(["STOP"])
+        self.assertEqual(reply["status"], "TOOL_ERROR")
+        self.assertEqual(reply["executed"], ["STOP"])
+        self.assertEqual(agent.actions, env.actions)
+        self.assertTrue(reply["done"])
+        self.assertFalse((agent.directory / "result.json").exists())
+        summary = json.loads((agent.directory / "summary.json").read_text())
+        self.assertFalse(summary["completed"])
+        self.assertEqual(summary["stop_reason"], "post_action_processing_exception")
+
     def test_scan_montage_exception_does_not_hide_primary_rgb(self):
         """Optional view comparisons cannot break the observe MCP tool."""
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
