@@ -16,6 +16,7 @@ from unittest.mock import patch, MagicMock, Mock
 import numpy as np
 
 from havln_agent.codex_episode import CodexEpisode
+from havln_agent.codex_motion import ForwardMotion, assess_forward_motion
 from havln_agent.codex_mcp import MCPServer
 from havln_agent.replay_server import ReplaySource, EpisodeReplay
 from scripts.pack_agent_diagnostics import pack
@@ -202,8 +203,10 @@ class CodexEpisodeTests(unittest.TestCase):
             later_info, _, later_depth = agent.observe()
         self.assertFalse(later_info["depth_sent"])
         self.assertIsNone(later_depth)
-        # New visually changing forward enables a new one-shot inspection.
-        self.assertEqual(agent.step(["MOVE_FORWARD"])["status"], "RUNNING")
+        # Confirmed motion (not merely changing pixels) re-arms inspection.
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   return_value=ForwardMotion("PROGRESSED", "test_progress", 0.25)):
+            self.assertEqual(agent.step(["MOVE_FORWARD"])["status"], "RUNNING")
         with patch.object(agent.env, "step", side_effect=lambda action: (
                 agent.env.image(), 0., action == "STOP", {})):
             # This unmodified image is now unchanged versus the current frame.
@@ -277,7 +280,9 @@ class CodexEpisodeTests(unittest.TestCase):
     def test_long_turn_batch_survives_visual_forward_reset(self):
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
                              Path(self.tempdir.name) / "batchturn")
-        reply = agent.step(["TURN_LEFT"] * 15 + ["MOVE_FORWARD"])
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   return_value=ForwardMotion("PROGRESSED", "test_progress", 0.25)):
+            reply = agent.step(["TURN_LEFT"] * 15 + ["MOVE_FORWARD"])
         self.assertEqual(reply["status"], "RUNNING")
         self.assertEqual(reply["motion_hint"]["batch_turn_total_deg"], 225)
         self.assertEqual(reply["motion_hint"]["batch_turn_net_deg"], -225)
@@ -302,11 +307,63 @@ class CodexEpisodeTests(unittest.TestCase):
             self.assertEqual(second["status"], "NO_VISUAL_PROGRESS")
             self.assertEqual(second["motion_hint"]["recent_stall_directions_deg"],
                              [-30, 0])
-        # A changing RGB clears short-term local obstacle attempts.
-        cleared = agent.step(["MOVE_FORWARD"])
+        # Confirmed motion clears short-term local obstacle attempts.
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   return_value=ForwardMotion("PROGRESSED", "test_progress", 0.25)):
+            cleared = agent.step(["MOVE_FORWARD"])
         self.assertEqual(cleared["status"], "RUNNING")
         self.assertNotIn("motion_hint", cleared)
         self.assertEqual(len(agent.actions), 5)
+
+    def test_noisy_stall_early_stops_and_requests_depth(self):
+        """RGB differences must not conceal a confidently stalled forward."""
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   return_value=ForwardMotion(
+                       "STALLED", "rgbd_near_zero_translation", 0.015, 22)):
+            result = self.controller.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(result["status"], "NO_VISUAL_PROGRESS")
+        self.assertEqual(result["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(result["skipped_count"], 2)
+        log = json.loads((self.controller.directory / "steps.jsonl").read_text())
+        self.assertEqual(log["motion_state"], "STALLED")
+        self.assertEqual(log["motion_estimated_m"], 0.015)
+        self.assertTrue(self.controller._stall_depth_pending)
+
+    def test_repeated_weak_motion_interrupts_without_lock(self):
+        with patch("havln_agent.codex_episode.assess_forward_motion",
+                   return_value=ForwardMotion(
+                       "UNCERTAIN", "ambiguous_forward_translation", 0.06, 15)):
+            first = self.controller.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(first["status"], "MOTION_UNCERTAIN")
+        self.assertEqual(first["executed"], ["MOVE_FORWARD", "MOVE_FORWARD"])
+        self.assertEqual(first["skipped_count"], 1)
+        self.assertFalse(first["done"])
+        turned = self.controller.step(["TURN_RIGHT"])
+        self.assertEqual(turned["status"], "RUNNING")
+
+    def test_repeated_scan_sends_comparison_only_when_useful(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
+                             Path(self.tempdir.name) / "scan_montage")
+        response = None
+        for _ in range(4):
+            agent.step(["TURN_LEFT"] * 3)
+            with patch("havln_agent.codex_episode.read_current_observation",
+                       side_effect=lambda env, cam, instruction:
+                       adapt_observation(env.image(), cam)):
+                response = MCPServer(agent)._dispatch(
+                    "tools/call", {"name": "observe", "arguments": {}})
+        info = json.loads(response["content"][0]["text"])
+        self.assertEqual(info["scan_status"], "REPEATED_SCAN")
+        self.assertEqual(len(info["scan_view_directions_deg"]), 4)
+        self.assertEqual([x["type"] for x in response["content"]],
+                         ["text", "image", "image"])
+        # Observing again without a new 90-degree scan does not resend.
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   side_effect=lambda env, cam, instruction:
+                   adapt_observation(env.image(), cam)):
+            info2, _, _ = agent.observe()
+        self.assertNotIn("scan_status", info2)
+        self.assertIsNone(agent.scan_montage)
 
     def test_tiny_normal_actions_do_not_add_motion_hint_or_change_export(self):
         first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
