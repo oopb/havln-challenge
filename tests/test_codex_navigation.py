@@ -20,7 +20,7 @@ from havln_agent.codex_motion import ForwardMotion, assess_forward_motion
 from havln_agent.codex_mcp import MCPServer
 from havln_agent.replay_server import ReplaySource, EpisodeReplay
 from scripts.pack_agent_diagnostics import pack
-from scripts.run_codex_episode import (preflight, summarize_codex_events,
+from scripts.run_codex_episode import (preflight, require_mcp_runtime, summarize_codex_events,
                                        run_codex_cli, require_fresh_container_output,
                                        collect_codex_audit, archive_codex_run)
 from havln_agent.perception import Camera, adapt_observation
@@ -553,7 +553,28 @@ class CodexEpisodeTests(unittest.TestCase):
                    return_value=SimpleNamespace(returncode=0,
                       stdout="ready", stderr="")) as run:
             self.assertEqual(preflight(args, "test"), 0)
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 6)
+            self.assertTrue(any("codex_episode" in str(c.args) for c in run.call_args_list))
+
+    def test_mcp_import_probe_uses_container_python_and_reports_traceback(self):
+        args = SimpleNamespace(docker_bin="docker", container="havln-cma")
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(
+                       returncode=0, stdout="MCP controller import OK, Python 3.8.18\\n",
+                       stderr="")) as run:
+            self.assertIn("3.8.18", require_mcp_runtime(args))
+        command = run.call_args.args[0]
+        self.assertEqual(command[:6],
+                         ["docker", "exec", "-w", "/toolkit", "havln-cma", "python"])
+        self.assertIn("from havln_agent.codex_episode import CodexEpisode",
+                      command[-1])
+        with patch("scripts.run_codex_episode.subprocess.run",
+                   return_value=SimpleNamespace(
+                       returncode=1, stdout="",
+                       stderr="Traceback: unsupported annotation\\n")):
+            with self.assertRaisesRegex(RuntimeError,
+                                        "unsupported annotation"):
+                require_mcp_runtime(args)
 
     def test_codex_wall_time_limit_terminates_stalled_process(self):
         output = Path(self.tempdir.name) / "stdout.log"
