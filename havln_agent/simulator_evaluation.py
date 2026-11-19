@@ -4,13 +4,13 @@ This module is for diagnostics and offline score reconstruction only. Nothing
 recorded here is returned to NavigationAgent, Codex, MCP tools, or model prompts.
 Hidden test goals/reference collisions are never inferred from an action trace.
 """
-from functools import lru_cache
 import json
 import math
 from pathlib import Path
 import time
 
-from .competition_scoring import aggregate_episodes
+from .competition_scoring import (
+    aggregate_episodes, published_reference_collision_count)
 from .submission_contract import atomic_json
 
 
@@ -29,7 +29,6 @@ def finite_number(value):
     return result if math.isfinite(result) else None
 
 
-@lru_cache(maxsize=12)
 def _collision_reference(path):
     try:
         with Path(path).open(encoding="utf-8") as handle:
@@ -41,11 +40,18 @@ def _collision_reference(path):
 
 def reference_collision_count(data_root, split, episode_id):
     """Only published validation allowances; absent test allowances stay unknown."""
-    if split not in ("val_seen", "val_unseen") or data_root is None:
+    if split not in ("val_seen", "val_unseen"):
         return None
-    path = Path(data_root) / "HA-R2R-tools" / ("collision_num_" + split + ".json")
-    number = finite_number(_collision_reference(str(path)).get(str(episode_id)))
-    return number if number is not None and number >= 0 else None
+    number = None
+    if data_root is not None:
+        path = Path(data_root) / "HA-R2R-tools" / ("collision_num_" + split + ".json")
+        number = finite_number(_collision_reference(str(path)).get(str(episode_id)))
+    if number is not None and number >= 0:
+        return number
+    # Released validation annotations are public, and can be bundled with
+    # this toolkit when the operator mounted only HA-R2R episodes/assets.
+    # Never substitute these for withheld Phase 2 test annotations.
+    return published_reference_collision_count(split, episode_id)
 
 
 def _metric_sample(info):

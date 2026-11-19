@@ -5,6 +5,11 @@ on:
     paths:
       - "havln_agent/codex_episode.py"
       - "havln_agent/codex_motion.py"
+      - "havln_agent/competition_scoring.py"
+      - "havln_agent/simulator_evaluation.py"
+      - "havln_agent/scoring_data/**"
+      - "tests/test_competition_scoring.py"
+      - "tests/test_simulator_evaluation.py"
       - "havln_agent/pillow_compat.py"
       - "havln_agent/perception.py"
       - "tests/test_codex_motion.py"
@@ -43,6 +48,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_codex_usage.py' -v
       - name: Test independent Codex batch scheduler and lossless ZIP playback
         run: python -m unittest discover -s tests -p 'test_codex_batch.py' -v
+      - name: Test validation scoring reconstruction and proof isolation
+        run: python -m unittest discover -s tests -p 'test_competition_scoring.py' -v
+      - name: Test Habitat metric capture and published allowance fallback
+        run: python -m unittest discover -s tests -p 'test_simulator_evaluation.py' -v
       - name: Validate existing replay studio compatibility
         run: python -m unittest discover -s tests -p 'test_replay_studio.py' -v
       - name: Validate replay frontend syntax
