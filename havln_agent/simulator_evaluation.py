@@ -173,7 +173,7 @@ def publish_run_metrics(root, expected):
               "CodaBench replay; dynamic human timing can differ."),
         splits={})
     for split, episode_ids in expected.items():
-        evaluated, partial, samples = [], [], []
+        evaluated, partial, samples, observed = [], [], [], []
         for episode_id in episode_ids:
             path = root / "traces" / (split + "-" + str(episode_id)) / "simulator_metrics.json"
             if not path.is_file():
@@ -187,6 +187,13 @@ def publish_run_metrics(root, expected):
             if row.get("episode_id") != str(episode_id) or row.get("split") != split:
                 partial.append(dict(episode_id=str(episode_id), reason="capture_identity_mismatch"))
                 continue
+            # Publish the measured components separately from fully scored
+            # episodes. Missing goal truth or collision allowance is not a zero.
+            observed.append({key: row[key] for key in (
+                "episode_id", "complete", "recorded_actions",
+                "navigation_error_m", "success", "collisions_count",
+                "reference_collision_count", "final_simulator_position_m",
+                "final_metrics", "available") if key in row})
             if row.get("complete"):
                 samples.append(row)
             score_episode = row.get("score_episode") if row.get("complete") else None
@@ -218,12 +225,16 @@ def publish_run_metrics(root, expected):
                                       episodes=len(vals))
         entry = dict(requested_episodes=len(episode_ids), captured_complete=len(samples),
                      fully_scored_episodes=len(evaluated),
-                     missing_or_partial=partial, components=components, episodes=evaluated,
+                     missing_or_partial=partial, components=components,
+                     episodes=evaluated, observed_episodes=observed,
                      scope="complete_run" if len(evaluated)==len(episode_ids)
                            else "diagnostic_subset_or_missing_truth")
         if evaluated:
             values, _, normalization = aggregate_episodes(evaluated, split)
             entry["calculated_metrics"] = {key: values[key] for key in ("SR","NE","CR","TCR")}
+            # Keep the original field for old consumers; the established
+            # Replay importer reads 'metrics'.
+            entry["metrics"] = dict(entry["calculated_metrics"])
             entry["calculated_score"] = values["score"]
             entry["collision_normalization"] = normalization
         report["splits"][split] = entry

@@ -7,6 +7,8 @@ import unittest
 
 from havln_agent.simulator_evaluation import (
     SimulatorMetricCapture, publish_run_metrics, _metric_sample)
+from havln_agent.competition_scoring import summarize_run
+from havln_agent.replay_server import ReplaySource, _load_scoring_report
 
 
 class DummyEnv:
@@ -93,6 +95,66 @@ class MetricCaptureTests(unittest.TestCase):
             report = publish_run_metrics(root, {"val_unseen": ["9", "10"]})
             self.assertEqual(report["splits"]["val_unseen"]["fully_scored_episodes"], 0)
             self.assertEqual(len(report["splits"]["val_unseen"]["missing_or_partial"]), 2)
+
+    def test_real_collector_output_is_readable_by_replay_score(self):
+        # Regression: collector used calculated_metrics but Replay required metrics,
+        # causing an incorrect 'no independent evaluation' warning.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            refs = root / "data" / "HA-R2R-tools"
+            refs.mkdir(parents=True)
+            (refs / "collision_num_val_seen.json").write_text(
+                '{"1": 0}', encoding="utf-8")
+            trace = root / "run" / "traces" / "val_seen-1"
+            trace.mkdir(parents=True)
+            cap = SimulatorMetricCapture(trace, "1", "val_seen", root / "data")
+            cap.reset(DummyEnv())
+            cap.action("STOP", {
+                "distance_to_goal": 1.1, "success": 1,
+                "collisions": {"count": 0},
+                "path_length": 2.0, "steps_taken": 1,
+            }, DummyEnv())
+            cap.finish(True, ["STOP"])
+            original = publish_run_metrics(root / "run", {"val_seen": ["1"]})
+            self.assertIn("metrics", original["splits"]["val_seen"])
+            source = ReplaySource(root / "run")
+            imported, filename = _load_scoring_report(source)
+            viewed = summarize_run({"val_seen": ["1"]}, imported, filename)
+            split = viewed["by_split"]["val_seen"]
+            self.assertEqual(split["status"], "scored")
+            self.assertEqual(split["metrics"]["SR"], 1)
+            self.assertGreater(split["score"], 0)
+            self.assertEqual(split["observed_episodes"]["1"]["collisions_count"], 0)
+            self.assertEqual(split["captured_complete"], 1)
+
+    def test_test_split_shows_real_metrics_without_faking_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trace = root / "traces" / "test-1"
+            trace.mkdir(parents=True)
+            cap = SimulatorMetricCapture(trace, "1", "test", root)
+            cap.reset(DummyEnv())
+            cap.action("STOP", {
+                "collisions": {"count": 3},
+                "path_length": 0.75, "steps_taken": 1
+            }, DummyEnv())
+            cap.finish(True, ["STOP"])
+            report = publish_run_metrics(root, {"test": ["1"]})
+            split = summarize_run({"test": ["1"]}, report, "score_metrics.json")["by_split"]["test"]
+            self.assertEqual(split["status"], "partial_metrics")
+            self.assertIsNone(split["score"])
+            self.assertEqual(split["components"]["raw_collisions_mean_observed"]["value"], 3)
+            self.assertEqual(split["observed_episodes"]["1"]["collisions_count"], 3)
+            self.assertEqual(split["fully_scored_episodes"], 0)
+
+    def test_earlier_collector_format_is_still_accepted(self):
+        legacy = {"splits": {"val_seen": {
+            "calculated_metrics": {"SR": 0.5, "NE": 3, "CR": 0.2, "TCR": 2},
+            "fully_scored_episodes": 1, "requested_episodes": 1,
+            "scope": "complete_run"}}}
+        split = summarize_run({"val_seen": ["1"]}, legacy, "score_metrics.json")["by_split"]["val_seen"]
+        self.assertEqual(split["status"], "scored")
+        self.assertEqual(split["metrics"]["NE"], 3)
 
     def test_metric_parser_ignores_text_and_nonfinite_values(self):
         parsed = _metric_sample(dict(distance_to_goal="2.5", success=float("nan"),

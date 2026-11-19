@@ -452,7 +452,13 @@ function renderScoring(scoring) {
   const scored = scoring && scoring.status === 'scored';
   const metrics = scored ? scoring.metrics : {};
   $('officialScore').textContent = scored ? scoreNumber(scoring.score, 5) : '—';
+  const episodeMeasured = scoring?.observed_episode || null;
+  const components = scoring?.components || {};
+  const measured = Boolean(episodeMeasured ||
+    Object.values(components).some(x => x && typeof x.value === 'number'));
+  const partial = scoring?.status === 'partial_metrics' || (!scored && measured);
   $('scoreStatus').textContent = scored ? '离线复算 · 非官方成绩' :
+    partial ? '已采集部分真实指标' :
     scoring?.status === 'invalid_metrics' ? '评测数据无效' : '缺少评测数据';
   $('scoreStatus').classList.toggle('warning', !scored);
   $('scoreSR').textContent = scoreRate(metrics?.SR);
@@ -466,12 +472,33 @@ function renderScoring(scoring) {
     '评分来源：' + (scoring.imported_from || '导入评测结果') +
       ' · ' + (scoring.scope === 'imported_split_metrics' ? '聚合指标' : '逐 Episode 评测') +
       ' · 不是 CodaBench 官方排行榜成绩' :
-    '没有独立评测的目标距离、成功状态和人体碰撞记录，不会将模型预测当作真实评分。';
+    partial ? '已记录 Habitat 真实物理测量；缺少目标或碰撞基准时不计算综合 Score。'
+    : '当前打开的轨迹没有独立仿真评测数据；旧日志无法从画面或模型输出恢复真实评分。';
+  const component = key => components[key] && typeof components[key].value === 'number'
+    ? scoreNumber(components[key].value, 3) : '—';
+  const observedBits = [];
+  if (component('NE_m_observed') !== '—')
+    observedBits.push('实测 NE 均值 ' + component('NE_m_observed') + ' m');
+  if (component('arrival_success_rate_observed') !== '—')
+    observedBits.push('实测到达率 ' + scoreRate(components.arrival_success_rate_observed.value));
+  if (component('raw_collisions_mean_observed') !== '—')
+    observedBits.push('原始碰撞均值 ' + component('raw_collisions_mean_observed'));
+  if (component('path_length_m_observed') !== '—')
+    observedBits.push('路径长度均值 ' + component('path_length_m_observed') + ' m');
+  if (component('simulator_steps_mean_observed') !== '—')
+    observedBits.push('仿真步数均值 ' + component('simulator_steps_mean_observed'));
+  $('scoreObserved').hidden = !observedBits.length;
+  $('scoreObserved').textContent = observedBits.join(' · ') +
+    (observedBits.length ? '（真实采集，非官方重放评分）' : '');
+  const selected = scoring?.requested_episodes ?? state.data?.counts?.actions ?? null;
   $('scoreCoverage').textContent =
     (scoring?.split || state.data?.scoring_split || '') +
+    (typeof scoring?.captured_complete === 'number' ?
+      ' · 真实采集 ' + scoring.captured_complete + '/' +
+        (scoring.requested_episodes || '?') + ' Episode' : '') +
     (scoring?.evaluated_episodes ?
-      ' · 已评测 ' + scoring.evaluated_episodes + ' / ' +
-        scoring.expected_split_episodes : ' · 无已验证样本数');
+      ' · 完整评分 ' + scoring.evaluated_episodes + ' 个' :
+      measured ? ' · 完整 Score 暂不可用' : ' · 无已验证评分样本');
   $('scoringLimitations').textContent = (scoring?.limitations || [
     '仅保存动作与 RGB-D 的运行轨迹无法直接计算 SR、NE、CR、TCR。'
   ]).join('；');
@@ -490,9 +517,39 @@ function renderScoring(scoring) {
         table.append(item);
       });
     evidence.append(header,table);
-  } else {
+  }
+  if (episodeMeasured) {
+    const raw = episodeMeasured.final_metrics || {};
+    const details = [];
+    const metricValue = value => typeof value === 'number' ? scoreNumber(value, 3) : '—';
+    if (typeof episodeMeasured.navigation_error_m === 'number')
+      details.push(['终点真实距离', metricValue(episodeMeasured.navigation_error_m) + ' m']);
+    if (typeof episodeMeasured.success === 'boolean')
+      details.push(['Habitat 到达状态', episodeMeasured.success ? '到达' : '未到达']);
+    if (typeof episodeMeasured.collisions_count === 'number')
+      details.push(['真实碰撞次数（原始）', metricValue(episodeMeasured.collisions_count)]);
+    if (typeof episodeMeasured.reference_collision_count === 'number')
+      details.push(['参考碰撞扣减数', metricValue(episodeMeasured.reference_collision_count)]);
+    if (typeof raw.path_length === 'number')
+      details.push(['真实路径长度', metricValue(raw.path_length) + ' m']);
+    if (typeof raw.steps_taken === 'number')
+      details.push(['仿真执行步数', metricValue(raw.steps_taken)]);
+    if (details.length) {
+      const header = node('strong','','本 Episode 的 Habitat 真实采集数据');
+      const grid = node('div','single-metric-row');
+      details.forEach(([key, value]) => {
+        const item = node('div');
+        item.append(node('small','',key), node('strong','',value));
+        grid.append(item);
+      });
+      evidence.append(header, grid);
+      evidence.append(node('small','muted',
+        '记录的是本地闭环仿真测量，不等同于 CodaBench 重放结果。'));
+    }
+  }
+  if (!one && !episodeMeasured) {
     evidence.append(node('p','muted',
-      '本 Episode 没有独立的真实评测记录；不能从 STOP 或图像变化推断是否成功。'));
+      '本 Episode 没有真实仿真评测记录；不能从 STOP 或图像变化推断是否成功。'));
   }
 }
 async function calculateScorePreview() {
