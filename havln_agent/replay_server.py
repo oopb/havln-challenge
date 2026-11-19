@@ -17,6 +17,8 @@ from zipfile import ZipFile
 import numpy as np
 from PIL import Image
 
+from .pillow_compat import RESAMPLING
+
 from .perception import depth_image_url
 from .competition_scoring import official_formula, summarize_run
 
@@ -420,7 +422,7 @@ class EpisodeReplay:
         if channel == 'rgb':
             image = Image.fromarray(rgb)
             if max_edge and max(image.size) > max_edge:
-                image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                image.thumbnail((max_edge, max_edge), RESAMPLING.LANCZOS)
             buffer = io.BytesIO()
             image.save(buffer, format='PNG')
             return buffer.getvalue()
