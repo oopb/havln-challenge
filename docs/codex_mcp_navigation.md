@@ -30,6 +30,12 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   forward stalls (within 16 actions) are expressed as angles **relative to
   the current view**. These hints never interrupt/limit turning or prohibit
   movement, and normal receipts do not contain them.
+- Prompt-only local clearance strategy: in blocked or uncertain near-foot
+  areas, Codex may issue 1–2 `LOOK_DOWN` actions, call `observe()` for fresh RGB
+  and optional Depth, then use matching `LOOK_UP` actions before evaluating
+  short forward batches or rerouting. This is not automatic recovery, a depth
+  guarantee, or permission to walk into obstacles. On a visually clear open
+  corridor, Codex may use longer consecutive `MOVE_FORWARD` batches.
 - This is not a geometry authorization gate or motion odometry: a changed
   RGB does not certify actual displacement; the obstacle heuristic only
   selects whether Depth is shown. No hidden pose, reference trajectory, goal
