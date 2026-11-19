@@ -22,16 +22,15 @@ from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, 
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
-The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
-Navigate using visual evidence and the six permitted simulator actions.
-On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe. When searching by turning, use short turn batches with a fresh view, not long blind scans.
-observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied); avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
-Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction. After a forward stall, one extra Depth view may be sent even without a confirmed central obstacle; that does not certify a safe path.
-Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
-Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
-People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
-Near the destination, confirm the exact stopping place using visible evidence; do not prolong turn-only searching.
-If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
+Observe returns RGB; Depth appears for a near obstacle or after a detected forward stall. Depth is evidence, never clearance authorization.
+Navigate using visual evidence and the six permitted actions. On open paths, use longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain passages use short movements with fresh observations.
+step may report NO_VISUAL_PROGRESS (verified stall) or MOTION_UNCERTAIN (repeated weak motion). These interrupt only the remaining batch, not the episode. Re-observe and reconsider direction; never retry the same failed approach without new evidence.
+When searching, turn in short batches and observe. If motion_hint reports REPEATED_SCAN, compare the supplied historical views and their angles relative to your CURRENT heading; revisit a promising opening rather than circling again. Do not force forward into unsafe space.
+observe pitch_deg is commanded tilt from the initial forward view (negative=down). For uncertain near-foot clearance, LOOK_DOWN then observe; restore pitch near zero with LOOK_UP before forward motion. Avoid repeated floor-only inspections without new evidence.
+Follow landmarks in order: interpret left/right at the place specified in the route, not at a later exploratory viewpoint.
+People can move between views: keep a safe gap, avoid their immediate path, and use stable surroundings to identify locations.
+Near a final landmark use short movements; when the requested stopping place is visibly confirmed, STOP rather than moving solely to improve image alignment.
+If Depth appears: dark=near, bright=far, magenta=invalid. Its distance and orientation may be outdated after turning.
 When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.

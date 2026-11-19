@@ -17,20 +17,27 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   (commanded angle relative to the initial forward view; negative is down).
   The episode's route instruction is already in one-time system instructions.
   Depth is sent when conservative public-Depth evidence finds a near obstacle,
-  or **once** on the next observation after an exact-RGB stalled forward in
-  the same locally blocked period. Other observations return RGB only.
+  or **once** on the next observation after a verified RGB-D stalled/ambiguous
+  forward motion within the same locally blocked period. Other observations return RGB only.
   `depth_reason` distinguishes `front_obstacle` from
   `post_stall_inspection`; `front_obstacle_m` is included only when the
   central near-obstacle heuristic confirms one.
   step executes an ordered list of allowed atomic actions and returns receipts.
-  If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
-  and the remaining requested batch actions are skipped; only executed actions
-  consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
-  remains active. The next `observe()` may include the single post-stall
+  Each MOVE_FORWARD is checked *after execution* using matched public RGB-D
+  features, returning PROGRESSED, STALLED or UNCERTAIN. Exact RGB identity
+  also counts as STALLED. A reliable stall interrupts the remaining batch
+  with `NO_VISUAL_PROGRESS`; two successive uncertain, very-small estimated
+  movements interrupt with `MOTION_UNCERTAIN`. Neither is a pre-move veto,
+  and only executed atomic actions consume budget. The next `observe()` may include the single post-stall
   inspection Depth image, but `step()` never sends an image.
   Only when useful, `step()` also returns `motion_hint`: cumulative and net
-  turn degrees since the last forward with **changing RGB** (not measured
-  translation), plus batch turn degrees if the batch alone turned >=180 degrees.
+  turn degrees since the last **verified forward progress** (not merely a
+  changing RGB), plus batch turn degrees if the batch alone turned >=180 degrees.
+  When the local turn total exceeds 180 degrees without verified progress,
+  `REPEATED_SCAN` is reported; `observe()` may attach one compact, labeled
+  2x2 mosaic of recently observed views at distinct directions, no more often
+  than once per additional 90 degrees. The mosaic comes from existing RGB
+  frames and the directions are relative to the current view.
   Right turns are positive, left turns negative. Up to two recent exact-RGB
   forward stalls (within 16 actions) are expressed as angles **relative to
   the current view**. These hints never interrupt/limit turning or prohibit
@@ -43,8 +50,10 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   use short batches with intervening observations. This is not automatic recovery, a depth
   guarantee, or permission to walk into obstacles. On a visually clear open
   corridor, Codex may use longer consecutive `MOVE_FORWARD` batches.
-- This is not a geometry authorization gate or motion odometry: a changed
-  RGB does not certify actual displacement; the obstacle heuristic and the
+- This is not a geometry authorization gate or privileged simulator odometry:
+  public RGB-D gives a conservative *estimate* of prior translation, with an
+  explicit UNCERTAIN state. An uncertain estimate does not certify movement;
+  pre-move clearance is never required. The obstacle heuristic and the
   one-time stall inspection only select whether Depth is shown. `pitch_deg`
   tracks commanded LOOK_UP/LOOK_DOWN actions, not privileged simulator pose.
   No hidden pose, reference trajectory, goal coordinates or extra models
