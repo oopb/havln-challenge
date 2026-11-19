@@ -10,6 +10,9 @@ split metrics or independently evaluated per-episode simulator metrics.
 No privileged goal/collision data are requested by the inference agent.
 """
 import math
+import json
+from functools import lru_cache
+from pathlib import Path
 
 FORMULA_ID = 'roboworld2026-track2-havln2-score-v1'
 RULE_URL = 'https://roboworld2026.github.io/track2'
@@ -25,6 +28,35 @@ HUMAN_BETA = {
     'test': 1 - 549 / 3408,
 }
 METRIC_KEYS = ('SR', 'NE', 'CR', 'TCR')
+
+# Public validation reference collision counts from:
+# UWMILab/HA-VLN/Data/HA-R2R-tools/collision_num_val_{seen,unseen}.json
+# The test split has no released collision annotations and is never inferred.
+PUBLISHED_REFERENCE_SOURCE = (
+    'UWMILab/HA-VLN/Data/HA-R2R-tools/collision_num_{split}.json')
+
+
+@lru_cache(maxsize=2)
+def _published_validation_references(split):
+    if split not in ('val_seen', 'val_unseen'):
+        return {}
+    file = (Path(__file__).resolve().parent / 'scoring_data' /
+            ('collision_num_' + split + '.json'))
+    try:
+        rows = json.loads(file.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    if (not isinstance(rows, dict)
+            or len(rows) != EXPECTED_EPISODES[split]):
+        return {}
+    if any(type(v) is not int or v < 0 for v in rows.values()):
+        return {}
+    return rows
+
+
+def published_reference_collision_count(split, episode_id):
+    """Exact published validation annotation, or None; never invent test truth."""
+    return _published_validation_references(split).get(str(episode_id))
 
 
 def numeric(value, field, *, minimum=0.0, maximum=None):
@@ -186,8 +218,14 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
         observed_rows = report.get('observed_episodes')
         if not isinstance(observed_rows, list):
             observed_rows = []
-        observed = {str(row['episode_id']): row for row in observed_rows
+        observed = {str(row['episode_id']): dict(row) for row in observed_rows
                     if isinstance(row, dict) and str(row.get('episode_id','')) in ids}
+        for episode_id, row in observed.items():
+            if row.get('reference_collision_count') is None:
+                allowance = published_reference_collision_count(split, episode_id)
+                if allowance is not None:
+                    row['reference_collision_count'] = allowance
+                    row['reference_collision_source'] = 'published_validation_annotations'
         base.update(
             components=components,
             observed_episodes=observed,
@@ -199,12 +237,53 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
         per_episode = {}
         episode_metrics = None
         cr_scope = None
-        if isinstance(report.get('episodes'), list) and report['episodes']:
-            episode_metrics, rows, cr_scope = aggregate_episodes(report['episodes'], split)
-            per_episode = {r['episode_id']: r for r in rows if r['episode_id'] in ids}
+        scored_rows = []
+        if isinstance(report.get('episodes'), list):
+            scored_rows = [r for r in report['episodes']
+                           if isinstance(r, dict) and str(r.get('episode_id')) in ids]
+        known_ids = {str(r.get('episode_id')) for r in scored_rows}
+        # Old diagnostic archives contain complete Habitat observations but
+        # were written before the public validation reference table was used.
+        # Reconstruct ONLY complete, genuine observed episodes. Never use
+        # Codex's final message, generated action summaries, or unknown test
+        # collision allowances to manufacture success.
+        reconstructed = 0
+        for episode_id, obs in observed.items():
+            if episode_id in known_ids or obs.get('complete') is not True:
+                continue
+            ref = obs.get('reference_collision_count')
+            if ref is None:
+                continue
+            if (type(obs.get('navigation_error_m')) not in (int, float)
+                    or type(obs.get('success')) is not bool
+                    or type(obs.get('collisions_count')) not in (int, float)):
+                continue
+            scored_rows.append(dict(
+                episode_id=episode_id,
+                navigation_error_m=obs['navigation_error_m'],
+                success=obs['success'],
+                collisions_count=obs['collisions_count'],
+                reference_collision_count=ref,
+            ))
+            reconstructed += 1
+        if scored_rows:
+            episode_metrics, rows, cr_scope = aggregate_episodes(scored_rows, split)
+            per_episode = {r['episode_id']: r for r in rows}
             base['evaluated_episodes'] = len(rows)
+        if reconstructed:
+            base['reconstructed_from_observed_episodes'] = reconstructed
+            base['collision_reference_source'] = (
+                'published_validation_annotations')
         provided_metrics = _aggregate_metrics(report)
-        chosen = provided_metrics or episode_metrics
+        # A live-Habitat collector may contain an older partial aggregate.
+        # The complete, grounded reconstructed set takes precedence for its
+        # selected episodes, but not over independent imported scorer data.
+        if (report.get('source') == 'actual_live_habitat_measurements'
+                and len(scored_rows) == len(ids) and ids):
+            chosen = episode_metrics
+            provided_metrics = None
+        else:
+            chosen = provided_metrics or episode_metrics
         if chosen is None:
             base['status'] = ('partial_metrics' if components or observed else 'missing_metrics')
             base['limitations'] = [
