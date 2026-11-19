@@ -10,6 +10,10 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 
+# Habitat's pinned Pillow can predate Image.Resampling (introduced in 9.1).
+# Share this alias with Codex's historical RGB montage renderer.
+RESAMPLING = getattr(Image, "Resampling", Image)
+
 
 @dataclass(frozen=True)
 class ForwardMotion:
@@ -31,7 +35,7 @@ def _depth_m(raw, camera, size):
     valid &= (values > camera.min_depth) & (values < camera.max_depth)
     depth = np.where(valid, values, 0).astype(np.float32)
     # Depth is a different sensor resolution in some Habitat configurations.
-    depth = np.asarray(Image.fromarray(depth, mode="F").resize(size, Image.Resampling.NEAREST))
+    depth = np.asarray(Image.fromarray(depth, mode="F").resize(size, RESAMPLING.NEAREST))
     return depth
 
 
@@ -50,9 +54,9 @@ def assess_forward_motion(before, after, camera):
         return ForwardMotion("UNCERTAIN", "camera_pitch_changed")
     size = (96, 96)
     gray0 = np.asarray(Image.fromarray(before.rgb).convert("L").resize(size,
-                       Image.Resampling.BILINEAR), dtype=np.float32)
+                       RESAMPLING.BILINEAR), dtype=np.float32)
     gray1 = np.asarray(Image.fromarray(after.rgb).convert("L").resize(size,
-                       Image.Resampling.BILINEAR), dtype=np.float32)
+                       RESAMPLING.BILINEAR), dtype=np.float32)
     d0 = _depth_m(before.depth, camera, size)
     d1 = _depth_m(after.depth, camera, size)
     radius, patch = 9, 2
