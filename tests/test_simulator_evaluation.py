@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import unittest
 
 from havln_agent.simulator_evaluation import (
-    SimulatorMetricCapture, publish_run_metrics, _metric_sample)
+    SimulatorMetricCapture, publish_run_metrics, _metric_sample,
+    reference_collision_count)
 from havln_agent.competition_scoring import summarize_run
 from havln_agent.replay_server import ReplaySource, _load_scoring_report
 
@@ -60,6 +61,19 @@ class MetricCaptureTests(unittest.TestCase):
             self.assertEqual(entry["calculated_metrics"]["SR"], 1)
             self.assertGreater(entry["calculated_score"], 0)
             self.assertTrue((root / "run" / "score_metrics.json").is_file())
+
+    def test_public_validation_allowances_work_without_tools_mount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_root = Path(tmp) / 'only_har2r'
+            self.assertEqual(reference_collision_count(data_root, 'val_seen', '548'), 1)
+            self.assertEqual(reference_collision_count(data_root, 'val_seen', '571'), 0)
+            self.assertEqual(reference_collision_count(None, 'val_seen', '548'), 1)
+            self.assertIsNone(reference_collision_count(data_root, 'test', '548'))
+            # Explicit mounted dataset annotations remain highest priority.
+            tools = data_root / 'HA-R2R-tools'
+            tools.mkdir(parents=True)
+            (tools/'collision_num_val_seen.json').write_text('{"548": 3}')
+            self.assertEqual(reference_collision_count(data_root, 'val_seen', '548'), 3)
 
     def test_hidden_test_truth_is_not_inferred(self):
         with tempfile.TemporaryDirectory() as tmp:
