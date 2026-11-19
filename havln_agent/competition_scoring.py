@@ -249,7 +249,9 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
         # collision allowances to manufacture success.
         reconstructed = 0
         for episode_id, obs in observed.items():
-            if episode_id in known_ids or obs.get('complete') is not True:
+            if (report.get('source') != 'actual_live_habitat_measurements'
+                    or episode_id in known_ids
+                    or obs.get('complete') is not True):
                 continue
             ref = obs.get('reference_collision_count')
             if ref is None:
@@ -274,6 +276,12 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
             base['reconstructed_from_observed_episodes'] = reconstructed
             base['collision_reference_source'] = (
                 'published_validation_annotations')
+            base['fully_scored_episodes'] = len(scored_rows)
+            base['missing_or_partial'] = [
+                row for row in base['missing_or_partial']
+                if str(row.get('episode_id')) not in
+                   {str(scored.get('episode_id')) for scored in scored_rows}
+            ]
         provided_metrics = _aggregate_metrics(report)
         # A live-Habitat collector may contain an older partial aggregate.
         # The complete, grounded reconstructed set takes precedence for its
@@ -320,9 +328,14 @@ def summarize_split(split, run_ids, report=None, imported_from=None):
                 'Only %d/%d selected run episodes have a complete independent Score; '
                 'displayed Score is a diagnostic subset, not a run-wide estimate.'
                 % (result['evaluated_episodes'], len(ids)))
-        if report.get('scope') == 'diagnostic_subset_or_missing_truth':
+        if (report.get('scope') == 'diagnostic_subset_or_missing_truth'
+                and result['evaluated_episodes'] < len(ids)):
             result['limitations'].append(
                 'Some recorded episodes are missing required scoring truth.')
+        if reconstructed:
+            result['limitations'].append(
+                'Published validation collision allowances were used to '
+                'reconstruct scores for old closed-loop Habitat captures.')
         result['limitations'].append(
             'Local reconstruction; only the CodaBench scorer determines official ranking.')
         return result
