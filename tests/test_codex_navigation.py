@@ -330,6 +330,9 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertTrue(self.controller._stall_depth_pending)
 
     def test_repeated_weak_motion_interrupts_without_lock(self):
+        self.controller = CodexEpisode(
+            FakeHabitat(), camera(), "1", "test", 32,
+            Path(self.tempdir.name) / "uncertain_motion")
         with patch("havln_agent.codex_episode.assess_forward_motion",
                    return_value=ForwardMotion(
                        "UNCERTAIN", "ambiguous_forward_translation", 0.06, 15)):
