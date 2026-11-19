@@ -28,7 +28,17 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   also counts as STALLED. A reliable stall interrupts the remaining batch
   with `NO_VISUAL_PROGRESS`; two successive uncertain, very-small estimated
   movements interrupt with `MOTION_UNCERTAIN`. Neither is a pre-move veto,
-  and only executed atomic actions consume budget. The next `observe()` may include the single post-stall
+  and only executed atomic actions consume budget.
+  A local RGB-D monitor exception returns `MOTION_MONITOR_ERROR` after
+  recording the already-executed Habitat action, interrupts the remaining
+  batch, and leaves the episode active for re-observation. The model receives
+  the exact `executed` and `skipped_count` receipt; the motion monitoring
+  exception is also recorded on the action row.
+  Legacy Pillow versions without `Image.Resampling` are supported for motion
+  detection, Depth rendering, history mosaics and replay. A failure in the
+  optional history mosaic does not suppress the primary RGB observation.
+  If an action succeeds but post-action capture fails, the action is recorded
+  and the episode fails closed without exporting a misleading valid result. The next `observe()` may include the single post-stall
   inspection Depth image, but `step()` never sends an image.
   Only when useful, `step()` also returns `motion_hint`: cumulative and net
   turn degrees since the last **verified forward progress** (not merely a
