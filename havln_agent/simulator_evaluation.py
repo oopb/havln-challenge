@@ -4,7 +4,6 @@ This module is for diagnostics and offline score reconstruction only. Nothing
 recorded here is returned to NavigationAgent, Codex, MCP tools, or model prompts.
 Hidden test goals/reference collisions are never inferred from an action trace.
 """
-from functools import lru_cache
 import json
 import math
 from pathlib import Path
@@ -30,7 +29,6 @@ def finite_number(value):
     return result if math.isfinite(result) else None
 
 
-@lru_cache(maxsize=12)
 def _collision_reference(path):
     try:
         with Path(path).open(encoding="utf-8") as handle:
