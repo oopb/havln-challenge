@@ -176,7 +176,7 @@ class CodexEpisodeTests(unittest.TestCase):
             self.assertEqual(second["status"], "NO_VISUAL_PROGRESS")
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
-                   adapt_observation(env.image(), cam)):
+                   adapt_observation(initial, cam)):
             first_observation = MCPServer(agent)._dispatch("tools/call", {
                 "name": "observe", "arguments": {}})
             second_observation = MCPServer(agent)._dispatch("tools/call", {
@@ -198,7 +198,7 @@ class CodexEpisodeTests(unittest.TestCase):
                              "NO_VISUAL_PROGRESS")
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
-                   adapt_observation(env.image(), cam)):
+                   adapt_observation(initial, cam)):
             later_info, _, later_depth = agent.observe()
         self.assertFalse(later_info["depth_sent"])
         self.assertIsNone(later_depth)
