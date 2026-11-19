@@ -697,26 +697,16 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(cmd[-1], START_PROMPT)
         self.assertNotIn("Go down the stairs.", cmd[-1])
         self.assertIn("sole navigation agent", PROMPT)
-        # Safety guidance is prompt-only; MCP movement logic stays unchanged.
-        self.assertIn("People can move between views", PROMPT)
-        self.assertIn("keep a safe gap", PROMPT)
-        self.assertIn("keep moving when clear", PROMPT)
-        self.assertIn("Follow landmarks in order", PROMPT)
-        self.assertIn("exact stopping place", PROMPT)
-        self.assertIn("magenta=invalid", PROMPT)
-        self.assertIn("next unverified landmark", PROMPT)
-        self.assertIn("motion_hint", PROMPT)
-        self.assertIn("favor longer MOVE_FORWARD batches", PROMPT)
-        self.assertIn("use short batches and re-observe", PROMPT)
-        self.assertIn("1-2 LOOK_DOWN actions then observe RGB", PROMPT)
-        self.assertIn("Depth if supplied", PROMPT)
-        self.assertIn("matching LOOK_UP actions", PROMPT)
-        self.assertIn("observe pitch_deg", PROMPT)
-        self.assertIn("short turn batches", PROMPT)
-        self.assertIn("avoid accumulating excessive downward tilt", PROMPT)
-        self.assertIn("one extra Depth view", PROMPT)
-        self.assertIn("do not repeatedly retry a stalled direction", PROMPT)
-        self.assertIn("left/right at the place specified", PROMPT)
+        # The concise prompt must cover the new motion and scan receipts,
+        # without reintroducing movement authorization or extra agents.
+        for instruction in (
+                "People can move between views", "keep a safe gap",
+                "Follow landmarks in order", "magenta=invalid",
+                "NO_VISUAL_PROGRESS", "MOTION_UNCERTAIN",
+                "REPEATED_SCAN", "motion_hint", "observe pitch_deg",
+                "LOOK_DOWN", "LOOK_UP", "left/right at the place specified",
+                "requested stopping place", "longer MOVE_FORWARD batches"):
+            self.assertIn(instruction, PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
