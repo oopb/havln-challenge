@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "havln_agent/codex_episode.py"
-      - "havln_agent/codex_motion.py"
       - "havln_agent/competition_scoring.py"
       - "havln_agent/simulator_evaluation.py"
       - "havln_agent/scoring_data/**"
@@ -12,8 +11,6 @@ on:
       - "tests/test_simulator_evaluation.py"
       - "havln_agent/pillow_compat.py"
       - "havln_agent/perception.py"
-      - "tests/test_codex_motion.py"
-      - "tests/test_forward_body_risk.py"
       - "havln_agent/codex_usage.py"
       - "havln_agent/codex_batch.py"
       - "havln_agent/codex_mcp.py"
@@ -40,13 +37,9 @@ jobs:
       - name: Install lightweight offline dependencies
         run: python -m pip install "numpy<3" "Pillow<12" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
       - name: Compile independent Codex path
-        run: python -m compileall -q havln_agent/pillow_compat.py havln_agent/perception.py havln_agent/codex_motion.py havln_agent/codex_episode.py havln_agent/codex_mcp.py havln_agent/codex_usage.py havln_agent/codex_batch.py scripts/havln_mcp_server.py scripts/run_codex_episode.py scripts/run_codex_batch.py scripts/pack_agent_diagnostics.py havln_agent/replay_server.py tests/test_codex_navigation.py tests/test_codex_usage.py tests/test_codex_batch.py
+        run: python -m compileall -q havln_agent/pillow_compat.py havln_agent/perception.py havln_agent/codex_episode.py havln_agent/codex_mcp.py havln_agent/codex_usage.py havln_agent/codex_batch.py scripts/havln_mcp_server.py scripts/run_codex_episode.py scripts/run_codex_batch.py scripts/pack_agent_diagnostics.py havln_agent/replay_server.py tests/test_codex_navigation.py tests/test_codex_usage.py tests/test_codex_batch.py
       - name: Test MCP wire, replay receipts and session isolation
         run: python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
-      - name: Test full-body side-clearance risk geometry
-        run: python -m unittest discover -s tests -p 'test_forward_body_risk.py' -v
-      - name: Test public RGB-D motion confidence
-        run: python -m unittest discover -s tests -p 'test_codex_motion.py' -v
       - name: Test Codex token and quota accounting
         run: python -m unittest discover -s tests -p 'test_codex_usage.py' -v
       - name: Test independent Codex batch scheduler and lossless ZIP playback
@@ -67,13 +60,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.8"
-      - name: Install minimal motion imports
+      - name: Install controller and legacy Pillow dependencies
         run: python -m pip install "numpy>=1.20,<1.25" "Pillow==8.4.0" "jsonschema>=4.17,<5" "PyYAML>=6,<7"
       - name: Assert legacy Pillow lacks Image.Resampling
         run: python -c "from PIL import Image; assert not hasattr(Image, 'Resampling'); print('Legacy Pillow runtime confirmed')"
-      - name: Test RGB-D motion under legacy Pillow
-        run: python -m unittest discover -s tests -p 'test_codex_motion.py' -v
-      - name: Test full-body risk geometry under legacy Pillow
-        run: python -m unittest discover -s tests -p 'test_forward_body_risk.py' -v
-      - name: Test MCP navigation and view montage under legacy Pillow
+      - name: Import restored Codex MCP controller
+        run: python -c "from havln_agent.codex_episode import CodexEpisode; from havln_agent.codex_mcp import MCPServer; print('Codex MCP controller import OK')"
+      - name: Test baseline MCP navigation and action receipts under legacy Pillow
         run: python -m unittest discover -s tests -p 'test_codex_navigation.py' -v
