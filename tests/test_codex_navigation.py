@@ -509,7 +509,8 @@ class CodexEpisodeTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[:6],
                          ["docker", "exec", "-w", "/toolkit",
-                          "havln-cma", "python", "-c"])
+                          "havln-cma", "python"])
+        self.assertEqual(command[6], "-c")
         self.assertIn("from havln_agent.codex_episode import CodexEpisode",
                       command[-1])
         with patch("scripts.run_codex_episode.subprocess.run",
