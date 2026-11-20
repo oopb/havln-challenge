@@ -22,7 +22,7 @@ from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, 
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
-The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
+The tool shows RGB; Depth appears when measured front/side body-clearance risk is near or after a stall. near_body_risk marks left/center/right measured regions, not a human/furniture identity or automatic movement veto.
 Navigate using visual evidence and the six permitted simulator actions.
 On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe. When searching by turning, use short turn batches with a fresh view, not long blind scans.
 observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied); avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.

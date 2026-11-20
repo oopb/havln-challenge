@@ -127,9 +127,14 @@ class CodexEpisode:
         # Public Depth is visual evidence, never a geometry movement gate.
         # A recent exact-RGB stall can request one extra inspection even when
         # the conservative center-footprint heuristic finds no obstacle.
-        obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
+        geometry = Geometry(self.current, self.camera, margin=0.0)
+        obstacle = geometry.central_forward_obstruction()
+        body_risk = geometry.forward_body_risk()
         stall_inspection = self._stall_depth_pending and not self.done
-        send_depth = obstacle["confirmed"] or stall_inspection
+        # Full robot width is used for optional Depth evidence, including
+        # side-clearance risks the old narrow centerline check cannot see.
+        # This selects observation content only; it never vetoes an action.
+        send_depth = obstacle["confirmed"] or body_risk is not None or stall_inspection
         depth_data = (depth_image_url(self.current, self.camera).split(",", 1)[1]
                       if send_depth else None)
         if stall_inspection:
@@ -145,10 +150,16 @@ class CodexEpisode:
             "depth_sent": send_depth,
         }
         if send_depth:
-            info["depth_reason"] = ("front_obstacle" if obstacle["confirmed"]
-                                    else "post_stall_inspection")
-        if obstacle["confirmed"] and send_depth:
+            info["depth_reason"] = (
+                "front_obstacle" if obstacle["confirmed"] else
+                "near_body_risk" if body_risk is not None else
+                "post_stall_inspection")
+        if obstacle["confirmed"]:
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
+        if body_risk is not None:
+            # A measured left/right/center risk is not an object identity
+            # or proof of a collision. Codex still chooses the next action.
+            info["near_body_risk"] = body_risk
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
 

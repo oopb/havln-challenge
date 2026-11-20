@@ -16,12 +16,15 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   observe returns fresh RGB, observation ID, action budget and `pitch_deg`
   (commanded angle relative to the initial forward view; negative is down).
   The episode's route instruction is already in one-time system instructions.
-  Depth is sent when conservative public-Depth evidence finds a near obstacle,
-  or **once** on the next observation after an exact-RGB stalled forward in
-  the same locally blocked period. Other observations return RGB only.
-  `depth_reason` distinguishes `front_obstacle` from
-  `post_stall_inspection`; `front_obstacle_m` is included only when the
-  central near-obstacle heuristic confirms one.
+  Depth is sent when measured public-Depth evidence finds a near obstacle
+  across the robot's **whole forward body width** (left, center or right),
+  or **once** after an exact-RGB stalled forward in the same blocked period.
+  Other observations return RGB only. `near_body_risk` gives at most two
+  coherent measured regions with forward distances; `depth_reason` is
+  `front_obstacle`, `near_body_risk`, or `post_stall_inspection`.
+  `front_obstacle_m` is included only when the legacy centerline detector
+  confirms central obstruction. A side-only warning does not claim the object
+  is a person or furniture, nor does it block motion or certify safety.
   step executes an ordered list of allowed atomic actions and returns receipts.
   If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
   and the remaining requested batch actions are skipped; only executed actions
