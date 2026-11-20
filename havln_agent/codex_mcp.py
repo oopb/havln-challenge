@@ -14,9 +14,10 @@ TOOLS = [
         "description": (
             "Return a fresh RGB image and its corresponding Depth image on "
             "EVERY observe call, in that order, with compact metadata. "
-            "An obstacle distance is mentioned in text only when confirmed "
-            "by current Depth. Depth is not a movement gate. Repeated scans "
-            "may add a compact comparison view; no hidden map or goal state."
+            "Measured near-body side/front risks appear in text only when "
+            "confirmed by current public Depth; object identity is unknown. "
+            "Depth does not authorize or veto movement. Repeated scans may "
+            "add a compact comparison view; no hidden map or goal state."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
@@ -29,8 +30,10 @@ TOOLS = [
             "LOOK_UP, LOOK_DOWN. STOP is valid ONLY as actions=[STOP] in a "
             "separate call, AFTER calling observe since the most recent action "
             "to confirm arrival visually. All actions consume the shared "
-            "budget. Verified stalls or uncertain movement can interrupt a "
-            "batch AFTER execution; inspect exact executed/skipped receipts."
+            "budget. Verified stalls, uncertain movement, or near-body "
+            "risk observed AFTER a forward step can interrupt the remainder "
+            "of a multi-forward batch. Inspect exact executed/skipped receipts; "
+            "a single forward step is never blocked by the risk advisory."
         ),
         "inputSchema": {
             "type": "object",
