@@ -110,6 +110,70 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertTrue(json.loads(result["content"][0]["text"])["depth_sent"])
         self.assertNotEqual(result["content"][1]["data"], result["content"][2]["data"])
 
+    def test_near_body_side_risk_observe_and_forward_batch_interruption(self):
+        # An actual side patch outside the centerline is grounded in public
+        # Depth; the controller must not pretend it knows the object identity.
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "side_risk")
+        raw = agent.env.image()
+        raw["depth"] = np.full((12, 16), 0.20, dtype=np.float32)
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   return_value=adapt_observation(raw, camera())):
+            info, _, depth = agent.observe()
+        self.assertIsNotNone(depth)
+        self.assertIn("near_body_risk", info)
+        self.assertEqual(info["near_body_risk"]["identity"],
+                         "unverified_obstacle")
+        self.assertTrue(info["near_body_risk"]["affected_regions"])
+        self.assertEqual(agent.actions, [])
+
+        # In this fake environment each step now sees close occupied Depth,
+        # so the first already-executed forward terminates the remaining
+        # consecutive forward batch without erasing that atomic action.
+        original_step = agent.env.step
+        def near_step(action):
+            obs, reward, finished, details = original_step(action)
+            obs["depth"] = np.full((12, 16), 0.20, dtype=np.float32)
+            return obs, reward, finished, details
+        with patch.object(agent.env, "step", side_effect=near_step):
+            result = agent.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(result["status"], "NEAR_BODY_RISK")
+        self.assertEqual(result["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(result["skipped_count"], 2)
+        self.assertFalse(result["done"])
+        self.assertEqual(agent.actions, agent.env.actions)
+        self.assertIn("near_body_risk", result)
+        step_row = json.loads(
+            (agent.directory / "steps.jsonl").read_text().splitlines()[0])
+        self.assertIn("near_body_risk_after", step_row)
+        self.assertEqual(step_row["action"], "MOVE_FORWARD")
+        tool_row = json.loads(
+            (agent.directory / "tools.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(tool_row["result"]["status"], "NEAR_BODY_RISK")
+
+        # This is an advisory interruption, not a lock. Codex may explicitly
+        # request a new single step after assessing the evidence.
+        with patch.object(agent.env, "step", side_effect=near_step):
+            next_step = agent.step(["MOVE_FORWARD"])
+        self.assertEqual(next_step["status"], "RUNNING")
+        self.assertEqual(next_step["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(agent.actions, agent.env.actions)
+
+    def test_forward_risk_does_not_interrupt_a_following_turn(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "risk_then_turn")
+        def near_step(action):
+            agent.env.actions.append(action)
+            raw = agent.env.image()
+            raw["depth"] = np.full((12, 16), 0.20, dtype=np.float32)
+            return raw, 0., action == "STOP", {}
+        with patch.object(agent.env, "step", side_effect=near_step):
+            result = agent.step(["MOVE_FORWARD", "TURN_RIGHT"])
+        self.assertEqual(result["status"], "RUNNING")
+        self.assertEqual(result["executed"],
+                         ["MOVE_FORWARD", "TURN_RIGHT"])
+        self.assertEqual(agent.actions, agent.env.actions)
+
     def test_exact_unchanged_rgb_interrupts_only_remaining_batch_actions(self):
         before = self.env.image()
         def stationary_step(action):
