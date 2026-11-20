@@ -14,11 +14,19 @@ import time
 import numpy as np
 from PIL import Image
 
-from .habitat_adapter import read_current_observation
+from .habitat_adapter import read_current_observation, read_planar_pose
 from .perception import Geometry, adapt_observation, depth_image_url
 from .replay_capture import ReplayRecorder
 from .submission_contract import ACTIONS, atomic_json, check_rows
 from .simulator_evaluation import SimulatorMetricCapture, publish_run_metrics
+
+
+FORWARD_INTERRUPTION_FEEDBACK = {
+    "FORWARD_BLOCKED": "Depth shows an obstacle within the next forward body's path. Observe and realign or choose a route around it.",
+    "REOBSERVE_FORWARD": "Inspect the current view before continuing forward. Leave clearance and use one step near obstacles.",
+    "LOW_FORWARD_PROGRESS": "The last forward action made little progress along its heading. Observe, then realign or reroute before trying again.",
+    "NO_VISUAL_PROGRESS": "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe.",
+}
 
 
 class CodexEpisode:
@@ -49,12 +57,14 @@ class CodexEpisode:
         self.observation_count = 0
         self.tool_count = 0
         self.pitch_deg = 0.0
-        # Relative actions only: never expose simulator pose or infer odometry.
+        # Tool hints use relative turns; the controller keeps robot pose local.
         self._heading_deg = 0.0
+        self._last_observed_view = (self._heading_deg, self.pitch_deg)
         self._turn_total_deg = 0.0
         self._turn_net_deg = 0.0
         self._recent_stalls = []
-        # Grant one extra public Depth frame after a visual stall; do not
+        self._unreviewed_stall_heading = None
+        # Grant one extra public Depth frame after a stall; do not
         # repeatedly send it for the same blocked approach.
         self._stall_depth_pending = False
         self._stall_depth_used = False
@@ -112,33 +122,39 @@ class CodexEpisode:
     def remaining(self):
         return self.max_steps - len(self.actions)
 
-    def observe(self):
+    def _refresh_observation(self):
+        observation = read_current_observation(self.env, self.camera, self.instruction)
+        observation.pitch_deg = self.pitch_deg
+        self.current_id = self._save(observation)
+        self.current = observation
+
+    def observe(self, *, include_depth=None):
         ident = self._start_tool("observe")
         # Re-render through the public sensor suite; no privileged pose/goal data.
         if not self.done:
-            observation = read_current_observation(self.env, self.camera,
-                                                   self.instruction)
-            observation.pitch_deg = self.pitch_deg
-            self.current = observation
-            self.current_id = self._save(observation)
+            self._refresh_observation()
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
-        # Public Depth is visual evidence, never a geometry movement gate.
-        # A recent exact-RGB stall can request one extra inspection even when
-        # the conservative center-footprint heuristic finds no obstacle.
         geometry = Geometry(self.current, self.camera, margin=0.0)
         obstacle = geometry.central_forward_obstruction()
         body_risk = geometry.forward_body_risk()
         stall_inspection = self._stall_depth_pending and not self.done
-        # Full robot width is used for optional Depth evidence, including
-        # side-clearance risks the old narrow centerline check cannot see.
-        # This selects observation content only; it never vetoes an action.
-        send_depth = obstacle["confirmed"] or body_risk is not None or stall_inspection
+        view = (self._heading_deg % 360, self.pitch_deg)
+        depth_reason = None
+        if obstacle["confirmed"]:
+            depth_reason = "front_obstacle"
+        elif body_risk is not None:
+            depth_reason = "near_body_risk"
+        elif stall_inspection:
+            depth_reason = "post_stall_inspection"
+        elif include_depth:
+            depth_reason = "requested"
+        elif not self.done and view != self._last_observed_view:
+            depth_reason = "view_changed"
+        send_depth = depth_reason is not None
         depth_data = (depth_image_url(self.current, self.camera).split(",", 1)[1]
                       if send_depth else None)
-        if stall_inspection:
-            self._stall_depth_pending = False
         info = {
             "episode_id": self.episode_id,
             "observation_id": self.current_id,
@@ -150,27 +166,30 @@ class CodexEpisode:
             "depth_sent": send_depth,
         }
         if send_depth:
-            info["depth_reason"] = (
-                "front_obstacle" if obstacle["confirmed"] else
-                "near_body_risk" if body_risk is not None else
-                "post_stall_inspection")
+            info["depth_reason"] = depth_reason
         if obstacle["confirmed"]:
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
         if body_risk is not None:
-            # A measured left/right/center risk is not an object identity
-            # or proof of a collision. Codex still chooses the next action.
             info["near_body_risk"] = body_risk
-        self._end_tool(ident, "observe", {}, dict(info, status="OK"))
+        if self._recent_stalls and not self.done:
+            hint = self._motion_hint(())
+            if hint:
+                info["motion_hint"] = hint
+        arguments = {} if include_depth is None else {"include_depth": include_depth}
+        self._end_tool(ident, "observe", arguments, dict(info, status="OK"))
+        if stall_inspection:
+            self._stall_depth_pending = False
+        self._last_observed_view = view
+        self._unreviewed_stall_heading = None
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
 
     def _motion_hint(self, executed):
-        """Tiny, conditional factual receipt; never blocks a Codex decision."""
+        """Report local turn history and recent stalled directions."""
         turns = [a for a in executed if a in ("TURN_LEFT", "TURN_RIGHT")]
         batch_total = len(turns) * self.camera.turn_angle
         batch_net = (turns.count("TURN_RIGHT") - turns.count("TURN_LEFT")) * self.camera.turn_angle
         hint = {}
-        # Stats since the last forward with changing RGB are a visual proxy,
-        # NOT confirmation that the robot physically moved.
+        # The window resets after measured progress or the RGB fallback.
         if self._turn_total_deg >= 180:
             hint.update(turn_total_deg=self._turn_total_deg,
                         turn_net_deg=self._turn_net_deg)
@@ -189,7 +208,9 @@ class CodexEpisode:
 
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
-        before_rgb = self.current.rgb if action == "MOVE_FORWARD" else None
+        forward = action == "MOVE_FORWARD"
+        before_rgb = self.current.rgb if forward else None
+        pose_before = read_planar_pose(self.env) if forward else None
         try:
             raw, _, environment_done, info = self.env.step(action)
         except Exception as error:
@@ -226,26 +247,36 @@ class CodexEpisode:
             raise RuntimeError(
                 "Habitat executed " + action +
                 " but post-action capture failed; episode stopped") from error
-        # Preserve the best-performing baseline's exact-RGB stall policy.
-        stalled = before_rgb is not None and np.array_equal(before_rgb, observation.rgb)
+        progress = None
+        interruption = None
+        if forward:
+            pose_after = read_planar_pose(self.env) if pose_before is not None else None
+            if pose_after is not None:
+                position, heading = pose_before
+                progress = float((pose_after[0] - position) @ heading)
+                if progress < self.camera.forward_step * 0.20:
+                    interruption = "LOW_FORWARD_PROGRESS"
+            elif np.array_equal(before_rgb, observation.rgb):
+                interruption = "NO_VISUAL_PROGRESS"
         if action in ("TURN_LEFT", "TURN_RIGHT"):
             angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
             self._heading_deg += angle
             self._turn_net_deg += angle
             self._turn_total_deg += abs(angle)
-        elif action == "MOVE_FORWARD":
-            if stalled:
+        elif forward:
+            if interruption:
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
+                if interruption == "LOW_FORWARD_PROGRESS":
+                    self._unreviewed_stall_heading = self._heading_deg % 360
                 if not self._stall_depth_used:
                     self._stall_depth_pending = True
                     self._stall_depth_used = True
             else:
-                # Only "RGB changed", not measured displacement. Reset the
-                # local turn window and stale obstacle attempts conservatively.
                 self._turn_total_deg = 0.0
                 self._turn_net_deg = 0.0
                 self._recent_stalls.clear()
+                self._unreviewed_stall_heading = None
                 self._stall_depth_pending = False
                 self._stall_depth_used = False
         row = {
@@ -254,8 +285,12 @@ class CodexEpisode:
             "input_file": "observations/" + before + ".npz",
             "post_file": "observations/" + self.current_id + ".npz",
         }
-        if stalled:
+        if progress is not None:
+            row["forward_progress_m"] = round(progress, 4)
+        if interruption == "NO_VISUAL_PROGRESS":
             row["motion_feedback"] = "rgb_unchanged"
+        elif interruption == "LOW_FORWARD_PROGRESS":
+            row["motion_feedback"] = "low_forward_progress"
         self._append("steps.jsonl", row)
         self.replay.action(row)
         if action == "STOP":
@@ -265,7 +300,7 @@ class CodexEpisode:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
-        return stalled
+        return interruption, progress
 
     def step(self, requested):
         ident = self._start_tool("step")
@@ -289,14 +324,37 @@ class CodexEpisode:
                         len(requested) == self.remaining and requested[-1] == "STOP"):
                     raise ValueError("batch exceeds remaining action budget; reserve final STOP")
                 executed = []
-                stalled = False
+                interruption = None
+                risk = None
+                progress = None
                 for action in requested:
                     if self.done:
                         break
-                    unchanged = self._atomic(action, ident, "codex")
+                    if action == "MOVE_FORWARD":
+                        if self._unreviewed_stall_heading == self._heading_deg % 360:
+                            interruption = "REOBSERVE_FORWARD"
+                            break
+                        if not executed:
+                            # Refresh after time spent in the model call. Later
+                            # actions use the immediately preceding step's frame.
+                            try:
+                                self._refresh_observation()
+                            except (ValueError, RuntimeError, OSError) as error:
+                                raise RuntimeError("Could not refresh RGB-D before MOVE_FORWARD") from error
+                        geometry = Geometry(self.current, self.camera, margin=0.0)
+                        risk = geometry.forward_body_risk()
+                        if risk is not None:
+                            obstruction = geometry.forward_body_risk(next_step_only=True)
+                            if obstruction is not None:
+                                risk = obstruction
+                                interruption = "FORWARD_BLOCKED"
+                                break
+                            if "MOVE_FORWARD" in executed:
+                                interruption = "REOBSERVE_FORWARD"
+                                break
+                    interruption, progress = self._atomic(action, ident, "codex")
                     executed.append(action)
-                    if unchanged:
-                        stalled = True
+                    if interruption:
                         break  # The remaining actions, including STOP, are not executed.
                 requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
@@ -304,12 +362,15 @@ class CodexEpisode:
                     self._atomic("STOP", ident, "budget_guard")
                     executed.append("STOP")
                 result = self.status()
-                result.update(status=("DONE" if self.done else
-                                      "NO_VISUAL_PROGRESS" if stalled else "RUNNING"),
+                result.update(status=("DONE" if self.done else interruption or "RUNNING"),
                               executed=executed, requested=requested)
-                if stalled:
+                if interruption:
                     result["skipped_count"] = len(requested) - requested_executed
-                    result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
+                    result["motion_feedback"] = FORWARD_INTERRUPTION_FEEDBACK[interruption]
+                    if risk is not None:
+                        result["near_body_risk"] = risk
+                    if interruption == "LOW_FORWARD_PROGRESS":
+                        result["forward_progress_m"] = round(progress, 4)
                 if not self.done:
                     hint = self._motion_hint(executed)
                     if hint:

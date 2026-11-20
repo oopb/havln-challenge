@@ -40,6 +40,10 @@ class FakeHabitat:
             episode_id="1",
             instruction=SimpleNamespace(instruction_text="Go down the stairs."))
         self.actions = []
+        self.habitat_env = SimpleNamespace(sim=self)
+
+    def get_observations_at(self, keep_agent_at_new_pose):
+        return self.image()
 
     def image(self):
         return {
@@ -83,7 +87,6 @@ class CodexEpisodeTests(unittest.TestCase):
                          ("observations/" + info["observation_id"] + ".npz")).exists())
 
     def test_front_obstacle_alone_triggers_optional_depth_image(self):
-        # No motion gate: only the contents of observe() change.
         base = self.env.image()
         base["depth"] = np.full((12, 16), 0.2, dtype=np.float32)
         with patch("havln_agent.codex_episode.read_current_observation",
@@ -106,14 +109,38 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertTrue(json.loads(result["content"][0]["text"])["depth_sent"])
         self.assertNotEqual(result["content"][1]["data"], result["content"][2]["data"])
 
-    def test_side_body_risk_sends_depth_without_changing_baseline_step_policy(self):
+    def test_first_observe_at_changed_heading_includes_depth(self):
+        server = MCPServer(self.controller)
+        self.controller.step(["TURN_RIGHT"])
+        result = server._dispatch("tools/call", {
+            "name": "observe", "arguments": {"include_depth": False}})
+        self.assertEqual([p["type"] for p in result["content"]], ["text", "image", "image"])
+        self.assertEqual(json.loads(result["content"][0]["text"])["depth_reason"],
+                         "view_changed")
+        receipt = json.loads((self.controller.directory / "tools.jsonl")
+                             .read_text().splitlines()[-1])
+        self.assertEqual(receipt["call"]["args"], {"include_depth": False})
+
+        repeated = server._dispatch("tools/call", {"name": "observe"})
+        self.assertEqual([p["type"] for p in repeated["content"]], ["text", "image"])
+        self.assertEqual(self.env.actions, ["TURN_RIGHT"])
+
+    def test_observe_rejects_invalid_depth_argument(self):
+        server = MCPServer(self.controller)
+        for arguments in ({"include_depth": None}, {"include_depth": "true"},
+                          {"include_depth": 1}, {"depth": True}, []):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                server._dispatch("tools/call", {"name": "observe", "arguments": arguments})
+        self.assertEqual(self.controller.tool_count, 0)
+
+    def test_imminent_side_obstacle_sends_depth_and_blocks_forward(self):
         # The legacy center-only corridor misses a close RIGHT side obstacle.
-        # A coherent public-Depth patch at right x=0.056..0.094 m is within
+        # A coherent public-Depth patch at right x=0.053..0.088 m is within
         # the robot body width, but outside the center +/-0.025 m corridor.
         from havln_agent.perception import Geometry
         raw = self.env.image()
         raw["depth"] = np.full((12, 16), 4.0, dtype=np.float32)
-        raw["depth"][3:9, 9:11] = 0.3
+        raw["depth"][3:9, 9:11] = 0.28
         observation = adapt_observation(raw, camera())
         self.assertFalse(Geometry(observation, camera(), margin=0.0)
                          .central_forward_obstruction()["confirmed"])
@@ -132,13 +159,120 @@ class CodexEpisodeTests(unittest.TestCase):
         regions = [r["region"] for r in
                    info["near_body_risk"]["affected_regions"]]
         self.assertIn("right_edge", regions)
-        # No geometry veto or forced batch interruption is restored.
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   return_value=observation):
+            blocked = self.controller.step(["MOVE_FORWARD", "MOVE_FORWARD"])
+        self.assertEqual(blocked["status"], "FORWARD_BLOCKED")
+        self.assertEqual(blocked["executed"], [])
+        self.assertEqual(blocked["skipped_count"], 2)
+        self.assertEqual(blocked["remaining_actions"], 4)
+        self.assertEqual(blocked["near_body_risk"]["affected_regions"][0]["region"],
+                         "right_edge")
+        self.assertEqual(self.env.actions, [])
+        self.assertFalse((self.controller.directory / "steps.jsonl").exists())
+        # The normal sensor no longer shows the side obstacle.
         moved = self.controller.step(["MOVE_FORWARD", "MOVE_FORWARD"])
         self.assertEqual(moved["status"], "RUNNING")
         self.assertEqual(moved["executed"],
                          ["MOVE_FORWARD", "MOVE_FORWARD"])
         self.assertEqual(self.env.actions, moved["executed"])
         self.assertNotIn("near_body_risk", moved)
+
+    def test_partial_batch_rechecks_depth_from_previous_forward(self):
+        clear_image = self.env.image
+
+        def image():
+            raw = clear_image()
+            if self.env.actions:
+                raw["depth"][3:9, 9:11] = 0.28
+            return raw
+
+        with patch.object(self.env, "image", side_effect=image):
+            reply = self.controller.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(reply["status"], "FORWARD_BLOCKED")
+        self.assertEqual(reply["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(reply["skipped_count"], 2)
+        self.assertEqual(reply["remaining_actions"], 3)
+        self.assertEqual(self.env.actions, ["MOVE_FORWARD"])
+        row = json.loads((self.controller.directory / "steps.jsonl").read_text())
+        self.assertEqual(Path(row["post_file"]).stem, reply["last_observation_id"])
+
+    def test_further_side_risk_allows_first_step_then_asks_to_observe(self):
+        clear_image = self.env.image
+
+        def image():
+            raw = clear_image()
+            raw["depth"][3:9, 9:11] = 0.37
+            return raw
+
+        with patch.object(self.env, "image", side_effect=image):
+            reply = self.controller.step(["MOVE_FORWARD"] * 3)
+        self.assertEqual(reply["status"], "REOBSERVE_FORWARD")
+        self.assertEqual(reply["executed"], ["MOVE_FORWARD"])
+        self.assertEqual(reply["skipped_count"], 2)
+        self.assertIn("near_body_risk", reply)
+
+    def test_turn_then_forward_uses_new_heading_depth(self):
+        clear_image = self.env.image
+
+        def image():
+            raw = clear_image()
+            if "TURN_RIGHT" in self.env.actions:
+                raw["depth"][3:9, 9:11] = 0.28
+            return raw
+
+        with patch.object(self.env, "image", side_effect=image):
+            reply = self.controller.step(["TURN_RIGHT", "MOVE_FORWARD"])
+        self.assertEqual(reply["status"], "FORWARD_BLOCKED")
+        self.assertEqual(reply["executed"], ["TURN_RIGHT"])
+        self.assertEqual(self.env.actions, ["TURN_RIGHT"])
+
+    def test_changed_rgb_during_side_slide_stops_batch_and_requires_observation(self):
+        position = np.zeros(3)
+        # A +90-degree yaw faces world -X. The longer Z displacement is lateral.
+        rotation = SimpleNamespace(w=np.sqrt(0.5), x=0.0, y=np.sqrt(0.5), z=0.0)
+        self.env.get_agent_state = lambda: SimpleNamespace(position=position, rotation=rotation)
+        original = self.env.step
+
+        def slide(action):
+            position[:] += [-0.02, 0.0, 0.22]
+            return original(action)
+
+        with patch.object(self.env, "step", side_effect=slide):
+            result = self.controller.step(["MOVE_FORWARD"] * 3)
+            self.assertEqual(result["status"], "LOW_FORWARD_PROGRESS")
+            self.assertEqual(result["executed"], ["MOVE_FORWARD"])
+            self.assertEqual(result["skipped_count"], 2)
+            self.assertEqual(result["forward_progress_m"], 0.02)
+            retry = self.controller.step(["MOVE_FORWARD"])
+            self.assertEqual(retry["status"], "REOBSERVE_FORWARD")
+            self.assertEqual(retry["executed"], [])
+        info, _, depth = self.controller.observe()
+        self.assertIsNotNone(depth)
+        self.assertEqual(info["motion_hint"]["recent_stall_directions_deg"], [0])
+        row = json.loads((self.controller.directory / "steps.jsonl").read_text())
+        self.assertEqual(row["motion_feedback"], "low_forward_progress")
+        self.assertEqual(row["forward_progress_m"], 0.02)
+        stationary_view = self.env.image()
+
+        def advance(action):
+            position[0] -= 0.25
+            self.env.actions.append(action)
+            return stationary_view, 0.0, False, {}
+
+        with patch.object(self.env, "step", side_effect=advance):
+            recovered = self.controller.step(["MOVE_FORWARD"])
+        self.assertEqual(recovered["status"], "RUNNING")
+        self.assertEqual(recovered["executed"], ["MOVE_FORWARD"])
+        self.assertNotIn("motion_hint", recovered)
+
+    def test_preflight_sensor_error_consumes_no_action_and_can_recover(self):
+        with patch.object(self.env, "get_observations_at", return_value=None):
+            reply = self.controller.step(["MOVE_FORWARD"])
+        self.assertEqual(reply["status"], "TOOL_ERROR")
+        self.assertEqual(reply["executed"], [])
+        self.assertFalse(reply["done"])
+        self.assertEqual(self.controller.step(["MOVE_FORWARD"])["executed"], ["MOVE_FORWARD"])
 
     def test_exact_unchanged_rgb_interrupts_only_remaining_batch_actions(self):
         before = self.env.image()
@@ -179,8 +313,9 @@ class CodexEpisodeTests(unittest.TestCase):
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
             info, rgb, depth = agent.observe()
-        self.assertEqual(info["depth_sent"], False)
-        self.assertIsNone(depth)
+        self.assertTrue(info["depth_sent"])
+        self.assertEqual(info["depth_reason"], "view_changed")
+        self.assertIsNotNone(depth)
         self.assertEqual(agent.current.pitch_deg, -2 * camera().tilt_angle)
         self.assertEqual(info["pitch_deg"], -2 * camera().tilt_angle)
         up = agent.step(["LOOK_UP", "LOOK_UP"])
@@ -194,6 +329,7 @@ class CodexEpisodeTests(unittest.TestCase):
                    adapt_observation(env.image(), cam)):
             recovered, _, _ = agent.observe()
         self.assertEqual(recovered["pitch_deg"], 0.0)
+        self.assertEqual(recovered["depth_reason"], "view_changed")
 
     def test_post_stall_inspection_depth_is_one_shot_even_without_obstacle(self):
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
@@ -202,7 +338,8 @@ class CodexEpisodeTests(unittest.TestCase):
         def blocked(action):
             agent.env.actions.append(action)
             return initial, 0., action == "STOP", {}
-        with patch.object(agent.env, "step", side_effect=blocked):
+        with patch.object(agent.env, "step", side_effect=blocked), \
+             patch.object(agent.env, "get_observations_at", return_value=initial):
             first = agent.step(["MOVE_FORWARD"] * 3)
             self.assertEqual(first["status"], "NO_VISUAL_PROGRESS")
             self.assertEqual(first["executed"], ["MOVE_FORWARD"])
@@ -228,7 +365,8 @@ class CodexEpisodeTests(unittest.TestCase):
                          ["text", "image"])
         # Another stall within the same locally blocked period is still
         # allowed but cannot trigger an endless series of extra Depth frames.
-        with patch.object(agent.env, "step", side_effect=blocked):
+        with patch.object(agent.env, "step", side_effect=blocked), \
+             patch.object(agent.env, "get_observations_at", return_value=initial):
             self.assertEqual(agent.step(["MOVE_FORWARD"])["status"],
                              "NO_VISUAL_PROGRESS")
         with patch("havln_agent.codex_episode.read_current_observation",
@@ -268,6 +406,7 @@ class CodexEpisodeTests(unittest.TestCase):
             info, _, depth = agent.observe()
         self.assertEqual(info["pitch_deg"], -camera().tilt_angle)
         self.assertTrue(info["depth_sent"])
+        self.assertEqual(info["depth_reason"], "post_stall_inspection")
         self.assertIsNotNone(depth)
 
     def test_stall_with_reserved_stop_does_not_miscount_skipped_actions(self):
@@ -275,7 +414,8 @@ class CodexEpisodeTests(unittest.TestCase):
         def stationary_step(action):
             self.env.actions.append(action)
             return before, 0., action == "STOP", {}
-        with patch.object(self.env, "step", side_effect=stationary_step):
+        with patch.object(self.env, "step", side_effect=stationary_step), \
+             patch.object(self.env, "get_observations_at", return_value=before):
             self.controller.step(["TURN_LEFT", "TURN_RIGHT"])
             # One MOVE_FORWARD uses the last non-STOP action; reserved STOP
             # is still appended by the pre-existing budget guard.
@@ -327,7 +467,8 @@ class CodexEpisodeTests(unittest.TestCase):
         def blocked(action):
             agent.env.actions.append(action)
             return original, 0., action == "STOP", {}
-        with patch.object(agent.env, "step", side_effect=blocked):
+        with patch.object(agent.env, "step", side_effect=blocked), \
+             patch.object(agent.env, "get_observations_at", return_value=original):
             first = agent.step(["MOVE_FORWARD"] * 3)
             self.assertEqual(first["status"], "NO_VISUAL_PROGRESS")
             self.assertEqual(first["motion_hint"]["recent_stall_directions_deg"], [0])
@@ -398,7 +539,7 @@ class CodexEpisodeTests(unittest.TestCase):
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-             "params": {"name": "observe", "arguments": {}}},
+             "params": {"name": "observe", "arguments": {"include_depth": True}}},
             {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
              "params": {"name": "step", "arguments": {"actions": ["STOP"]}}},
         ]
@@ -410,8 +551,13 @@ class CodexEpisodeTests(unittest.TestCase):
             MCPServer(self.controller, reader=wire_in, writer=wire_out).serve()
         replies = [json.loads(line) for line in wire_out.getvalue().splitlines()]
         self.assertEqual([row["id"] for row in replies], [1, 2, 3, 4])
-        self.assertEqual(replies[1]["result"]["tools"][0]["name"], "observe")
-        self.assertEqual(replies[2]["result"]["content"][1]["mimeType"], "image/png")
+        observe = replies[1]["result"]["tools"][0]
+        self.assertEqual(observe["name"], "observe")
+        self.assertEqual(observe["inputSchema"]["properties"]["include_depth"]["type"], "boolean")
+        content = replies[2]["result"]["content"]
+        self.assertEqual([p["type"] for p in content], ["text", "image", "image"])
+        self.assertEqual([p["mimeType"] for p in content[1:]], ["image/png", "image/png"])
+        self.assertEqual(json.loads(content[0]["text"])["depth_reason"], "requested")
         self.assertEqual(replies[3]["result"]["isError"], False)
         self.assertEqual(self.env.actions, ["STOP"])
 
@@ -453,7 +599,7 @@ class CodexEpisodeTests(unittest.TestCase):
         with patch("havln_agent.codex_episode.read_current_observation",
                    side_effect=lambda env, cam, instruction:
                    adapt_observation(env.image(), cam)):
-            received, _, _ = self.controller.observe()
+            received, _, _ = self.controller.observe(include_depth=True)
         self.controller.step(["TURN_LEFT", "STOP"])
         folder = self.controller.directory / "codex"
         folder.mkdir()
@@ -461,14 +607,16 @@ class CodexEpisodeTests(unittest.TestCase):
             {"type": "thread.started"},
             {"type": "item.started", "item": {
                 "type": "mcp_tool_call", "id": "item_observe",
-                "server": "havln", "tool": "observe", "arguments": None}},
+                "server": "havln", "tool": "observe", "arguments": {"include_depth": True}}},
             {"type": "item.completed", "item": {
                 "type": "mcp_tool_call", "id": "item_observe",
-                "server": "havln", "tool": "observe", "arguments": {},
+                "server": "havln", "tool": "observe", "arguments": {"include_depth": True},
                 "result": {"content": [
                     {"type": "text", "text": "observation details"},
                     {"type": "image", "mimeType": "image/png",
-                     "data": "raw-encoded-image-data"}]}}},
+                     "data": "raw-encoded-image-data"},
+                    {"type": "image", "mimeType": "image/png",
+                     "data": "raw-encoded-depth-data"}]}}},
             {"type": "item.started", "item": {
                 "type": "mcp_tool_call", "id": "item_step",
                 "server": "havln", "tool": "step",
@@ -487,6 +635,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(items[2]["observation_id"],
                          received["observation_id"])
         self.assertEqual(items[2]["linked_tool"], "observe")
+        self.assertTrue(items[2]["depth_sent"])
         self.assertEqual(items[3]["observation_id"],
                          received["observation_id"])
         self.assertEqual(items[4]["after_id"], "obs_000003")
@@ -559,8 +708,14 @@ class CodexEpisodeTests(unittest.TestCase):
         env = FakeHabitat()
         agent = CodexEpisode(env, camera(), "1", "test", 32,
                              Path(self.tempdir.name) / "capture_error")
-        with patch.object(agent, "_save",
-                          side_effect=OSError("simulated disk error")):
+        save = agent._save
+
+        def fail_after_action(observation):
+            if env.actions:
+                raise OSError("simulated disk error")
+            return save(observation)
+
+        with patch.object(agent, "_save", side_effect=fail_after_action):
             reply = agent.step(["MOVE_FORWARD", "MOVE_FORWARD"])
         self.assertEqual(reply["status"], "TOOL_ERROR")
         self.assertEqual(reply["executed"], ["MOVE_FORWARD"])
@@ -735,9 +890,8 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(cmd[-1], START_PROMPT)
         self.assertNotIn("Go down the stairs.", cmd[-1])
         self.assertIn("sole navigation agent", PROMPT)
-        # Safety guidance is prompt-only; MCP movement logic stays unchanged.
         self.assertIn("People can move between views", PROMPT)
-        self.assertIn("keep a safe gap", PROMPT)
+        self.assertIn("Keep a safe gap", PROMPT)
         self.assertIn("keep moving when clear", PROMPT)
         self.assertIn("Follow landmarks in order", PROMPT)
         self.assertIn("exact stopping place", PROMPT)
@@ -745,15 +899,21 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("next unverified landmark", PROMPT)
         self.assertIn("motion_hint", PROMPT)
         self.assertIn("favor longer MOVE_FORWARD batches", PROMPT)
-        self.assertIn("use short batches and re-observe", PROMPT)
-        self.assertIn("1-2 LOOK_DOWN actions then observe RGB", PROMPT)
-        self.assertIn("Depth if supplied", PROMPT)
+        self.assertIn("take one MOVE_FORWARD, then observe again", PROMPT)
+        self.assertIn("parallel to the furniture edge", PROMPT)
+        self.assertIn("Do not cut diagonally across a doorway", PROMPT)
+        self.assertIn("until the whole body has cleared the corner or door frame", PROMPT)
+        self.assertIn('call observe with {"include_depth": true} at the new heading', PROMPT)
+        self.assertIn("before requesting MOVE_FORWARD in a separate step call", PROMPT)
+        self.assertIn("Check left and right clearance and the nearest corner", PROMPT)
+        self.assertIn('1-2 LOOK_DOWN actions then observe with {"include_depth": true}', PROMPT)
+        self.assertIn("Missing or invalid Depth leaves the affected clearance unknown", PROMPT)
         self.assertIn("matching LOOK_UP actions", PROMPT)
         self.assertIn("observe pitch_deg", PROMPT)
         self.assertIn("short turn batches", PROMPT)
-        self.assertIn("avoid accumulating excessive downward tilt", PROMPT)
+        self.assertIn("Avoid accumulating excessive downward tilt", PROMPT)
         self.assertIn("one extra Depth view", PROMPT)
-        self.assertIn("do not repeatedly retry a stalled direction", PROMPT)
+        self.assertIn("Do not repeatedly retry a stalled direction", PROMPT)
         self.assertIn("left/right at the place specified", PROMPT)
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)

@@ -12,22 +12,28 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return RGB and compact metadata. Add Depth if public Depth confirms "
-            "a near front or side-of-body obstacle, or after a visual stall. "
-            "near_body_risk gives measured left/center/right regions, not object "
-            "identity or a movement veto. No hidden map."
+            "Return RGB and compact metadata. Add Depth after a change of view, "
+            "for a nearby obstacle, or after a forward stall. Set include_depth "
+            "to true to request Depth for a clearance check at any heading. "
+            "near_body_risk gives measured left/center/right regions. "
+            "A recent stall may also include a direction relative to the view."
         ),
-        "inputSchema": {"type": "object", "properties": {},
-                        "additionalProperties": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"include_depth": {"type": "boolean"}},
+            "additionalProperties": False,
+        },
     },
     {
         "name": "step",
         "description": (
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
-            "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
-            "shared episode budget. An unchanged RGB after MOVE_FORWARD stops "
-            "the remaining batch; use the feedback to choose what to do next. "
+            "LOOK_UP, LOOK_DOWN. STOP must be last. Only executed actions use "
+            "the budget. FORWARD_BLOCKED means Depth shows an obstacle in the "
+            "next step's body path. REOBSERVE_FORWARD asks for a fresh view. "
+            "LOW_FORWARD_PROGRESS and NO_VISUAL_PROGRESS stop the batch after "
+            "an attempted forward. Observe and realign or reroute. "
             "If post-action capture fails, the TOOL_ERROR receipt still lists "
             "actions already executed; never repeat those actions."
         ),
@@ -74,14 +80,18 @@ class MCPServer:
             return {"tools": TOOLS}
         if method == "tools/call":
             name = params.get("name")
-            arguments = params.get("arguments") or {}
+            arguments = params.get("arguments")
+            if arguments is None:
+                arguments = {}
             if not isinstance(arguments, dict):
                 raise ValueError("tool arguments must be an object")
             if name == "observe":
-                if arguments:
-                    raise ValueError("observe takes no arguments")
+                include_depth = arguments.get("include_depth")
+                if (arguments.keys() - {"include_depth"} or
+                        ("include_depth" in arguments and type(include_depth) is not bool)):
+                    raise ValueError("observe accepts only an optional boolean include_depth")
                 with redirect_stdout(sys.stderr):
-                    info, rgb_data, depth_data = self.episode.observe()
+                    info, rgb_data, depth_data = self.episode.observe(include_depth=include_depth)
                 content = [
                     {"type": "text", "text": json.dumps(info, ensure_ascii=False)},
                     {"type": "image", "data": rgb_data, "mimeType": "image/png"},

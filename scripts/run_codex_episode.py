@@ -22,16 +22,19 @@ from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, 
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
 Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
-The tool shows RGB; Depth appears when measured front/side body-clearance risk is near or after a stall. near_body_risk marks left/center/right measured regions, not a human/furniture identity or automatic movement veto.
-Navigate using visual evidence and the six permitted simulator actions.
-On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe. When searching by turning, use short turn batches with a fresh view, not long blind scans.
-observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied); avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
-Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction. After a forward stall, one extra Depth view may be sent even without a confirmed central obstacle; that does not certify a safe path.
+Use RGB to identify people, furniture, and landmarks. Use Depth to judge distance and check that the entire robot can fit along its next straight step. observe can add Depth after a turn, tilt, nearby obstacle, or stall. Request observe with {"include_depth": true} for a clearance check whenever needed.
+Reach the instructed destination without collisions using visual evidence and the six permitted simulator actions.
+On visibly open paths, favor longer MOVE_FORWARD batches. Near people, stairs, doorways, or clustered furniture, check RGB and Depth before entering the tight area. Use include_depth=true if Depth is missing from the current view. If there is clearance, take one MOVE_FORWARD, then observe again. When searching by turning, use short turn batches with a fresh view.
+Near furniture, corners, and doorways, choose a straight path with room on both sides. Keep parallel to the furniture edge when passing alongside it. Center the robot and align with the direction of the passage before entering it.
+Do not cut diagonally across a doorway, through a narrow gap between furniture, or around a furniture corner. Use one heading for each straight segment. Keep that heading until the whole body has cleared the corner or door frame, then turn in place for the next segment.
+In those spaces, issue any TURN_LEFT, TURN_RIGHT, or LOOK_UP needed to align in a step call containing only view changes. Then call observe with {"include_depth": true} at the new heading before requesting MOVE_FORWARD in a separate step call. Check left and right clearance and the nearest corner in the new Depth image. Realign or choose a wider approach if the angle or clearance is uncertain.
+People can move between views. Keep a safe gap and leave their path clear. Re-observe or take a clear detour if someone occupies the passage. Identify locations from the surrounding scene and keep moving when clear.
+observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe with {"include_depth": true} to inspect the floor or stair edge. Avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
+Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting. After a forward stall, one extra Depth view may be sent to help inspect the approach.
 Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
-Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
-People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
-Near the destination, confirm the exact stopping place using visible evidence; do not prolong turn-only searching.
-If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
+When step returns FORWARD_BLOCKED, REOBSERVE_FORWARD, LOW_FORWARD_PROGRESS or NO_VISUAL_PROGRESS, check which actions executed, observe again, and use the new view to realign or reroute. Do not repeatedly retry a stalled direction. motion_hint gives recent stall directions relative to your current view and right-positive net turns.
+Near the destination, confirm the exact stopping place using visible evidence. Use a clear approach or detour to reach the goal when the direct route is blocked.
+In Depth, dark is near, bright is far and magenta=invalid. Use near_body_risk and its distances to locate measured risks on the left, center or right. Give measured obstacles in the body's path more room before moving. Missing or invalid Depth leaves the affected clearance unknown. Reposition for a clearer view of a tight gap before entering.
 When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.

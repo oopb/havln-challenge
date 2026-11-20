@@ -12,46 +12,49 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   for exactly one requested split/episode.
 - Controller: havln_agent/codex_episode.py owns public RGB-D captures,
   legal six-action stepping, budgets, replay receipts and STOP/export checks.
-- MCP: havln_agent/codex_mcp.py exposes ONLY observe() and step(actions).
+- MCP exposes `observe(include_depth)` and `step(actions)`. The
+  `include_depth` option is optional.
   observe returns fresh RGB, observation ID, action budget and `pitch_deg`
   (commanded angle relative to the initial forward view; negative is down).
   The episode's route instruction is already in one-time system instructions.
-  Depth is sent when measured public-Depth evidence finds a near obstacle
-  across the robot's **whole forward body width** (left, center or right),
-  or **once** after an exact-RGB stalled forward in the same blocked period.
-  Other observations return RGB only. `near_body_risk` gives at most two
-  coherent measured regions with forward distances; `depth_reason` is
-  `front_obstacle`, `near_body_risk`, or `post_stall_inspection`.
+  Depth is sent for a measured near obstacle across the robot's **whole
+  forward body width**, once after a stalled forward in the same blocked
+  period, on the first observation at a changed heading or tilt, or when
+  the caller passes `{"include_depth": true}`. Other observations return RGB
+  only. `near_body_risk` gives at most two coherent measured regions with
+  forward distances. `depth_reason` records the first applicable reason in
+  order, `front_obstacle`, `near_body_risk`, `post_stall_inspection`,
+  `requested`, or `view_changed`.
   `front_obstacle_m` is included only when the legacy centerline detector
-  confirms central obstruction. A side-only warning does not claim the object
-  is a person or furniture, nor does it block motion or certify safety.
+  confirms central obstruction. The regions describe measured obstacle
+  locations. Use RGB to identify what occupies those regions.
   step executes an ordered list of allowed atomic actions and returns receipts.
-  If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
-  and the remaining requested batch actions are skipped; only executed actions
-  consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
-  remains active. The next `observe()` may include the single post-stall
-  inspection Depth image, but `step()` never sends an image.
+  It refreshes RGB-D before a tool call's initial forward and checks each
+  subsequent forward against the preceding action's new frame. Coherent Depth
+  inside the nominal body's one-step sweep yields `FORWARD_BLOCKED` before the
+  action is issued. Nearer-term advisory risk outside that sweep allows one
+  forward step per call while the risk persists. `REOBSERVE_FORWARD` ends the
+  batch before another forward. Only executed actions consume budget.
+  For each attempted forward, the controller uses the robot's own planar
+  displacement along the initial heading. Less than 20% of the nominal
+  step yields `LOW_FORWARD_PROGRESS` and interrupts the batch. A retry in
+  that heading requires a new `observe()`. When pose is unavailable, exact
+  unchanged RGB still yields `NO_VISUAL_PROGRESS`. `step()` returns text.
   Only when useful, `step()` also returns `motion_hint`: cumulative and net
-  turn degrees since the last forward with **changing RGB** (not measured
-  translation), plus batch turn degrees if the batch alone turned >=180 degrees.
+  turn degrees since the last forward that made progress, plus batch turn
+  degrees if the batch alone turned >=180 degrees.
   Right turns are positive, left turns negative. Up to two recent exact-RGB
   forward stalls (within 16 actions) are expressed as angles **relative to
-  the current view**. These hints never interrupt/limit turning or prohibit
-  movement, and normal receipts do not contain them.
-- Prompt-only local clearance strategy: in blocked or uncertain near-foot
-  areas, Codex may issue 1–2 `LOOK_DOWN` actions, call `observe()` for fresh RGB
-  and optional Depth, then use matching `LOOK_UP` actions to return near
-  zero pitch before evaluating short forward batches or rerouting. It should
-  not repeatedly scan the same floor without new evidence; search turns should
-  use short batches with intervening observations. This is not automatic recovery, a depth
-  guarantee, or permission to walk into obstacles. On a visually clear open
-  corridor, Codex may use longer consecutive `MOVE_FORWARD` batches.
-- This is not a geometry authorization gate or motion odometry: a changed
-  RGB does not certify actual displacement; the obstacle heuristic and the
-  one-time stall inspection only select whether Depth is shown. `pitch_deg`
-  tracks commanded LOOK_UP/LOOK_DOWN actions, not privileged simulator pose.
-  No hidden pose, reference trajectory, goal coordinates or extra models
-  are exposed.
+  the current view**.
+- In blocked or uncertain near-foot areas, Codex may issue 1–2 `LOOK_DOWN`
+  actions and request RGB-D to inspect the floor or stair edge. After
+  restoring pitch or turning near a narrow gap, it requests Depth to check
+  clearance on both sides and at the nearest corner before moving straight
+  through. Near people or crowded passages, it observes between single
+  forward steps. Open corridors still allow longer batches.
+- `pitch_deg` tracks commanded LOOK_UP/LOOK_DOWN actions. The controller uses
+  robot pose internally and gives Codex relative motion feedback. Depth with
+  missing or out-of-view evidence can leave obstacles undetected.
 
 The existing cloud/hybrid scheduler, model API clients and config YAML
 are untouched. The CLI model selection is independent of .env API settings.

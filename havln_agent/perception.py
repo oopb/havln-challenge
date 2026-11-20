@@ -297,18 +297,13 @@ class Geometry:
                     check_mode='fast_live_depth_body_sweep',
                     diagnostic_tool='inspect_geometry' if state != 'EXECUTABLE' else None)
 
-    def forward_body_risk(self):
-        """Small, advisory RGB-D check of the *whole* forward robot footprint.
+    def forward_body_risk(self, *, next_step_only=False):
+        """Find coherent upper-body Depth evidence across the forward footprint.
 
-        This reports only coherent *measured* upper-body obstacles, including
-        side edges which the narrow centerline detector deliberately ignores.
-        It never names the object, asserts a collision, certifies free space,
-        or vetoes an action. Floor/stair support and invalid near-field rays
-        require visual judgement, not a synthetic CLEAR result.
-
-        The measured lookahead includes one nominal step, the body radius and
-        a modest early-warning buffer. Pixel support must span multiple rows
-        and columns so individual noisy rays cannot trigger advice.
+        The advisory includes a short lookahead and lateral margin. The
+        next-step check uses the physical footprint swept by one nominal
+        action. Both require support across multiple pixel rows and columns.
+        Missing evidence leaves near-field visibility and floor support open.
         """
         cam = self.camera
         # 0.02 m of advisory space, not an enlarged physics collision shape.
@@ -322,6 +317,10 @@ class Geometry:
             & (self.z > cam.robot_radius * 0.8)
             & (self.z <= lookahead)
         )
+        if next_step_only:
+            radius = cam.robot_radius
+            contact = self.z - np.sqrt(np.maximum(0.0, radius**2 - self.x**2))
+            mask &= (np.abs(self.x) <= radius) & (contact < cam.forward_step)
         # Conservative, resolution-scaled 2-D spatial support.
         min_points = max(6, int(cam.width * cam.height * 0.0003))
         min_rows = max(2, int(cam.height * 0.035))

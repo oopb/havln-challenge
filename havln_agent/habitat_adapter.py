@@ -1,4 +1,6 @@
 """Use the released image's environment, without importing the CMA policy."""
+import numpy as np
+
 from .perception import Camera
 from .submission_contract import ACTIONS
 
@@ -22,6 +24,24 @@ def read_current_observation(env, camera, instruction):
         raise ValueError('Current public RGB-D unavailable')
     return adapt_observation(dict(rgb=sensors['rgb'], depth=sensors['depth'],
                                   instruction=dict(text=instruction)), camera)
+
+
+def read_planar_pose(env):
+    """Snapshot the robot's own position and horizontal forward direction."""
+    try:
+        state = env.habitat_env.sim.get_agent_state()
+        position = np.array(state.position, dtype=float)
+        q = state.rotation
+        # Rotate Habitat's local -Z forward axis and keep world X and Z.
+        forward = np.array([-2 * (q.x * q.z + q.w * q.y),
+                            2 * (q.x**2 + q.y**2) - 1], dtype=float)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+    norm = np.linalg.norm(forward)
+    if (position.shape != (3,) or not np.isfinite(position).all()
+            or not np.isfinite(norm) or norm < 1e-6):
+        return None
+    return position[[0, 2]], forward / norm
 
 
 def runtime_imports(source=None):
