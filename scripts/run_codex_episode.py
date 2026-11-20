@@ -21,17 +21,18 @@ from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, 
 
 
 PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
-Use ONLY the havln MCP tools observe and step. Begin by calling observe.
-Every observe returns fresh RGB followed by Depth of the SAME view. Depth: dark=near, bright=far, magenta=invalid; interpret with RGB and camera pitch. A text front_obstacle_m warning is supplied ONLY for confirmed central obstruction; no warning does NOT mean clear, and Depth never authorizes motion.
-Use near_body_risk from observe/step when provided: it is measured side/front clearance risk from public Depth, not an object label or a movement veto. Left/right edges can collide even when the central view looks open. If a forward batch is interrupted with NEAR_BODY_RISK, re-observe and change approach or shorten the movement; never repeatedly scrape along the same edge.
-The RoboWorld HA-VLN 2.0 goal is to follow the route, STOP near the actual goal (the scoring threshold is 3 m), and avoid collisions. Navigation Error (NE) penalizes stopping far away; collision-free Success Rate (SR) requires reaching the goal without collisions, and CR/TCR penalize collisions especially around people. Do not sacrifice human safety for a shorter path or for reaching the destination quickly.
-People can move between views or stop in doorways and corridors. Keep a safe gap, never push through a person, and avoid stepping into anyone's likely path. Prefer a clearly open alternative, wait/re-observe for a blocked passage, or reroute. Human position/activity can change; use stable surroundings to verify instruction landmarks. Avoid walls, railings, furniture and narrow doorway edges too.
-Each MOVE_FORWARD is 0.25 m and each TURN is 15 degrees. On visibly open, unoccupied corridors, favor longer MOVE_FORWARD batches. Near people, stairs, door frames, furniture, or uncertain RGB-D clearance, move at most one forward step, observe again and reassess. Do not use repeated turning as progress.
-step may report NO_VISUAL_PROGRESS, MOTION_UNCERTAIN or MOTION_MONITOR_ERROR; only the actions in executed occurred. Re-observe after a stall and change approach rather than repeatedly pushing forward. If motion_hint shows REPEATED_SCAN, compare the historical views and relative headings, choose a promising direction, and avoid another blind circle.
-observe pitch_deg reports commanded tilt relative to initial forward (negative=down). If foot-level clearance is uncertain, LOOK_DOWN then observe; restore pitch near zero with LOOK_UP before continued navigation. Depth and RGB are current only at the heading at which they were observed.
-Follow landmarks in order: interpret left/right at the place specified in the route. Seeing a destination-related door, person, sink or room is not proof you have reached the requested stopping position.
-Before STOP, use short final steps and call observe AFTER your most recent action to verify the final RGB-D view and the route's precise spatial relation (beside, beyond, through, in front of, etc.). Never stop based only on an old frame or an unverified guess. If you cannot confirm, keep investigating safely.
-STOP MUST be sent separately as step({"actions":["STOP"]}), with no other actions in that call. Do NOT append STOP to a movement batch. A tool-level observe since the last action is required; a system budget_guard_stop is not your own arrival confirmation.
+Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
+The tool shows RGB; Depth appears only if a near obstacle is detected ahead.
+Navigate using visual evidence and the six permitted simulator actions.
+On visibly open paths, favor longer MOVE_FORWARD batches; near people, stairs, doorways or uncertain obstacles, use short batches and re-observe. When searching by turning, use short turn batches with a fresh view, not long blind scans.
+observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe RGB (and Depth if supplied); avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
+Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting; do not repeatedly retry a stalled direction. After a forward stall, one extra Depth view may be sent even without a confirmed central obstacle; that does not certify a safe path.
+Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
+Use step motion_hint: turn_net is right-positive/left-negative; stall directions are relative to the current view. Avoid revisiting failed directions; these are hints, never movement guarantees.
+People can move between views: keep a safe gap, avoid their path and identify locations from the surrounding scene, not fixed people; re-observe if blocked, but keep moving when clear.
+Near the destination, confirm the exact stopping place using visible evidence; do not prolong turn-only searching.
+If Depth appears: dark=near, bright=far, magenta=invalid; interpret it with RGB, not as an automatic movement veto.
+When the goal has been reached, execute STOP using step.
 Do not use shell commands, read source files, inspect hidden simulator state,
 look up reference trajectories, or attempt to bypass the action interface.
 Do not rely on state from any previous episode. A STOP is not proof of success.
@@ -39,26 +40,25 @@ Do not rely on state from any previous episode. A STOP is not proof of success.
 
 START_PROMPT = "Begin navigation by calling havln.observe()."
 
-# Import the same public controller that the MCP server imports, using the
-# container's interpreter rather than the (often newer) host/CI Python.
+# Probe the actual container-side controller before starting paid Codex inference.
 MCP_IMPORT_PROBE = ("import sys; "
                     "from havln_agent.codex_episode import CodexEpisode; "
                     "print('MCP controller import OK, Python', sys.version.split()[0])")
 
 
 def require_mcp_runtime(args):
-    """Fail before paid Codex inference with the real container traceback."""
+    """Fail before inference with the real Habitat container import traceback."""
     command = [args.docker_bin, "exec", "-w", "/toolkit", args.container,
                "python", "-c", MCP_IMPORT_PROBE]
     try:
-        result = subprocess.run(command, capture_output=True,
-                                text=True, timeout=45, check=False)
+        result = subprocess.run(command, capture_output=True, text=True,
+                                timeout=45, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("Cannot run MCP import probe: " + str(error)) from error
     if result.returncode != 0:
         raise RuntimeError(
             "Habitat MCP Python import failed inside container; check installed "
-            "versions and source mount:\n" +
+            "versions and source mount:\\n" +
             (result.stderr or result.stdout or "No stderr returned")[-2400:])
     return result.stdout.strip()
 

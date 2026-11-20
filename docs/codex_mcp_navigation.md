@@ -13,73 +13,40 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
 - Controller: havln_agent/codex_episode.py owns public RGB-D captures,
   legal six-action stepping, budgets, replay receipts and STOP/export checks.
 - MCP: havln_agent/codex_mcp.py exposes ONLY observe() and step(actions).
-  observe returns a **fresh RGB + corresponding Depth** image pair on
-  **every call**, followed by compact metadata (observation ID, remaining
-  action budget and `pitch_deg`, negative=down). RGB is the first image,
-  Depth the second; an optional repeated-scan mosaic is the third image.
-  A coherent, measured obstacle in the forward *whole-body* sweep
-  may produce `near_body_risk` with left/right/central zones and a
-  measured distance. `front_obstacle_m` is supplied only for confirmed
-  central evidence. Warnings never claim to identify a person versus
-  furniture or certify a future collision; no warning is NOT a CLEAR.
-  Depth is visual evidence, not a movement gate; the route instruction
-  remains exclusively in the initial system instructions.
+  observe returns fresh RGB, observation ID, action budget and `pitch_deg`
+  (commanded angle relative to the initial forward view; negative is down).
+  The episode's route instruction is already in one-time system instructions.
+  Depth is sent when conservative public-Depth evidence finds a near obstacle,
+  or **once** on the next observation after an exact-RGB stalled forward in
+  the same locally blocked period. Other observations return RGB only.
+  `depth_reason` distinguishes `front_obstacle` from
+  `post_stall_inspection`; `front_obstacle_m` is included only when the
+  central near-obstacle heuristic confirms one.
   step executes an ordered list of allowed atomic actions and returns receipts.
-  Each MOVE_FORWARD is checked *after execution* using matched public RGB-D
-  features, returning PROGRESSED, STALLED or UNCERTAIN. Exact RGB identity
-  also counts as STALLED. A reliable stall interrupts the remaining batch
-  with `NO_VISUAL_PROGRESS`; two successive uncertain, very-small estimated
-  movements interrupt with `MOTION_UNCERTAIN`. Neither is a pre-move veto,
-  and only executed atomic actions consume budget.
-  In a *consecutive forward batch*, if the post-action public Depth newly
-  confirms whole-body/side clearance risk, the controller stops the remaining
-  forward commands and returns `NEAR_BODY_RISK` with the exact executed
-  list, skipped count and advisory evidence. The movement that revealed the
-  risk has already happened. One-step moves and new Codex decisions are NOT
-  blocked. No collision count, pose or hidden contact data goes to the model.
-  A local RGB-D monitor exception returns `MOTION_MONITOR_ERROR` after
-  recording the already-executed Habitat action, interrupts the remaining
-  batch, and leaves the episode active for re-observation. The model receives
-  the exact `executed` and `skipped_count` receipt; the motion monitoring
-  exception is also recorded on the action row.
-  Legacy Pillow versions without `Image.Resampling` are supported for motion
-  detection, Depth rendering, history mosaics and replay. A failure in the
-  optional history mosaic does not suppress the primary RGB observation.
-  If an action succeeds but post-action capture fails, the action is recorded
-  and the episode fails closed without exporting a misleading valid result.
-  The `step()` tool remains text-only; every `observe()` includes RGB+Depth.
-  STOP is accepted only as a standalone `step({"actions":["STOP"]})` call,
-  and only after a successful `observe()` **since the last atomic action**.
-  This enforces fresh viewing but cannot infer semantic arrival from privileged
-  simulator metrics. The Codex prompt requires visual confirmation of the
-  instruction's actual stopping position before requesting STOP.
+  If a MOVE_FORWARD action leaves RGB **exactly unchanged**, it is recorded
+  and the remaining requested batch actions are skipped; only executed actions
+  consume budget. The text response is `NO_VISUAL_PROGRESS` while the task
+  remains active. The next `observe()` may include the single post-stall
+  inspection Depth image, but `step()` never sends an image.
   Only when useful, `step()` also returns `motion_hint`: cumulative and net
-  turn degrees since the last **verified forward progress** (not merely a
-  changing RGB), plus batch turn degrees if the batch alone turned >=180 degrees.
-  When the local turn total exceeds 180 degrees without verified progress,
-  `REPEATED_SCAN` is reported; `observe()` may attach one compact, labeled
-  2x2 mosaic of recently observed views at distinct directions, no more often
-  than once per additional 90 degrees. The mosaic comes from existing RGB
-  frames and the directions are relative to the current view.
+  turn degrees since the last forward with **changing RGB** (not measured
+  translation), plus batch turn degrees if the batch alone turned >=180 degrees.
   Right turns are positive, left turns negative. Up to two recent exact-RGB
   forward stalls (within 16 actions) are expressed as angles **relative to
   the current view**. These hints never interrupt/limit turning or prohibit
   movement, and normal receipts do not contain them.
 - Prompt-only local clearance strategy: in blocked or uncertain near-foot
   areas, Codex may issue 1–2 `LOOK_DOWN` actions, call `observe()` for fresh RGB
-  and Depth, then use matching `LOOK_UP` actions to return near
+  and optional Depth, then use matching `LOOK_UP` actions to return near
   zero pitch before evaluating short forward batches or rerouting. It should
   not repeatedly scan the same floor without new evidence; search turns should
   use short batches with intervening observations. This is not automatic recovery, a depth
   guarantee, or permission to walk into obstacles. On a visually clear open
   corridor, Codex may use longer consecutive `MOVE_FORWARD` batches.
-- This is not a geometry authorization gate or privileged simulator odometry:
-  public RGB-D gives a conservative *estimate* of prior translation, with an
-  explicit UNCERTAIN state. An uncertain estimate does not certify movement;
-  pre-move clearance is never required. The obstacle heuristic only selects
-  whether a textual `front_obstacle_m` warning is included; RGB+Depth remain
-  paired irrespective of obstacles. `pitch_deg` tracks commanded LOOK_UP/
-  LOOK_DOWN actions, not privileged simulator pose.
+- This is not a geometry authorization gate or motion odometry: a changed
+  RGB does not certify actual displacement; the obstacle heuristic and the
+  one-time stall inspection only select whether Depth is shown. `pitch_deg`
+  tracks commanded LOOK_UP/LOOK_DOWN actions, not privileged simulator pose.
   No hidden pose, reference trajectory, goal coordinates or extra models
   are exposed.
 
@@ -219,9 +186,8 @@ instruction and existing short navigation rules are written once to
 model instructions. This intentionally replaces Codex's built-in base
 instructions for the isolated navigation session. The initial user prompt
 only asks Codex to call `observe()`. Each `observe()` returns RGB and a
-short metadata text block, always with Depth and with `front_obstacle_m`
-only for a confirmed central obstacle; it does **not** repeat the route.
-`step()` accepts only an action list and
+short metadata text block, with optional Depth and `front_obstacle_m`; it
+does **not** repeat the route. `step()` accepts only an action list and
 returns a short text receipt without any image.
 Codex manages the continuous model context internally: the CLI event log
 does not record the complete hidden per-model-call system/developer
@@ -241,14 +207,10 @@ The result.json single-episode row is **not** a full Phase 2 submission.
 The official test split requires its complete episode coverage and separate
 scoring. Do not upload a one-episode result as a full submission.
 
-The action budget includes STOP. A **model-requested** STOP must be a single
-action in its own call and follow a fresh `observe()` after the most recent
-movement/turn/look. It is an error to mix STOP with other actions or reuse
-an older observation. For diagnostic budgets below 500, if Codex uses the
-final available movement slot without stopping, the controller separately
-executes a recorded system budget_guard STOP so the sequence remains legal.
-This **system safety fallback is not a model-requested STOP** and is
-reported as budget_guard_stop, NEVER as confirmed navigation success.
+The action budget includes STOP. For diagnostic budgets below 500, if Codex
+uses the final available movement slot without stopping, the controller
+executes a recorded budget_guard STOP so the resulting sequence remains legal.
+This is reported as budget_guard_stop, NEVER as confirmed navigation success.
 Abnormal CLI termination without STOP remains explicitly incomplete.
 The host launcher has a 2400-second default wall-clock limit, configurable
 with --timeout-seconds. On timeout it sends SIGTERM (then SIGKILL if needed)
@@ -414,9 +376,8 @@ Without Docker, Codex login or Habitat:
     python -m unittest discover -s tests -p 'test_codex_usage.py' -v
     python -m unittest discover -s tests -p 'test_codex_batch.py' -v
 
-These tests exercise MCP initialization/tools, paired real RGB-D PNGs,
-atomic action ordering, standalone/fresh-observation STOP, budget STOP,
-failed input handling, the
+These tests exercise MCP initialization/tools, real PNG wire content,
+atomic action ordering, budget STOP, failed input handling, the
 one-session CLI command, no-inference preflight, Codex event viewing,
 diagnostic ZIP retention and fail-closed simulator exceptions. A green offline test does not prove that an actual
 Habitat episode or Codex account completed the route.
@@ -427,3 +388,25 @@ A sequential/batch harness can launch an independent codex exec for each
 episode, assemble official split files after validating all episode rows,
 and add Codex model/tool events to Replay Studio. Do not reuse sessions or
 persistent simulator state between episodes.
+
+
+## Retained reliability fixes (without changing the best-performing policy)
+
+The navigation policy, observation cadence, exact-RGB stall behavior, optional
+Depth policy, action batching and system prompt are restored to the
+`2cae614b` baseline. The following later fixes are retained because they
+protect correctness without adding a new navigation heuristic:
+
+- After Habitat successfully executes an atomic action, record it before
+  evaluator/capture work. If post-action processing fails, preserve the
+  executed action and return exact `executed` / `skipped_count` receipts.
+  Fail closed: an action whose post-STOP capture failed must not be exported
+  as a valid submission.
+- Use the shared `pillow_compat.RESAMPLING` constants for image resizing;
+  Habitat's legacy Pillow runtime does not expose `Image.Resampling`.
+- Before paid Codex inference, probe the actual container-side
+  `CodexEpisode` import and report the full traceback on failure. Batch
+  preflight performs the same probe once before launching workers.
+- Keep independent Habitat metric capture and Replay Studio scoring/reporting.
+  These are offline diagnostics and never enter the navigation agent's
+  observation or tool protocol.
