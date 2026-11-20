@@ -61,10 +61,9 @@ class CodexEpisode:
         self._last_scan_montage_turn = 0.0
         self.scan_montage = None
         self._ambiguous_forward_count = 0
-        # Grant one extra public Depth frame after a detected stall; do not
-        # repeatedly send it for the same blocked approach.
-        self._stall_depth_pending = False
-        self._stall_depth_used = False
+        # STOP requires a model-visible observation after the last action.
+        # The initial simulator reset is NOT an observe MCP response.
+        self._last_observed_action_count = None
         self.done = False
         self.end_reason = None
         self.finalized = False
@@ -128,6 +127,7 @@ class CodexEpisode:
             observation.pitch_deg = self.pitch_deg
             self.current = observation
             self.current_id = self._save(observation)
+            self._last_observed_action_count = len(self.actions)
         if not self.done:
             self._recent_views.append((self._heading_deg, self.current.rgb.copy()))
             self._recent_views = self._recent_views[-12:]
@@ -152,16 +152,11 @@ class CodexEpisode:
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
-        # Public Depth is visual evidence, never a geometry movement gate.
-        # A recent exact-RGB stall can request one extra inspection even when
-        # the conservative center-footprint heuristic finds no obstacle.
+        # RGB and Depth are an aligned observation pair. Depth is always sent
+        # with every model-visible new RGB frame; the geometric check selects
+        # text-only warnings, never whether Depth or movement is permitted.
+        depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
         obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
-        stall_inspection = self._stall_depth_pending and not self.done
-        send_depth = obstacle["confirmed"] or stall_inspection
-        depth_data = (depth_image_url(self.current, self.camera).split(",", 1)[1]
-                      if send_depth else None)
-        if stall_inspection:
-            self._stall_depth_pending = False
         info = {
             "episode_id": self.episode_id,
             "observation_id": self.current_id,
@@ -170,12 +165,11 @@ class CodexEpisode:
             "done": self.done,
             "reason": self.end_reason,
             "pitch_deg": self.pitch_deg,  # commanded tilt relative to initial view
-            "depth_sent": send_depth,
+            "depth_sent": True,
         }
-        if send_depth:
-            info["depth_reason"] = ("front_obstacle" if obstacle["confirmed"]
-                                    else "post_stall_inspection")
-        if obstacle["confirmed"] and send_depth:
+        if obstacle["confirmed"]:
+            # This is a geometric warning, NOT proof of a particular object
+            # or a movement-veto/clearance certification.
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
         if comparison_directions:
             info["scan_status"] = "REPEATED_SCAN"
@@ -301,22 +295,14 @@ class CodexEpisode:
         elif action == "MOVE_FORWARD":
             if monitor_error is not None:
                 self._ambiguous_forward_count = 0
-                if not self._stall_depth_used:
-                    self._stall_depth_pending = True
-                    self._stall_depth_used = True
             elif stalled:
                 self._ambiguous_forward_count = 0
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
-                if not self._stall_depth_used:
-                    self._stall_depth_pending = True
-                    self._stall_depth_used = True
             elif motion.state == "PROGRESSED":
                 self._turn_total_deg = 0.0
                 self._turn_net_deg = 0.0
                 self._recent_stalls.clear()
-                self._stall_depth_pending = False
-                self._stall_depth_used = False
                 self._recent_views.clear()
                 self._last_scan_montage_turn = 0.0
                 self._ambiguous_forward_count = 0
@@ -358,9 +344,6 @@ class CodexEpisode:
                 and self._ambiguous_forward_count >= 2):
             # Do not execute further blind forward commands in this batch;
             # Codex decides whether to inspect or change direction.
-            if not self._stall_depth_used:
-                self._stall_depth_pending = True
-                self._stall_depth_used = True
             return "MOTION_UNCERTAIN"
         return None
 
@@ -378,8 +361,16 @@ class CodexEpisode:
                         or any(not isinstance(a, str) or a not in ACTIONS
                                for a in requested)):
                     raise ValueError("actions must be a non-empty list of six legal action names")
-                if "STOP" in requested[:-1]:
-                    raise ValueError("STOP may only be the final action in a batch")
+                if "STOP" in requested:
+                    if requested != ["STOP"]:
+                        raise ValueError(
+                            "STOP must be the ONLY action in its step call; "
+                            "observe before sending a separate STOP.")
+                    if self._last_observed_action_count != len(self.actions):
+                        raise ValueError(
+                            "Before STOP, call observe to inspect fresh RGB-D "
+                            "AFTER the most recent action and confirm the "
+                            "requested destination visually.")
                 # A final STOP is reserved for diagnostic budgets under 500,
                 # so their action rows remain valid for the official contract.
                 available = self.remaining if self.max_steps == 500 else max(0, self.remaining - 1)
