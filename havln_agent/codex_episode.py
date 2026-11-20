@@ -21,9 +21,11 @@ from .submission_contract import ACTIONS, atomic_json, check_rows
 from .simulator_evaluation import SimulatorMetricCapture, publish_run_metrics
 
 
+VIEW_ACTIONS = ("TURN_LEFT", "TURN_RIGHT", "LOOK_UP", "LOOK_DOWN")
 FORWARD_INTERRUPTION_FEEDBACK = {
     "FORWARD_BLOCKED": "Depth shows an obstacle within the next forward body's path. Observe and realign or choose a route around it.",
     "REOBSERVE_FORWARD": "Inspect the current view before continuing forward. Leave clearance and use one step near obstacles.",
+    "ROUTE_RECHECK": "Possible reversal. Check the next landmark in a fresh view before continuing.",
     "LOW_FORWARD_PROGRESS": "The last forward action made little progress along its heading. Observe, then realign or reroute before trying again.",
     "NO_VISUAL_PROGRESS": "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe.",
 }
@@ -60,6 +62,14 @@ class CodexEpisode:
         # Tool hints use relative turns; the controller keeps robot pose local.
         self._heading_deg = 0.0
         self._last_observed_view = (self._heading_deg, self.pitch_deg)
+        self._last_observed_step = None
+        self._view_needs_observe = False
+        self._last_observed_risk = False
+        self._low_view_heading = None
+        self._low_view_reusable = False
+        self._forward_run_heading = 0.0
+        self._forward_run_length = 0
+        self._route_recheck_steps = 0
         self._turn_total_deg = 0.0
         self._turn_net_deg = 0.0
         self._recent_stalls = []
@@ -171,6 +181,20 @@ class CodexEpisode:
             info["front_obstacle_m"] = obstacle["nearest_along_m"]
         if body_risk is not None:
             info["near_body_risk"] = body_risk
+            if not self.done:
+                if geometry.forward_body_risk(next_step_only=True) is not None:
+                    info["forward_blocked_by_depth"] = True
+                elif geometry.diagnose(0, self.camera.forward_step)["unknown_sweep_pixels"]:
+                    info["forward_clearance_unknown"] = True
+        has_risk = obstacle["confirmed"] or body_risk is not None
+        if not self.done and view[1] < 0 and send_depth:
+            self._low_view_heading = view[0]
+            self._low_view_reusable = True
+        if (not self.done and view[1] == 0 and has_risk
+                and view[0] != self._low_view_heading
+                and (not self._last_observed_risk or view != self._last_observed_view
+                     or self._last_observed_step != len(self.actions))):
+            info["look_down_for_clearance"] = True
         if self._recent_stalls and not self.done:
             hint = self._motion_hint(())
             if hint:
@@ -180,8 +204,20 @@ class CodexEpisode:
         if stall_inspection:
             self._stall_depth_pending = False
         self._last_observed_view = view
+        self._last_observed_step = len(self.actions)
+        self._view_needs_observe = False
+        self._last_observed_risk = has_risk
         self._unreviewed_stall_heading = None
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
+
+    def _begin_route_recheck(self):
+        if self._route_recheck_steps or self._forward_run_length < 2:
+            return False
+        turn_from_run = (self._heading_deg - self._forward_run_heading + 180) % 360 - 180
+        if abs(turn_from_run) < 150:
+            return False
+        self._route_recheck_steps = 2
+        return True
 
     def _motion_hint(self, executed):
         """Report local turn history and recent stalled directions."""
@@ -258,12 +294,27 @@ class CodexEpisode:
                     interruption = "LOW_FORWARD_PROGRESS"
             elif np.array_equal(before_rgb, observation.rgb):
                 interruption = "NO_VISUAL_PROGRESS"
+        if action in VIEW_ACTIONS:
+            self._view_needs_observe = True
         if action in ("TURN_LEFT", "TURN_RIGHT"):
             angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
             self._heading_deg += angle
             self._turn_net_deg += angle
             self._turn_total_deg += abs(angle)
         elif forward:
+            heading = self._heading_deg % 360
+            # Reuse a low view for at most one straight step.
+            if interruption or heading != self._low_view_heading or not self._low_view_reusable:
+                self._low_view_heading = None
+            self._low_view_reusable = False
+            if progress is not None and not interruption:
+                self._forward_run_length = (self._forward_run_length + 1
+                                            if heading == self._forward_run_heading else 1)
+                self._forward_run_heading = heading
+            else:
+                self._forward_run_length = 0
+            if not interruption and self._route_recheck_steps:
+                self._route_recheck_steps -= 1
             if interruption:
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
@@ -317,6 +368,11 @@ class CodexEpisode:
                     raise ValueError("actions must be a non-empty list of six legal action names")
                 if "STOP" in requested[:-1]:
                     raise ValueError("STOP may only be the final action in a batch")
+                if ("MOVE_FORWARD" in requested
+                        and any(action in VIEW_ACTIONS for action in requested)):
+                    raise ValueError(
+                        "Put TURN/LOOK in a separate step call. Observe and wait for "
+                        "the view before requesting MOVE_FORWARD.")
                 # A final STOP is reserved for diagnostic budgets under 500,
                 # so their action rows remain valid for the official contract.
                 available = self.remaining if self.max_steps == 500 else max(0, self.remaining - 1)
@@ -330,8 +386,16 @@ class CodexEpisode:
                 for action in requested:
                     if self.done:
                         break
+                    reviewing_forward = False
                     if action == "MOVE_FORWARD":
-                        if self._unreviewed_stall_heading == self._heading_deg % 360:
+                        if (self._begin_route_recheck()
+                                or (self._route_recheck_steps
+                                    and self._last_observed_step != len(self.actions))):
+                            interruption = "ROUTE_RECHECK"
+                            break
+                        reviewing_forward = self._route_recheck_steps > 0
+                        if (self._view_needs_observe
+                                or self._unreviewed_stall_heading == self._heading_deg % 360):
                             interruption = "REOBSERVE_FORWARD"
                             break
                         if not executed:
@@ -356,6 +420,11 @@ class CodexEpisode:
                     executed.append(action)
                     if interruption:
                         break  # The remaining actions, including STOP, are not executed.
+                    if reviewing_forward and len(executed) < len(requested) and not self.done:
+                        interruption = "ROUTE_RECHECK"
+                        break
+                if not self.done and not interruption and self._begin_route_recheck():
+                    interruption = "ROUTE_RECHECK"
                 requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
@@ -372,6 +441,8 @@ class CodexEpisode:
                     if interruption == "LOW_FORWARD_PROGRESS":
                         result["forward_progress_m"] = round(progress, 4)
                 if not self.done:
+                    if self._route_recheck_steps:
+                        result["route_recheck_steps"] = self._route_recheck_steps
                     hint = self._motion_hint(executed)
                     if hint:
                         result["motion_hint"] = hint

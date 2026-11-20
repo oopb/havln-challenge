@@ -20,25 +20,23 @@ from havln_agent.codex_usage import (compare_rate_limits, format_quota_summary, 
                                      summarize_token_usage)
 
 
-PROMPT = """You are the sole navigation agent for ONE HA-VLN episode.
-Use ONLY the havln MCP tools: observe and step. Begin by calling observe.
-Use RGB to identify people, furniture, and landmarks. Use Depth to judge distance and check that the entire robot can fit along its next straight step. observe can add Depth after a turn, tilt, nearby obstacle, or stall. Request observe with {"include_depth": true} for a clearance check whenever needed.
-Reach the instructed destination without collisions using visual evidence and the six permitted simulator actions.
-On visibly open paths, favor longer MOVE_FORWARD batches. Near people, stairs, doorways, or clustered furniture, check RGB and Depth before entering the tight area. Use include_depth=true if Depth is missing from the current view. If there is clearance, take one MOVE_FORWARD, then observe again. When searching by turning, use short turn batches with a fresh view.
-Near furniture, corners, and doorways, choose a straight path with room on both sides. Keep parallel to the furniture edge when passing alongside it. Center the robot and align with the direction of the passage before entering it.
-Do not cut diagonally across a doorway, through a narrow gap between furniture, or around a furniture corner. Use one heading for each straight segment. Keep that heading until the whole body has cleared the corner or door frame, then turn in place for the next segment.
-In those spaces, issue any TURN_LEFT, TURN_RIGHT, or LOOK_UP needed to align in a step call containing only view changes. Then call observe with {"include_depth": true} at the new heading before requesting MOVE_FORWARD in a separate step call. Check left and right clearance and the nearest corner in the new Depth image. Realign or choose a wider approach if the angle or clearance is uncertain.
-People can move between views. Keep a safe gap and leave their path clear. Re-observe or take a clear detour if someone occupies the passage. Identify locations from the surrounding scene and keep moving when clear.
-observe pitch_deg reports commanded tilt relative to the initial forward view (negative=down). If blocked or near-foot clearance is unclear, consider 1-2 LOOK_DOWN actions then observe with {"include_depth": true} to inspect the floor or stair edge. Avoid accumulating excessive downward tilt or repeating the same ground check without new evidence.
-Restore forward pitch near 0 with matching LOOK_UP actions before cautious short forward movement or rerouting. After a forward stall, one extra Depth view may be sent to help inspect the approach.
-Follow landmarks in order: focus on the next unverified landmark, and interpret left/right at the place specified in the route, not from a later exploratory view.
-When step returns FORWARD_BLOCKED, REOBSERVE_FORWARD, LOW_FORWARD_PROGRESS or NO_VISUAL_PROGRESS, check which actions executed, observe again, and use the new view to realign or reroute. Do not repeatedly retry a stalled direction. motion_hint gives recent stall directions relative to your current view and right-positive net turns.
-Near the destination, confirm the exact stopping place using visible evidence. Use a clear approach or detour to reach the goal when the direct route is blocked.
-In Depth, dark is near, bright is far and magenta=invalid. Use near_body_risk and its distances to locate measured risks on the left, center or right. Give measured obstacles in the body's path more room before moving. Missing or invalid Depth leaves the affected clearance unknown. Reposition for a clearer view of a tight gap before entering.
-When the goal has been reached, execute STOP using step.
-Do not use shell commands, read source files, inspect hidden simulator state,
-look up reference trajectories, or attempt to bypass the action interface.
-Do not rely on state from any previous episode. A STOP is not proof of success.
+PROMPT = """You are the sole navigation agent for ONE HA-VLN episode. Reach the instructed destination without collisions. Use only havln.observe and havln.step. Begin with observe.
+
+Issue one tool call at a time. Put TURN and LOOK actions in a separate step call. After any TURN or LOOK, call observe and wait for its result. Use that view before issuing MOVE_FORWARD in a new step call.
+
+Use RGB to identify landmarks, furniture, and people. Use current Depth to decide whether the robot's full width can clear its next straight step. Dark is near, bright is far, magenta=invalid. Check left and right clearance, the nearest corner, and the floor ahead. near_body_risk gives measured regions and distances in metres. Missing or invalid Depth leaves the affected clearance unknown.
+
+On visibly open paths, favor longer MOVE_FORWARD batches. Before entering a narrow doorway, approaching stairs, or passing furniture or people, stop and check RGB-D. Turn in place, observe at the new heading, and request {"include_depth": true} if the needed Depth is missing. If forward_blocked_by_depth appears, realign or take a wider route. If forward_clearance_unknown appears, inspect the uncertain area from a useful view before advancing.
+
+If look_down_for_clearance appears or a nearby furniture base, door frame, or stair edge is unclear, LOOK_DOWN once and observe the low RGB-D view. Look down again only if it can reveal missing evidence. Restore pitch near 0 with matching LOOK_UP actions, then observe the level view before moving. Reuse a checked low view while the same gap stays visible.
+
+Align with the passage centerline or parallel to the furniture edge. Do not cut diagonally across a doorway, narrow gap, or furniture corner. Keep the heading until the whole body has cleared the corner or door frame. In tight areas, take one MOVE_FORWARD, then observe again. People can move between views. Keep a safe gap, leave their path clear, and keep moving when clear.
+
+Follow landmarks in order. Keep track of the last confirmed and next unverified landmark, including through detours. Interpret left/right at the place specified in the route. Search with short turn batches. If ROUTE_RECHECK appears, observe and verify that direction leads to the next landmark before moving. Use motion_hint and the action receipt after a stall. Do not repeatedly retry a stalled direction.
+
+Before STOP, confirm the exact stopping place and that the last required route segment is complete. If asked to stop atop the final set of stairs, verify you have crossed that set and are on its top landing. An earlier landing is insufficient.
+
+Use only current-episode evidence. Do not access shell, files, hidden simulator state, or reference trajectories.
 """
 
 START_PROMPT = "Begin navigation by calling havln.observe()."

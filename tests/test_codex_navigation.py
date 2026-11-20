@@ -82,6 +82,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(self.env.actions, [])
         self.assertIsNone(depth)
         self.assertFalse(info["depth_sent"])
+        self.assertNotIn("look_down_for_clearance", info)
         self.assertEqual(info["pitch_deg"], 0.0)
         self.assertTrue((self.controller.directory /
                          ("observations/" + info["observation_id"] + ".npz")).exists())
@@ -94,6 +95,7 @@ class CodexEpisodeTests(unittest.TestCase):
             info, rgb, depth = self.controller.observe()
         self.assertTrue(info["depth_sent"])
         self.assertEqual(info["depth_reason"], "front_obstacle")
+        self.assertTrue(info["look_down_for_clearance"])
         self.assertLess(info["front_obstacle_m"], camera().forward_step + camera().robot_radius)
         self.assertEqual(base64.b64decode(rgb)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
         self.assertEqual(base64.b64decode(depth)[:8], bytes([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -106,7 +108,9 @@ class CodexEpisodeTests(unittest.TestCase):
                 "name": "observe", "arguments": {}})
         self.assertEqual([part["type"] for part in result["content"]],
                          ["text", "image", "image"])
-        self.assertTrue(json.loads(result["content"][0]["text"])["depth_sent"])
+        metadata = json.loads(result["content"][0]["text"])
+        self.assertTrue(metadata["depth_sent"])
+        self.assertNotIn("look_down_for_clearance", metadata)
         self.assertNotEqual(result["content"][1]["data"], result["content"][2]["data"])
 
     def test_first_observe_at_changed_heading_includes_depth(self):
@@ -153,6 +157,7 @@ class CodexEpisodeTests(unittest.TestCase):
         info = json.loads(result["content"][0]["text"])
         self.assertTrue(info["depth_sent"])
         self.assertEqual(info["depth_reason"], "near_body_risk")
+        self.assertTrue(info["forward_blocked_by_depth"])
         self.assertNotIn("front_obstacle_m", info)
         self.assertEqual(info["near_body_risk"]["identity"],
                          "unverified_obstacle")
@@ -212,7 +217,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(reply["skipped_count"], 2)
         self.assertIn("near_body_risk", reply)
 
-    def test_turn_then_forward_uses_new_heading_depth(self):
+    def test_turn_then_observe_then_forward_uses_new_heading_depth(self):
         clear_image = self.env.image
 
         def image():
@@ -222,10 +227,31 @@ class CodexEpisodeTests(unittest.TestCase):
             return raw
 
         with patch.object(self.env, "image", side_effect=image):
-            reply = self.controller.step(["TURN_RIGHT", "MOVE_FORWARD"])
+            turn = self.controller.step(["TURN_RIGHT"])
+            self.assertEqual(turn["executed"], ["TURN_RIGHT"])
+            early = self.controller.step(["MOVE_FORWARD"])
+            self.assertEqual(early["status"], "REOBSERVE_FORWARD")
+            self.assertEqual(early["executed"], [])
+            observed, _, depth = self.controller.observe()
+            self.assertIsNotNone(depth)
+            self.assertTrue(observed["forward_blocked_by_depth"])
+            reply = self.controller.step(["MOVE_FORWARD"])
         self.assertEqual(reply["status"], "FORWARD_BLOCKED")
-        self.assertEqual(reply["executed"], ["TURN_RIGHT"])
+        self.assertEqual(reply["executed"], [])
         self.assertEqual(self.env.actions, ["TURN_RIGHT"])
+
+    def test_mcp_rejects_mixed_view_and_forward_batches(self):
+        server = MCPServer(self.controller)
+        for actions in (["TURN_RIGHT", "MOVE_FORWARD"], ["MOVE_FORWARD", "LOOK_DOWN"]):
+            with self.subTest(actions=actions):
+                result = server._dispatch("tools/call", {
+                    "name": "step", "arguments": {"actions": actions}})
+                self.assertTrue(result["isError"])
+                receipt = json.loads(result["content"][0]["text"])
+                self.assertEqual(receipt["status"], "TOOL_ERROR")
+                self.assertEqual(receipt["executed"], [])
+                self.assertEqual(receipt["skipped_count"], len(actions))
+                self.assertEqual(self.env.actions, [])
 
     def test_changed_rgb_during_side_slide_stops_batch_and_requires_observation(self):
         position = np.zeros(3)
@@ -417,6 +443,7 @@ class CodexEpisodeTests(unittest.TestCase):
         with patch.object(self.env, "step", side_effect=stationary_step), \
              patch.object(self.env, "get_observations_at", return_value=before):
             self.controller.step(["TURN_LEFT", "TURN_RIGHT"])
+            self.controller.observe()
             # One MOVE_FORWARD uses the last non-STOP action; reserved STOP
             # is still appended by the pre-existing budget guard.
             result = self.controller.step(["MOVE_FORWARD"])
@@ -449,16 +476,77 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(second["motion_hint"]["turn_net_deg"], 0)
         self.assertEqual(second["executed"], ["TURN_RIGHT"] * 9)
 
-    def test_long_turn_batch_survives_visual_forward_reset(self):
+    def test_long_turn_batch_reports_turns_before_a_separate_forward(self):
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
                              Path(self.tempdir.name) / "batchturn")
-        reply = agent.step(["TURN_LEFT"] * 15 + ["MOVE_FORWARD"])
+        reply = agent.step(["TURN_LEFT"] * 15)
         self.assertEqual(reply["status"], "RUNNING")
         self.assertEqual(reply["motion_hint"]["batch_turn_total_deg"], 225)
         self.assertEqual(reply["motion_hint"]["batch_turn_net_deg"], -225)
-        # The forward had a different RGB, so current-place turn counts reset.
+        agent.observe()
+        self.assertEqual(agent.step(["MOVE_FORWARD"])["status"], "RUNNING")
+        # The forward has a different RGB, so current-place turn counts reset.
         again = agent.step(["TURN_LEFT"])
         self.assertNotIn("motion_hint", again)
+
+    def test_possible_reversal_requires_fresh_views_and_two_single_forwards(self):
+        agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 64,
+                             Path(self.tempdir.name) / "route_recheck")
+        heading = np.array([1.0, 0.0])
+        poses = [(np.zeros(2), heading), (heading * 0.25, heading)]
+        with patch("havln_agent.codex_episode.read_planar_pose", side_effect=poses * 2):
+            self.assertEqual(agent.step(["MOVE_FORWARD"] * 2)["status"], "RUNNING")
+
+        self.assertEqual(agent.step(["TURN_LEFT"] * 9)["status"], "RUNNING")
+        reverse = agent.step(["TURN_LEFT"] * 3)
+        self.assertEqual(reverse["status"], "ROUTE_RECHECK")
+        self.assertEqual(reverse["executed"], ["TURN_LEFT"] * 3)
+        self.assertEqual(reverse["skipped_count"], 0)
+        self.assertEqual(reverse["route_recheck_steps"], 2)
+
+        with patch("havln_agent.codex_episode.read_planar_pose", side_effect=poses * 4):
+            for remaining in (1, 0):
+                wait = agent.step(["MOVE_FORWARD"] * 3)
+                self.assertEqual(wait["status"], "ROUTE_RECHECK")
+                self.assertEqual(wait["executed"], [])
+                agent.observe()
+                checked = agent.step(["MOVE_FORWARD"] * 3)
+                self.assertEqual(checked["executed"], ["MOVE_FORWARD"])
+                self.assertEqual(checked["skipped_count"], 2)
+                self.assertEqual(checked.get("route_recheck_steps", 0), remaining)
+            resumed = agent.step(["MOVE_FORWARD"] * 2)
+        self.assertEqual(resumed["status"], "RUNNING")
+        self.assertEqual(resumed["executed"], ["MOVE_FORWARD"] * 2)
+
+    def test_low_depth_view_avoids_repeated_cue_for_one_straight_step(self):
+        env = FakeHabitat()
+        agent = CodexEpisode(env, camera(), "1", "test", 32,
+                             Path(self.tempdir.name) / "low_view")
+        close = env.image()
+        close["depth"].fill(0.2)
+        with patch.object(env, "get_observations_at", return_value=close):
+            info, _, _ = agent.observe()
+        self.assertTrue(info["look_down_for_clearance"])
+
+        agent.step(["LOOK_DOWN"])
+        low, _, depth = agent.observe()
+        self.assertLess(low["pitch_deg"], 0)
+        self.assertIsNotNone(depth)
+        agent.step(["LOOK_UP"])
+        early = agent.step(["MOVE_FORWARD"])
+        self.assertEqual(early["status"], "REOBSERVE_FORWARD")
+        self.assertEqual(early["executed"], [])
+        level, _, depth = agent.observe()
+        self.assertEqual(level["pitch_deg"], 0)
+        self.assertIsNotNone(depth)
+        self.assertEqual(agent.step(["MOVE_FORWARD"])["executed"], ["MOVE_FORWARD"])
+        with patch.object(env, "get_observations_at", return_value=close):
+            info, _, _ = agent.observe()
+        self.assertNotIn("look_down_for_clearance", info)
+        agent.step(["MOVE_FORWARD"])
+        with patch.object(env, "get_observations_at", return_value=close):
+            info, _, _ = agent.observe()
+        self.assertTrue(info["look_down_for_clearance"])
 
     def test_stall_directions_are_relative_and_reset_after_visual_change(self):
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 128,
@@ -474,6 +562,7 @@ class CodexEpisodeTests(unittest.TestCase):
             self.assertEqual(first["motion_hint"]["recent_stall_directions_deg"], [0])
             turned = agent.step(["TURN_RIGHT", "TURN_RIGHT"])
             self.assertEqual(turned["motion_hint"]["recent_stall_directions_deg"], [-30])
+            agent.observe()
             second = agent.step(["MOVE_FORWARD"] * 2)
             self.assertEqual(second["status"], "NO_VISUAL_PROGRESS")
             self.assertEqual(second["motion_hint"]["recent_stall_directions_deg"],
@@ -485,18 +574,21 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(len(agent.actions), 5)
 
     def test_tiny_normal_actions_do_not_add_motion_hint_or_change_export(self):
-        first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
+        first = self.controller.step(["TURN_LEFT"])
         self.assertNotIn("motion_hint", first)
-        last = self.controller.step(["MOVE_FORWARD"])
-        self.assertEqual(last["executed"], ["MOVE_FORWARD", "STOP"])
+        self.controller.observe()
+        last = self.controller.step(["MOVE_FORWARD"] * 2)
+        self.assertEqual(last["executed"], ["MOVE_FORWARD", "MOVE_FORWARD", "STOP"])
         self.assertNotIn("motion_hint", last)
         self.assertEqual(self.env.actions,
                          ["TURN_LEFT", "MOVE_FORWARD", "MOVE_FORWARD", "STOP"])
 
     def test_ordered_batch_and_reserved_stop_produce_legal_export(self):
-        first = self.controller.step(["TURN_LEFT", "MOVE_FORWARD"])
+        self.controller.step(["TURN_LEFT"])
+        self.controller.observe()
+        first = self.controller.step(["MOVE_FORWARD"])
         self.assertEqual(first["status"], "RUNNING")
-        self.assertEqual(first["executed"], ["TURN_LEFT", "MOVE_FORWARD"])
+        self.assertEqual(first["executed"], ["MOVE_FORWARD"])
         second = self.controller.step(["MOVE_FORWARD"])
         self.assertEqual(second["executed"], ["MOVE_FORWARD", "STOP"])
         self.assertTrue(second["done"])
@@ -903,16 +995,18 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("parallel to the furniture edge", PROMPT)
         self.assertIn("Do not cut diagonally across a doorway", PROMPT)
         self.assertIn("until the whole body has cleared the corner or door frame", PROMPT)
-        self.assertIn('call observe with {"include_depth": true} at the new heading', PROMPT)
-        self.assertIn("before requesting MOVE_FORWARD in a separate step call", PROMPT)
-        self.assertIn("Check left and right clearance and the nearest corner", PROMPT)
-        self.assertIn('1-2 LOOK_DOWN actions then observe with {"include_depth": true}', PROMPT)
+        self.assertIn('request {"include_depth": true} if the needed Depth is missing', PROMPT)
+        self.assertIn("Turn in place, observe at the new heading", PROMPT)
+        self.assertIn("Check left and right clearance, the nearest corner, and the floor ahead", PROMPT)
+        self.assertIn("LOOK_DOWN once and observe the low RGB-D view", PROMPT)
+        self.assertIn("Look down again only if it can reveal missing evidence", PROMPT)
         self.assertIn("Missing or invalid Depth leaves the affected clearance unknown", PROMPT)
         self.assertIn("matching LOOK_UP actions", PROMPT)
-        self.assertIn("observe pitch_deg", PROMPT)
+        self.assertIn("call observe and wait for its result", PROMPT)
         self.assertIn("short turn batches", PROMPT)
-        self.assertIn("Avoid accumulating excessive downward tilt", PROMPT)
-        self.assertIn("one extra Depth view", PROMPT)
+        self.assertIn("If ROUTE_RECHECK appears", PROMPT)
+        self.assertIn("the last required route segment is complete", PROMPT)
+        self.assertIn("If forward_blocked_by_depth appears", PROMPT)
         self.assertIn("Do not repeatedly retry a stalled direction", PROMPT)
         self.assertIn("left/right at the place specified", PROMPT)
         self.assertIn("exec", cmd)
@@ -922,6 +1016,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertIn("--ignore-user-config", cmd)
         self.assertIn('mcp_servers.havln.enabled_tools=["observe","step"]',
                       cmd)
+        self.assertIn("mcp_servers.havln.supports_parallel_tool_calls=false", cmd)
         args_override = next(cmd[i + 1] for i, word in enumerate(cmd)
                              if word == "-c" and cmd[i + 1].startswith(
                                  "mcp_servers.havln.args="))

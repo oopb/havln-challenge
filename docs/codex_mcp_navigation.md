@@ -28,7 +28,14 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   `front_obstacle_m` is included only when the legacy centerline detector
   confirms central obstruction. The regions describe measured obstacle
   locations. Use RGB to identify what occupies those regions.
+  `forward_blocked_by_depth` reports that the observed one-step sweep contains
+  a measured obstruction. `forward_clearance_unknown` reports missing Depth
+  in a sweep with nearby risk. Both describe the current view. The forward
+  action still checks live Depth before moving.
   step executes an ordered list of allowed atomic actions and returns receipts.
+  A list containing both forward and turn or tilt actions is rejected.
+  After any turn or tilt, call observe and wait for the new view before
+  submitting a separate forward step call.
   It refreshes RGB-D before a tool call's initial forward and checks each
   subsequent forward against the preceding action's new frame. Coherent Depth
   inside the nominal body's one-step sweep yields `FORWARD_BLOCKED` before the
@@ -46,12 +53,17 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   Right turns are positive, left turns negative. Up to two recent exact-RGB
   forward stalls (within 16 actions) are expressed as angles **relative to
   the current view**.
-- In blocked or uncertain near-foot areas, Codex may issue 1–2 `LOOK_DOWN`
-  actions and request RGB-D to inspect the floor or stair edge. After
-  restoring pitch or turning near a narrow gap, it requests Depth to check
-  clearance on both sides and at the nearest corner before moving straight
-  through. Near people or crowded passages, it observes between single
-  forward steps. Open corridors still allow longer batches.
+  After two measured forward steps in the same direction, a turn of at least
+  150° from that direction prompts `ROUTE_RECHECK`. The next two successful
+  forward moves each require a fresh observation and a separate batch. Verify
+  the next route landmark before committing to the new direction.
+- `look_down_for_clearance` suggests inspecting the low edge of a currently
+  measured near obstacle. Use one `LOOK_DOWN` and observe the new RGB-D
+  view. Tilt further if more evidence is needed, then restore pitch.
+  At most one straight step can reuse the low-view check. Check Depth on
+  both sides and at the nearest corner before entering a narrow gap.
+  Near people or crowded passages, observe between single forward steps.
+  Open corridors still allow longer batches.
 - `pitch_deg` tracks commanded LOOK_UP/LOOK_DOWN actions. The controller uses
   robot pose internally and gives Codex relative motion feedback. Depth with
   missing or out-of-view evidence can leave obstacles undetected.

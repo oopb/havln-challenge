@@ -16,6 +16,7 @@ TOOLS = [
             "for a nearby obstacle, or after a forward stall. Set include_depth "
             "to true to request Depth for a clearance check at any heading. "
             "near_body_risk gives measured left/center/right regions. "
+            "Depth flags indicate a blocked sweep, missing evidence, or a close edge worth inspecting from below. "
             "A recent stall may also include a direction relative to the view."
         ),
         "inputSchema": {
@@ -30,8 +31,11 @@ TOOLS = [
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
             "LOOK_UP, LOOK_DOWN. STOP must be last. Only executed actions use "
-            "the budget. FORWARD_BLOCKED means Depth shows an obstacle in the "
+            "the budget. Send TURN/LOOK separately. Await observe before "
+            "requesting MOVE_FORWARD after a view change. "
+            "FORWARD_BLOCKED means Depth shows an obstacle in the "
             "next step's body path. REOBSERVE_FORWARD asks for a fresh view. "
+            "ROUTE_RECHECK asks for a fresh view of the next landmark after a possible reversal. "
             "LOW_FORWARD_PROGRESS and NO_VISUAL_PROGRESS stop the batch after "
             "an attempted forward. Observe and realign or reroute. "
             "If post-action capture fails, the TOOL_ERROR receipt still lists "
