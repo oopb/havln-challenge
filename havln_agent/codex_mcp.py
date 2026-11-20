@@ -12,12 +12,8 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return a fresh RGB image and its corresponding Depth image on "
-            "EVERY observe call, in that order, with compact metadata. "
-            "Measured near-body side/front risks appear in text only when "
-            "confirmed by current public Depth; object identity is unknown. "
-            "Depth does not authorize or veto movement. Repeated scans may "
-            "add a compact comparison view; no hidden map or goal state."
+            "Return the current RGB and short observation metadata; add a Depth image "
+            "only if a near obstacle is detected directly ahead. No hidden map."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
@@ -27,13 +23,11 @@ TOOLS = [
         "description": (
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
-            "LOOK_UP, LOOK_DOWN. STOP is valid ONLY as actions=[STOP] in a "
-            "separate call, AFTER calling observe since the most recent action "
-            "to confirm arrival visually. All actions consume the shared "
-            "budget. Verified stalls, uncertain movement, or near-body "
-            "risk observed AFTER a forward step can interrupt the remainder "
-            "of a multi-forward batch. Inspect exact executed/skipped receipts; "
-            "a single forward step is never blocked by the risk advisory."
+            "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
+            "shared episode budget. An unchanged RGB after MOVE_FORWARD stops "
+            "the remaining batch; use the feedback to choose what to do next. "
+            "If post-action capture fails, the TOOL_ERROR receipt still lists "
+            "actions already executed; never repeat those actions."
         ),
         "inputSchema": {
             "type": "object",
@@ -92,10 +86,6 @@ class MCPServer:
                 ]
                 if depth_data is not None:
                     content.append({"type": "image", "data": depth_data,
-                                    "mimeType": "image/png"})
-                comparison = getattr(self.episode, "scan_montage", None)
-                if comparison is not None:
-                    content.append({"type": "image", "data": comparison,
                                     "mimeType": "image/png"})
                 return {"content": content, "isError": False}
             if name == "step":
