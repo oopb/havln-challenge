@@ -12,8 +12,11 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return the current RGB and short observation metadata; add a Depth image "
-            "only for a near obstacle or motion stall. Repeated turns may add a compact view comparison. No hidden map."
+            "Return a fresh RGB image and its corresponding Depth image on "
+            "EVERY observe call, in that order, with compact metadata. "
+            "An obstacle distance is mentioned in text only when confirmed "
+            "by current Depth. Depth is not a movement gate. Repeated scans "
+            "may add a compact comparison view; no hidden map or goal state."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
@@ -23,10 +26,11 @@ TOOLS = [
         "description": (
             "Execute an ordered sequence of HA-VLN actions in the live Habitat "
             "episode. Legal actions: STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, "
-            "LOOK_UP, LOOK_DOWN. STOP must be last. All actions consume the "
-            "shared episode budget. Verified stalls, weak motion or a motion monitor "
-            "error can interrupt a batch AFTER an action executes; inspect "
-            "the exact executed list and feedback before continuing."
+            "LOOK_UP, LOOK_DOWN. STOP is valid ONLY as actions=[STOP] in a "
+            "separate call, AFTER calling observe since the most recent action "
+            "to confirm arrival visually. All actions consume the shared "
+            "budget. Verified stalls or uncertain movement can interrupt a "
+            "batch AFTER execution; inspect exact executed/skipped receipts."
         ),
         "inputSchema": {
             "type": "object",
