@@ -195,7 +195,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertEqual(first_info["executed_actions"], 0)
         self.assertEqual(second_info["executed_actions"], 0)
 
-    def test_post_stall_depth_not_lost_when_observing_after_a_tilt(self):
+    def test_depth_remains_paired_after_pitch_change(self):
         agent = CodexEpisode(FakeHabitat(), camera(), "1", "test", 32,
                              Path(self.tempdir.name) / "tilt_depth")
         raw = agent.env.image()
@@ -290,7 +290,7 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertNotIn("motion_hint", cleared)
         self.assertEqual(len(agent.actions), 5)
 
-    def test_noisy_stall_early_stops_and_requests_depth(self):
+    def test_noisy_stall_early_stops_without_gating_depth(self):
         """RGB differences must not conceal a confidently stalled forward."""
         with patch("havln_agent.codex_episode.assess_forward_motion",
                    return_value=ForwardMotion(
@@ -837,13 +837,18 @@ class CodexEpisodeTests(unittest.TestCase):
         # The concise prompt must cover the new motion and scan receipts,
         # without reintroducing movement authorization or extra agents.
         for instruction in (
+                "Every observe returns fresh RGB followed by Depth",
+                "ONLY for confirmed central obstruction",
+                "3 m", "collision-free Success Rate (SR)", "CR/TCR",
                 "People can move between views", "keep a safe gap",
-                "Follow landmarks in order", "magenta=invalid",
-                "NO_VISUAL_PROGRESS", "MOTION_UNCERTAIN",
+                "at most one forward step", "Follow landmarks in order",
+                "magenta=invalid", "NO_VISUAL_PROGRESS", "MOTION_UNCERTAIN",
                 "REPEATED_SCAN", "motion_hint", "observe pitch_deg",
                 "LOOK_DOWN", "LOOK_UP", "left/right at the place specified",
-                "requested stopping place", "longer MOVE_FORWARD batches"):
-            self.assertIn(instruction, PROMPT)
+                "requested stopping position", "longer MOVE_FORWARD batches",
+                'step({"actions":["STOP"]})',
+                "call observe AFTER your most recent action"):
+            self.assertIn(instruction.lower(), PROMPT.lower())
         self.assertIn("exec", cmd)
         self.assertNotIn("resume", cmd)
         self.assertIn("--json", cmd)
