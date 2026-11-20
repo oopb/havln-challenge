@@ -297,6 +297,65 @@ class Geometry:
                     check_mode='fast_live_depth_body_sweep',
                     diagnostic_tool='inspect_geometry' if state != 'EXECUTABLE' else None)
 
+    def forward_body_risk(self):
+        """Small, advisory RGB-D check of the *whole* forward robot footprint.
+
+        This reports only coherent *measured* upper-body obstacles, including
+        side edges which the narrow centerline detector deliberately ignores.
+        It never names the object, asserts a collision, certifies free space,
+        or vetoes an action. Floor/stair support and invalid near-field rays
+        require visual judgement, not a synthetic CLEAR result.
+
+        The measured lookahead includes one nominal step, the body radius and
+        a modest early-warning buffer. Pixel support must span multiple rows
+        and columns so individual noisy rays cannot trigger advice.
+        """
+        cam = self.camera
+        # 0.02 m of advisory space, not an enlarged physics collision shape.
+        radius = cam.robot_radius + min(0.02, 0.20 * cam.robot_radius)
+        lookahead = cam.forward_step + cam.robot_radius + min(
+            0.20, 0.80 * cam.forward_step)
+        mask = (
+            self.obstacles
+            & (self.height > cam.max_step_height + 0.03)
+            & (np.abs(self.x) <= radius)
+            & (self.z > cam.robot_radius * 0.8)
+            & (self.z <= lookahead)
+        )
+        # Conservative, resolution-scaled 2-D spatial support.
+        min_points = max(6, int(cam.width * cam.height * 0.0003))
+        min_rows = max(2, int(cam.height * 0.035))
+        min_columns = max(2, int(cam.width * 0.012))
+        core = cam.robot_radius * 0.25
+        candidates = []
+        for region, region_mask in (
+            ("left_edge", mask & (self.x < -core)),
+            ("center", mask & (np.abs(self.x) <= core)),
+            ("right_edge", mask & (self.x > core)),
+        ):
+            rows, columns = np.nonzero(region_mask)
+            if (rows.size < min_points
+                    or np.unique(rows).size < min_rows
+                    or np.unique(columns).size < min_columns):
+                continue
+            distance = float(np.min(self.z[region_mask]))
+            candidates.append(dict(
+                region=region,
+                nearest_forward_m=round(distance, 3),
+                support_pixels=int(rows.size),
+            ))
+        if not candidates:
+            return None
+        # Return compact evidence for at most the two closest affected zones.
+        # Which surface is a person, wall or furniture remains UNKNOWN.
+        candidates.sort(key=lambda item: item["nearest_forward_m"])
+        return dict(
+            source="current_public_depth",
+            identity="unverified_obstacle",
+            affected_regions=candidates[:2],
+            robot_radius_m=cam.robot_radius,
+        )
+
     def central_forward_obstruction(self):
         """Conservative live Depth evidence for a *central* body obstruction.
 
