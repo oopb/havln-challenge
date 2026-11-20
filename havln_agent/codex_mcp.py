@@ -12,8 +12,10 @@ TOOLS = [
     {
         "name": "observe",
         "description": (
-            "Return the current RGB and short observation metadata; add a Depth image "
-            "only if a near obstacle is detected directly ahead. No hidden map."
+            "Return RGB and compact metadata. Add Depth if public Depth confirms "
+            "a near front or side-of-body obstacle, or after a visual stall. "
+            "near_body_risk gives measured left/center/right regions, not object "
+            "identity or a movement veto. No hidden map."
         ),
         "inputSchema": {"type": "object", "properties": {},
                         "additionalProperties": False},
