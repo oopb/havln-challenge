@@ -17,8 +17,11 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   **every call**, followed by compact metadata (observation ID, remaining
   action budget and `pitch_deg`, negative=down). RGB is the first image,
   Depth the second; an optional repeated-scan mosaic is the third image.
-  Only a confirmed central obstacle is reported in text via
-  `front_obstacle_m`. No warning is not proof of clearance.
+  A coherent, measured obstacle in the forward *whole-body* sweep
+  may produce `near_body_risk` with left/right/central zones and a
+  measured distance. `front_obstacle_m` is supplied only for confirmed
+  central evidence. Warnings never claim to identify a person versus
+  furniture or certify a future collision; no warning is NOT a CLEAR.
   Depth is visual evidence, not a movement gate; the route instruction
   remains exclusively in the initial system instructions.
   step executes an ordered list of allowed atomic actions and returns receipts.
@@ -28,6 +31,12 @@ Habitat MCP stdio process. **Never use codex exec resume between episodes.**
   with `NO_VISUAL_PROGRESS`; two successive uncertain, very-small estimated
   movements interrupt with `MOTION_UNCERTAIN`. Neither is a pre-move veto,
   and only executed atomic actions consume budget.
+  In a *consecutive forward batch*, if the post-action public Depth newly
+  confirms whole-body/side clearance risk, the controller stops the remaining
+  forward commands and returns `NEAR_BODY_RISK` with the exact executed
+  list, skipped count and advisory evidence. The movement that revealed the
+  risk has already happened. One-step moves and new Codex decisions are NOT
+  blocked. No collision count, pose or hidden contact data goes to the model.
   A local RGB-D monitor exception returns `MOTION_MONITOR_ERROR` after
   recording the already-executed Habitat action, interrupts the remaining
   batch, and leaves the episode active for re-observation. The model receives
