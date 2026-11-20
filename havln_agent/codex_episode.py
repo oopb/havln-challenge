@@ -12,10 +12,7 @@ from pathlib import Path
 import time
 
 import numpy as np
-from PIL import Image, ImageDraw
-
-from .codex_motion import ForwardMotion, assess_forward_motion
-from .pillow_compat import RESAMPLING
+from PIL import Image
 
 from .habitat_adapter import read_current_observation
 from .perception import Geometry, adapt_observation, depth_image_url
@@ -57,13 +54,10 @@ class CodexEpisode:
         self._turn_total_deg = 0.0
         self._turn_net_deg = 0.0
         self._recent_stalls = []
-        self._recent_views = []  # In-memory view cache; no duplicate image files.
-        self._last_scan_montage_turn = 0.0
-        self.scan_montage = None
-        self._ambiguous_forward_count = 0
-        # STOP requires a model-visible observation after the last action.
-        # The initial simulator reset is NOT an observe MCP response.
-        self._last_observed_action_count = None
+        # Grant one extra public Depth frame after a visual stall; do not
+        # repeatedly send it for the same blocked approach.
+        self._stall_depth_pending = False
+        self._stall_depth_used = False
         self.done = False
         self.end_reason = None
         self.finalized = False
@@ -127,36 +121,19 @@ class CodexEpisode:
             observation.pitch_deg = self.pitch_deg
             self.current = observation
             self.current_id = self._save(observation)
-            self._last_observed_action_count = len(self.actions)
-        if not self.done:
-            self._recent_views.append((self._heading_deg, self.current.rgb.copy()))
-            self._recent_views = self._recent_views[-12:]
-        self.scan_montage = None
-        comparison_directions = []
-        if (not self.done and self._turn_total_deg >= 180
-                and self._turn_total_deg - self._last_scan_montage_turn >= 90):
-            try:
-                self.scan_montage, comparison_directions = self._scan_comparison()
-            except Exception as error:
-                # The optional historical-view montage must never suppress
-                # the primary RGB observation or prevent further navigation.
-                self.scan_montage = None
-                comparison_directions = []
-                self._append("diagnostic_events.jsonl", {
-                    "kind": "scan_comparison_error",
-                    "observation_id": self.current_id,
-                    "error": type(error).__name__ + ": " + str(error)[:240],
-                })
-            if self.scan_montage is not None:
-                self._last_scan_montage_turn = self._turn_total_deg
         frame = Image.fromarray(self.current.rgb)
         buffer = io.BytesIO()
         frame.save(buffer, format="PNG")
-        # RGB and Depth are an aligned observation pair. Depth is always sent
-        # with every model-visible new RGB frame; the geometric check selects
-        # text-only warnings, never whether Depth or movement is permitted.
-        depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
-        body_risk = Geometry(self.current, self.camera, margin=0.0).forward_body_risk()
+        # Public Depth is visual evidence, never a geometry movement gate.
+        # A recent exact-RGB stall can request one extra inspection even when
+        # the conservative center-footprint heuristic finds no obstacle.
+        obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
+        stall_inspection = self._stall_depth_pending and not self.done
+        send_depth = obstacle["confirmed"] or stall_inspection
+        depth_data = (depth_image_url(self.current, self.camera).split(",", 1)[1]
+                      if send_depth else None)
+        if stall_inspection:
+            self._stall_depth_pending = False
         info = {
             "episode_id": self.episode_id,
             "observation_id": self.current_id,
@@ -165,50 +142,15 @@ class CodexEpisode:
             "done": self.done,
             "reason": self.end_reason,
             "pitch_deg": self.pitch_deg,  # commanded tilt relative to initial view
-            "depth_sent": True,
+            "depth_sent": send_depth,
         }
-        if body_risk is not None:
-            # Geometry cannot know whether this is a person or furniture.
-            # These are warnings only, never movement authorization.
-            info["near_body_risk"] = body_risk
-            centers = [r["nearest_forward_m"] for r in
-                       body_risk["affected_regions"] if r["region"] == "center"]
-            if centers:
-                info["front_obstacle_m"] = min(centers)
-        if comparison_directions:
-            info["scan_status"] = "REPEATED_SCAN"
-            info["scan_view_directions_deg"] = comparison_directions
-            info["scan_note"] = "Views are relative to CURRENT camera heading, L negative/R positive; compare the openings before turning again."
+        if send_depth:
+            info["depth_reason"] = ("front_obstacle" if obstacle["confirmed"]
+                                    else "post_stall_inspection")
+        if obstacle["confirmed"] and send_depth:
+            info["front_obstacle_m"] = obstacle["nearest_along_m"]
         self._end_tool(ident, "observe", {}, dict(info, status="OK"))
         return info, base64.b64encode(buffer.getvalue()).decode("ascii"), depth_data
-
-    def _scan_comparison(self):
-        """Generate one compact 2x2 image from existing nearby observations."""
-        selected = []
-        for heading, rgb in reversed(self._recent_views):
-            angle = (heading - self._heading_deg + 180) % 360 - 180
-            if all(abs((angle - old_angle + 180) % 360 - 180) >= 30
-                   for old_angle, _ in selected):
-                selected.append((round(angle), rgb))
-            if len(selected) == 4:
-                break
-        if len(selected) < 3:
-            return None, []
-        canvas = Image.new("RGB", (256, 256), (24, 24, 24))
-        painter = ImageDraw.Draw(canvas)
-        for i, (relative, rgb) in enumerate(selected):
-            cell_x, cell_y = (i % 2) * 128, (i // 2) * 128
-            thumb = Image.fromarray(rgb).convert("RGB")
-            thumb.thumbnail((124, 101), RESAMPLING.BILINEAR)
-            canvas.paste(thumb, (cell_x + (128 - thumb.width) // 2,
-                                 cell_y + (103 - thumb.height) // 2))
-            label = "current" if relative == 0 else (
-                ("R+" if relative > 0 else "L") + str(abs(relative)) + " deg")
-            painter.text((cell_x + 5, cell_y + 107), label, fill=(245, 245, 245))
-        buffer = io.BytesIO()
-        canvas.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("ascii"), [
-            angle for angle, _ in selected]
 
     def _motion_hint(self, executed):
         """Tiny, conditional factual receipt; never blocks a Codex decision."""
@@ -220,8 +162,7 @@ class CodexEpisode:
         # NOT confirmation that the robot physically moved.
         if self._turn_total_deg >= 180:
             hint.update(turn_total_deg=self._turn_total_deg,
-                        turn_net_deg=self._turn_net_deg,
-                        scan_status="REPEATED_SCAN")
+                        turn_net_deg=self._turn_net_deg)
         if batch_total >= 180:
             hint.update(batch_turn_total_deg=batch_total,
                         batch_turn_net_deg=batch_net)
@@ -237,7 +178,7 @@ class CodexEpisode:
 
     def _atomic(self, action, tool_id, origin):
         before = self.current_id
-        before_observation = self.current if action == "MOVE_FORWARD" else None
+        before_rgb = self.current.rgb if action == "MOVE_FORWARD" else None
         try:
             raw, _, environment_done, info = self.env.step(action)
         except Exception as error:
@@ -247,9 +188,9 @@ class CodexEpisode:
         if isinstance(info, dict) and info.get("error"):
             self.done, self.end_reason = True, "habitat_action_rejected"
             raise RuntimeError("Habitat rejected action: " + str(action))
-        # env.step has succeeded: count it IMMEDIATELY. Downstream evaluator,
-        # image capture and motion analysis are not part of the simulator
-        # transaction and must not make this already-executed action vanish.
+        # env.step succeeded: record the atomic action before any fallible
+        # evaluator, observation conversion or disk capture work. A later
+        # diagnostic failure must never make a real simulator action disappear.
         index = len(self.actions)
         self.actions.append(action)
         try:
@@ -263,8 +204,6 @@ class CodexEpisode:
             self.current = observation
             self.current_id = self._save(observation)
         except Exception as error:
-            # Fail closed on a post-action bookkeeping/capture failure, while
-            # preserving the atomic action that Habitat already executed.
             self.done, self.end_reason = True, "post_action_processing_exception"
             self._append("steps.jsonl", {
                 "step": index, "action": action, "tool_call_id": tool_id,
@@ -276,76 +215,36 @@ class CodexEpisode:
             raise RuntimeError(
                 "Habitat executed " + action +
                 " but post-action capture failed; episode stopped") from error
-        # Verify motion strictly AFTER Habitat execution and action accounting.
-        # A broken monitor is a diagnostic interruption, NOT a failed move.
-        motion = None
-        monitor_error = None
-        if before_observation is not None:
-            try:
-                motion = assess_forward_motion(before_observation, observation,
-                                               self.camera)
-            except Exception as error:
-                monitor_error = type(error).__name__ + ": " + str(error)[:240]
-                motion = ForwardMotion("UNCERTAIN", "motion_monitor_error")
-        stalled = motion is not None and motion.state == "STALLED"
-        body_risk = None
-        if action == "MOVE_FORWARD" and not self.done:
-            try:
-                body_risk = Geometry(
-                    observation, self.camera, margin=0.0).forward_body_risk()
-            except Exception as error:
-                # Advisory post-action risk is not part of the Habitat action
-                # transaction. Its failure cannot erase that executed action.
-                self._append("diagnostic_events.jsonl", {
-                    "kind": "forward_body_risk_error",
-                    "step": index,
-                    "error": type(error).__name__ + ": " + str(error)[:240],
-                })
+        # Preserve the best-performing baseline's exact-RGB stall policy.
+        stalled = before_rgb is not None and np.array_equal(before_rgb, observation.rgb)
         if action in ("TURN_LEFT", "TURN_RIGHT"):
             angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
             self._heading_deg += angle
             self._turn_net_deg += angle
             self._turn_total_deg += abs(angle)
-            self._ambiguous_forward_count = 0  # New direction, new evidence.
-        elif action in ("LOOK_UP", "LOOK_DOWN"):
-            self._ambiguous_forward_count = 0
         elif action == "MOVE_FORWARD":
-            if monitor_error is not None:
-                self._ambiguous_forward_count = 0
-            elif stalled:
-                self._ambiguous_forward_count = 0
+            if stalled:
                 self._recent_stalls.append((index, self._heading_deg))
                 self._recent_stalls = self._recent_stalls[-2:]
-            elif motion.state == "PROGRESSED":
+                if not self._stall_depth_used:
+                    self._stall_depth_pending = True
+                    self._stall_depth_used = True
+            else:
+                # Only "RGB changed", not measured displacement. Reset the
+                # local turn window and stale obstacle attempts conservatively.
                 self._turn_total_deg = 0.0
                 self._turn_net_deg = 0.0
                 self._recent_stalls.clear()
-                self._recent_views.clear()
-                self._last_scan_montage_turn = 0.0
-                self._ambiguous_forward_count = 0
-            else:
-                # Weak evidence is not enough to reset the scan or mark clear.
-                if (motion.estimated_m is not None
-                        and motion.estimated_m < self.camera.forward_step * 0.40):
-                    self._ambiguous_forward_count += 1
-                else:
-                    self._ambiguous_forward_count = 0
+                self._stall_depth_pending = False
+                self._stall_depth_used = False
         row = {
             "step": index, "action": action, "tool_call_id": tool_id,
             "origin": origin,
             "input_file": "observations/" + before + ".npz",
             "post_file": "observations/" + self.current_id + ".npz",
         }
-        if monitor_error is not None:
-            row["motion_monitor_error"] = monitor_error
-        if body_risk is not None:
-            row["near_body_risk_after"] = body_risk
-        if motion is not None:
-            row["motion_feedback"] = motion.reason
-            row["motion_state"] = motion.state
-            if motion.estimated_m is not None:
-                row["motion_estimated_m"] = motion.estimated_m
-            row["motion_matched_regions"] = motion.matched_regions
+        if stalled:
+            row["motion_feedback"] = "rgb_unchanged"
         self._append("steps.jsonl", row)
         self.replay.action(row)
         if action == "STOP":
@@ -355,21 +254,11 @@ class CodexEpisode:
             self.done, self.end_reason = True, "habitat_terminated_without_stop"
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
-        if monitor_error is not None:
-            return "MOTION_MONITOR_ERROR", body_risk
-        if stalled:
-            return "NO_VISUAL_PROGRESS", body_risk
-        if (motion is not None and motion.state == "UNCERTAIN"
-                and self._ambiguous_forward_count >= 2):
-            # Do not execute further blind forward commands in this batch;
-            # Codex decides whether to inspect or change direction.
-            return "MOTION_UNCERTAIN", body_risk
-        return None, body_risk
+        return stalled
 
     def step(self, requested):
         ident = self._start_tool("step")
         args = {"actions": requested}
-        # Snapshot before this request for truthful receipts on exceptions.
         action_start = len(self.actions)
         try:
             if self.done:
@@ -380,16 +269,8 @@ class CodexEpisode:
                         or any(not isinstance(a, str) or a not in ACTIONS
                                for a in requested)):
                     raise ValueError("actions must be a non-empty list of six legal action names")
-                if "STOP" in requested:
-                    if requested != ["STOP"]:
-                        raise ValueError(
-                            "STOP must be the ONLY action in its step call; "
-                            "observe before sending a separate STOP.")
-                    if self._last_observed_action_count != len(self.actions):
-                        raise ValueError(
-                            "Before STOP, call observe to inspect fresh RGB-D "
-                            "AFTER the most recent action and confirm the "
-                            "requested destination visually.")
+                if "STOP" in requested[:-1]:
+                    raise ValueError("STOP may only be the final action in a batch")
                 # A final STOP is reserved for diagnostic budgets under 500,
                 # so their action rows remain valid for the official contract.
                 available = self.remaining if self.max_steps == 500 else max(0, self.remaining - 1)
@@ -397,27 +278,15 @@ class CodexEpisode:
                         len(requested) == self.remaining and requested[-1] == "STOP"):
                     raise ValueError("batch exceeds remaining action budget; reserve final STOP")
                 executed = []
-                interruption = None
-                interrupted_risk = None
-                for position, action in enumerate(requested):
+                stalled = False
+                for action in requested:
                     if self.done:
                         break
-                    interruption, body_risk = self._atomic(
-                        action, ident, "codex")
+                    unchanged = self._atomic(action, ident, "codex")
                     executed.append(action)
-                    if interruption:
-                        break  # Remaining actions were not executed.
-                    # End a *multi-forward batch* when the latest PUBLIC
-                    # Depth now reveals near-body risk, so Codex can inspect
-                    # and reroute. No geometric pre-move veto and no extra
-                    # observe or STOP are performed by the controller.
-                    if (action == "MOVE_FORWARD" and body_risk is not None
-                            and position + 1 < len(requested)
-                            and requested[position + 1] == "MOVE_FORWARD"
-                            and not self.done):
-                        interruption = "NEAR_BODY_RISK"
-                        interrupted_risk = body_risk
-                        break
+                    if unchanged:
+                        stalled = True
+                        break  # The remaining actions, including STOP, are not executed.
                 requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
@@ -425,25 +294,11 @@ class CodexEpisode:
                     executed.append("STOP")
                 result = self.status()
                 result.update(status=("DONE" if self.done else
-                                      interruption or "RUNNING"),
+                                      "NO_VISUAL_PROGRESS" if stalled else "RUNNING"),
                               executed=executed, requested=requested)
-                if interruption:
+                if stalled:
                     result["skipped_count"] = len(requested) - requested_executed
-                    result["motion_feedback"] = {
-                        "NO_VISUAL_PROGRESS":
-                            "Forward movement stalled; observe or choose a new approach.",
-                        "MOTION_UNCERTAIN":
-                            "Repeated uncertain forward movement; inspect before continuing.",
-                        "MOTION_MONITOR_ERROR":
-                            "The forward action WAS executed, but its RGB-D monitor failed; "
-                            "remaining batch was skipped. Re-observe and decide what to do.",
-                        "NEAR_BODY_RISK":
-                            "Current Depth shows a nearby possible body-side obstacle. "
-                            "Remaining forward actions were skipped; observe and choose "
-                            "whether to adjust your heading or route.",
-                    }[interruption]
-                    if interrupted_risk is not None:
-                        result["near_body_risk"] = interrupted_risk
+                    result["motion_feedback"] = "MOVE_FORWARD left RGB unchanged; choose whether to turn or observe."
                 if not self.done:
                     hint = self._motion_hint(executed)
                     if hint:
@@ -475,8 +330,6 @@ class CodexEpisode:
         if self.finalized:
             return
         self.finalized = True
-        # A STOP executed before a capture failure is not a valid replay.
-        # Never export incomplete diagnostics as a legal submission sequence.
         integrity_failure = self.end_reason in (
             "post_action_processing_exception",
             "habitat_action_exception", "habitat_action_rejected")
