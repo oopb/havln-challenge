@@ -156,7 +156,7 @@ class CodexEpisode:
         # with every model-visible new RGB frame; the geometric check selects
         # text-only warnings, never whether Depth or movement is permitted.
         depth_data = depth_image_url(self.current, self.camera).split(",", 1)[1]
-        obstacle = Geometry(self.current, self.camera, margin=0.0).central_forward_obstruction()
+        body_risk = Geometry(self.current, self.camera, margin=0.0).forward_body_risk()
         info = {
             "episode_id": self.episode_id,
             "observation_id": self.current_id,
@@ -167,10 +167,14 @@ class CodexEpisode:
             "pitch_deg": self.pitch_deg,  # commanded tilt relative to initial view
             "depth_sent": True,
         }
-        if obstacle["confirmed"]:
-            # This is a geometric warning, NOT proof of a particular object
-            # or a movement-veto/clearance certification.
-            info["front_obstacle_m"] = obstacle["nearest_along_m"]
+        if body_risk is not None:
+            # Geometry cannot know whether this is a person or furniture.
+            # These are warnings only, never movement authorization.
+            info["near_body_risk"] = body_risk
+            centers = [r["nearest_forward_m"] for r in
+                       body_risk["affected_regions"] if r["region"] == "center"]
+            if centers:
+                info["front_obstacle_m"] = min(centers)
         if comparison_directions:
             info["scan_status"] = "REPEATED_SCAN"
             info["scan_view_directions_deg"] = comparison_directions
@@ -284,6 +288,19 @@ class CodexEpisode:
                 monitor_error = type(error).__name__ + ": " + str(error)[:240]
                 motion = ForwardMotion("UNCERTAIN", "motion_monitor_error")
         stalled = motion is not None and motion.state == "STALLED"
+        body_risk = None
+        if action == "MOVE_FORWARD" and not self.done:
+            try:
+                body_risk = Geometry(
+                    observation, self.camera, margin=0.0).forward_body_risk()
+            except Exception as error:
+                # Advisory post-action risk is not part of the Habitat action
+                # transaction. Its failure cannot erase that executed action.
+                self._append("diagnostic_events.jsonl", {
+                    "kind": "forward_body_risk_error",
+                    "step": index,
+                    "error": type(error).__name__ + ": " + str(error)[:240],
+                })
         if action in ("TURN_LEFT", "TURN_RIGHT"):
             angle = self.camera.turn_angle * (1 if action == "TURN_RIGHT" else -1)
             self._heading_deg += angle
@@ -321,6 +338,8 @@ class CodexEpisode:
         }
         if monitor_error is not None:
             row["motion_monitor_error"] = monitor_error
+        if body_risk is not None:
+            row["near_body_risk_after"] = body_risk
         if motion is not None:
             row["motion_feedback"] = motion.reason
             row["motion_state"] = motion.state
@@ -337,15 +356,15 @@ class CodexEpisode:
         elif self.remaining == 0:
             self.done, self.end_reason = True, "action_budget_exhausted"
         if monitor_error is not None:
-            return "MOTION_MONITOR_ERROR"
+            return "MOTION_MONITOR_ERROR", body_risk
         if stalled:
-            return "NO_VISUAL_PROGRESS"
+            return "NO_VISUAL_PROGRESS", body_risk
         if (motion is not None and motion.state == "UNCERTAIN"
                 and self._ambiguous_forward_count >= 2):
             # Do not execute further blind forward commands in this batch;
             # Codex decides whether to inspect or change direction.
-            return "MOTION_UNCERTAIN"
-        return None
+            return "MOTION_UNCERTAIN", body_risk
+        return None, body_risk
 
     def step(self, requested):
         ident = self._start_tool("step")
@@ -379,13 +398,26 @@ class CodexEpisode:
                     raise ValueError("batch exceeds remaining action budget; reserve final STOP")
                 executed = []
                 interruption = None
-                for action in requested:
+                interrupted_risk = None
+                for position, action in enumerate(requested):
                     if self.done:
                         break
-                    interruption = self._atomic(action, ident, "codex")
+                    interruption, body_risk = self._atomic(
+                        action, ident, "codex")
                     executed.append(action)
                     if interruption:
-                        break  # Remaining actions, including STOP, were not executed.
+                        break  # Remaining actions were not executed.
+                    # End a *multi-forward batch* when the latest PUBLIC
+                    # Depth now reveals near-body risk, so Codex can inspect
+                    # and reroute. No geometric pre-move veto and no extra
+                    # observe or STOP are performed by the controller.
+                    if (action == "MOVE_FORWARD" and body_risk is not None
+                            and position + 1 < len(requested)
+                            and requested[position + 1] == "MOVE_FORWARD"
+                            and not self.done):
+                        interruption = "NEAR_BODY_RISK"
+                        interrupted_risk = body_risk
+                        break
                 requested_executed = len(executed)
                 if (not self.done and self.max_steps < 500
                         and self.remaining == 1):
@@ -405,7 +437,13 @@ class CodexEpisode:
                         "MOTION_MONITOR_ERROR":
                             "The forward action WAS executed, but its RGB-D monitor failed; "
                             "remaining batch was skipped. Re-observe and decide what to do.",
+                        "NEAR_BODY_RISK":
+                            "Current Depth shows a nearby possible body-side obstacle. "
+                            "Remaining forward actions were skipped; observe and choose "
+                            "whether to adjust your heading or route.",
                     }[interruption]
+                    if interrupted_risk is not None:
+                        result["near_body_risk"] = interrupted_risk
                 if not self.done:
                     hint = self._motion_hint(executed)
                     if hint:
