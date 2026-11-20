@@ -106,6 +106,40 @@ class CodexEpisodeTests(unittest.TestCase):
         self.assertTrue(json.loads(result["content"][0]["text"])["depth_sent"])
         self.assertNotEqual(result["content"][1]["data"], result["content"][2]["data"])
 
+    def test_side_body_risk_sends_depth_without_changing_baseline_step_policy(self):
+        # The legacy center-only corridor misses a close RIGHT side obstacle.
+        # A coherent public-Depth patch at right x=0.056..0.094 m is within
+        # the robot body width, but outside the center +/-0.025 m corridor.
+        from havln_agent.perception import Geometry
+        raw = self.env.image()
+        raw["depth"] = np.full((12, 16), 4.0, dtype=np.float32)
+        raw["depth"][3:9, 9:11] = 0.3
+        observation = adapt_observation(raw, camera())
+        self.assertFalse(Geometry(observation, camera(), margin=0.0)
+                         .central_forward_obstruction()["confirmed"])
+        with patch("havln_agent.codex_episode.read_current_observation",
+                   return_value=observation):
+            result = MCPServer(self.controller)._dispatch(
+                "tools/call", {"name": "observe", "arguments": {}})
+        self.assertEqual([p["type"] for p in result["content"]],
+                         ["text", "image", "image"])
+        info = json.loads(result["content"][0]["text"])
+        self.assertTrue(info["depth_sent"])
+        self.assertEqual(info["depth_reason"], "near_body_risk")
+        self.assertNotIn("front_obstacle_m", info)
+        self.assertEqual(info["near_body_risk"]["identity"],
+                         "unverified_obstacle")
+        regions = [r["region"] for r in
+                   info["near_body_risk"]["affected_regions"]]
+        self.assertIn("right_edge", regions)
+        # No geometry veto or forced batch interruption is restored.
+        moved = self.controller.step(["MOVE_FORWARD", "MOVE_FORWARD"])
+        self.assertEqual(moved["status"], "RUNNING")
+        self.assertEqual(moved["executed"],
+                         ["MOVE_FORWARD", "MOVE_FORWARD"])
+        self.assertEqual(self.env.actions, moved["executed"])
+        self.assertNotIn("near_body_risk", moved)
+
     def test_exact_unchanged_rgb_interrupts_only_remaining_batch_actions(self):
         before = self.env.image()
         def stationary_step(action):
